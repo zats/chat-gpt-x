@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Platform API"
+  short_description: "Evolve the stable extension API and rebind it to app versions"
+  default_prompt: "Add a new extension API to the platform and bind it to the pinned ChatGPT app version"
