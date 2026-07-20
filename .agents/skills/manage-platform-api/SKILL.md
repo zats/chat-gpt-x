@@ -1,6 +1,6 @@
 ---
 name: manage-platform-api
-description: Process for evolving the extension platform for the ChatGPT desktop (Electron) app — adding, modifying, or removing public extension APIs in src/platform/types.d.ts, updating the mechanical api-test-suite extension, and researching + implementing version-specific bindings under src/platform/bindings/ against the extracted app. Use whenever the user wants to add a new extension API or capability, change/deprecate/remove an existing public API, or rebind the APIs to a new version of the app.
+description: Process for evolving the extension platform for the ChatGPT desktop (Electron) app — adding, modifying, or removing public extension APIs in src/platform/types.d.ts, updating the mechanical api-test-suite extension, and researching + implementing version-specific bindings under src/platform/bindings/ against the extracted app. Use whenever the user wants to add a new extension API or capability, change/remove an existing public API, or rebind the APIs to a new version of the app.
 ---
 
 # Manage Platform API
@@ -15,6 +15,7 @@ Layout conventions (paths, manifests, runtime settings): read `references/file-l
 - If the request's intent or semantics are unclear, **clarify with the user before editing**. Safe assumptions are allowed — record them in the API docs and in your summary.
 - **Tests define "working".** A binding is not done until the deterministic test suite passes against the real app.
 - Document **only the final working approach**. Intermediate failed attempts are noise; the derivation doc records what works and how it was found.
+- **No backward compatibility.** APIs change in place, one way — no deprecation shims, aliases, legacy paths, or parallel old/new variants. Remove the old way in the same change that introduces the new one.
 
 ## Core design principle: every API has N consumers
 
