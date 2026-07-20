@@ -15,6 +15,11 @@
  *   APIs (full state in, new state out, chained in load order), registration
  *   for notifications (invoked in load order, isolated). Extensions never
  *   detect or depend on each other.
+ * - Native by construction: APIs expose the app's OWN components and
+ *   behaviors — never re-implement existing controls. If the app has a
+ *   component that does the thing, the binding reuses or exposes it, so
+ *   extensions are indistinguishable from first-party UI in look AND
+ *   behavior. Replication is a last resort and must be justified.
  * - No backward compatibility: APIs change in place, one way. No deprecation
  *   shims, aliases, or legacy paths.
  *

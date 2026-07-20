@@ -25,6 +25,19 @@ Design every API assuming multiple extensions use it simultaneously. Never let e
 - **Notification APIs → registration pattern.** Extensions register callbacks (e.g. "assistant turn completed"); invocation order equals extension load order, which the platform (loader/settings) defines — never negotiated between extensions. Isolate callbacks: one throwing must not affect the others.
 - State the chosen semantics explicitly in the API's TSDoc: ordering guarantees, isolation behavior, what happens on conflicting changes.
 
+## Reuse the app's own components
+
+Extensions built on our APIs must look and behave as if written by the app's own engineers. Achieve this by reusing the app's existing components — especially visual ones — never by replicating them.
+
+Priority order when designing or implementing an API:
+
+1. Find the app's existing component/behavior that does what the user describes.
+2. If it is already exposed through our API, reuse it.
+3. If it exists but is not exposed, expose it: the binding wraps, renders, or clones the app's own component.
+4. Replicate an existing control ONLY as a last resort, and record the justification in DERIVATION.md.
+
+Rationale: reusing the real component preserves not just styling but behavior — keyboard navigation, focus management, states, animations, accessibility — and tracks the app's design-system changes for free. Example: menu items are produced by cloning or wrapping the app's own menu-item component (inheriting hover, disabled, chevron, and submenu semantics), never hand-built markup.
+
 ## Process
 
 Follow the phases in order. Do not skip the tests-first step.
@@ -57,7 +70,7 @@ The script prints JSON with `extractDir`. If the version/hash mismatches, stop a
 
 Work against the extracted sources using the **cascading anchor heuristics** in `references/anchor-heuristics.md` (i18n message IDs → protocol/contract strings → library behavioral invariants → data-testid → display strings last). App architecture facts you will need (injection mechanics, CSP, window factory, React/Radix/rolldown specifics): `references/app-facts.md`.
 
-For each API: find the in-app precedent of the behavior (e.g. existing profile menu items), understand what makes it tick, then implement the binding in `src/platform/bindings/<version>/` so the public API works through the real app.
+For each API: find the in-app precedent of the behavior (e.g. existing profile menu items), understand what makes it tick, then implement the binding in `src/platform/bindings/<version>/` so the public API works through the real app. Follow "Reuse the app's own components" above: the binding composes the app's own components — it does not re-create their look or behavior.
 
 ### 6. Validate against the live app
 
