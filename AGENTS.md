@@ -53,4 +53,4 @@ Rules: CDP is for development-time inspection and hot-probing only — productio
 
 ## Current state
 
-The current binding is `src/platform/bindings/26.715.70719/`. It implements `menus.profile` plus the native authentication lifecycle used by `multiple-accounts`, and passes the public API suite (20/20) and version-specific native UI suite (23/23). Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + main-process bridge (injection, extension loader, scoped utility services, result reporting).
+The current binding is `src/platform/bindings/26.715.70719/`. It implements `menus.profile` plus the native authentication lifecycle used by `multiple-accounts`, and passes the public API suite (20/20) and version-specific native UI suite (24/24). Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + main-process bridge (injection, extension loader, scoped utility services, result reporting).

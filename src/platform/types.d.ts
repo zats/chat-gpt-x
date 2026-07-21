@@ -92,7 +92,7 @@ export interface AuthenticationIdentity {
   /** Stable account identifier used to distinguish stored accounts. */
   readonly userId: string;
 
-  /** User-facing account label, preferring the account name and then its email address. */
+  /** User-facing account label, preferring email, then account name, then user id. */
   readonly label: string;
 }
 

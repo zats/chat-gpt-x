@@ -488,11 +488,11 @@ test("authentication: current credentials expose stable inspectable identity", a
   const current = await api.authentication.getCurrent();
   assert(current, "authenticated test profile has current credentials");
   assert(current.userId.length > 0, "current credentials have a user id");
-  assert(current.label.length > 0, "current credentials have a display label");
+  assert(current.label.length > 0, "current credentials have a preferred account label");
   assert(current.authJson.length > 0, "current credentials include opaque JSON");
   const inspected = await api.authentication.inspect(current.authJson);
   assert(inspected.userId === current.userId, "inspection returns the same user id");
-  assert(inspected.label === current.label, "inspection returns the same display label");
+  assert(inspected.label === current.label, "inspection returns the same preferred account label");
 });
 
 test("authentication: invalid serialized credentials are rejected", async () => {

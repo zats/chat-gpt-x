@@ -349,10 +349,10 @@
       throw new TypeError("authJson does not contain a ChatGPT user id");
     }
     const label = nonEmptyString(
-      idClaims?.name,
-      accessProfile?.name,
       idClaims?.email,
       accessProfile?.email,
+      idClaims?.name,
+      accessProfile?.name,
       userId,
     );
     return Object.freeze({ userId, label });

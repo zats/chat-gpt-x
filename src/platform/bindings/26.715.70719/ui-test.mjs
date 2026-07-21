@@ -118,6 +118,24 @@ async function validateUi() {
     globalThis.__CGPTX_HOST__?._debug.authenticationRefreshCount() >= 1,
     'public credential replacement used ChatGPT post-auth refresh',
   );
+  const syntheticClaims = btoa(
+    JSON.stringify({
+      sub: 'synthetic-user',
+      name: 'Shared Name',
+      email: 'unique@example.com',
+    }),
+  )
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replaceAll('=', '');
+  const syntheticIdentity = globalThis.__CGPTX_HOST__._debug.inspectAuthentication(
+    JSON.stringify({ tokens: { id_token: `header.${syntheticClaims}.signature` } }),
+  );
+  check(
+    syntheticIdentity.label === 'unique@example.com',
+    'authentication identity prefers email over account name',
+    { label: syntheticIdentity.label },
+  );
   const effective = globalThis.__CGPTX_HOST__._debug.computeEffectiveItems();
   const expectedIds = effective
     .filter((item) => item.kind === 'action')

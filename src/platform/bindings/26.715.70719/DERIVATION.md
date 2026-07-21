@@ -38,12 +38,12 @@ External browser dispatch comes from `app-initial~artifact-tab-content.electron~
 
 The version-independent runtime preload exposes a narrow request bridge. The main-process bridge reads `~/.codex/auth.json`, validates and atomically replaces it with mode `0600`, and scopes reusable extension storage beneath `~/.codex/extensions/<extension-id>/`.
 
-`getCurrent` and `inspect` derive identity from the opaque credentials without exposing their schema to extensions. `startSignIn` starts the native login flow and lets the app process successful completion through `useUpdateAuthNonce`. `replaceCurrent` commits credentials before requesting the same native refresh. Successful sign-in and replacement notify registered public `onDidChange` listeners in registration order with error isolation.
+`getCurrent` and `inspect` derive identity from the opaque credentials without exposing their schema to extensions. The public account label prefers email, then account name, then user id. `startSignIn` starts the native login flow and lets the app process successful completion through `useUpdateAuthNonce`. `replaceCurrent` commits credentials before requesting the same native refresh. Successful sign-in and replacement notify registered public `onDidChange` listeners in registration order with error isolation.
 
 ## Validation
 
 - Stable public API suite: 20/20.
-- Version-specific native UI suite: 23/23.
+- Version-specific native UI suite: 24/24.
 - Multiple-accounts and shared-storage unit tests: 17/17.
 - Live multiple-accounts UI: the native account row rendered with one chevron; its children used the same native nested Item presentation as Usage remaining and appeared as `Profile`, saved accounts, then `Add account`.
 - Credential storage: the current credentials were copied byte-for-byte to `~/.codex/extensions/multiple-accounts/auth-<user-id>.json` with mode `0600`.
