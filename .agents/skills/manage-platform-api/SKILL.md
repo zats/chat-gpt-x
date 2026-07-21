@@ -16,6 +16,7 @@ Layout conventions (paths, manifests, runtime settings): read `references/file-l
 - **Tests define "working".** A binding is not done until the deterministic test suite passes against the real app.
 - Document **only the final working approach**. Intermediate failed attempts are noise; the derivation doc records what works and how it was found.
 - **No backward compatibility.** APIs change in place, one way — no deprecation shims, aliases, legacy paths, or parallel old/new variants. Remove the old way in the same change that introduces the new one.
+- **APIs land only as complete vertical slices.** A public API is "added" only together with its binding for the pinned app version and a green test suite against the live app. Never leave `types.d.ts` ahead of working, validated bindings — an unbound API is unfinished work, not an API.
 
 ## Core design principle: every API has N consumers
 
@@ -52,14 +53,18 @@ Edit `src/platform/types.d.ts`. Every API gets exhaustive TSDoc: intent, exactly
 
 ### 3. Write tests first
 
-Update the mechanical test extension at `src/extensions/api-test-suite` so **every public API path** — including the new/changed one — is exercised deterministically. Tests must not depend on agent judgment at runtime: they call the API, observe the app, and assert. If an API cannot be exercised in an unauthenticated session, layer the test (see `references/app-facts.md` § Testing constraints).
+Update the mechanical test extension at `src/extensions/api-test-suite` so **every public API path** — including the new/changed one — is exercised deterministically. Tests must not depend on agent judgment at runtime: they call the API and assert.
+
+**Tests observe behavior through the public API surface only** — never the app's DOM, markup, or internals. Those are the binding's version-specific domain; the suite must stay stable while `src/platform/bindings/<version>/` iterates. If a behavior cannot be observed through the public API, the API lacks observability — extend the API (a design signal), never reach into the app. Rendering correctness is guaranteed by the reuse-first binding strategy and validated once per binding version (recorded in DERIVATION.md), not re-asserted per run.
+
+The suite fails closed: it must be impossible for it to pass without a working binding; a runner treats missing or partial results as failure. If an API cannot be exercised in an unauthenticated session, layer the test (see `references/app-facts.md` § Testing constraints).
 
 ### 4. Locate and extract the pinned app version
 
-The pinned app version is the one recorded in `src/platform/bindings/<version>/manifest.json` (newest directory if several). Verify that exact build is installed on this machine and extract it to a temp dir:
+The pinned app version is the bindings directory name under `src/platform/bindings/` (newest directory if several). Verify that exact version is installed on this machine and extract it to a temp dir:
 
 ```bash
-scripts/extract-app.sh --expect-version <version> [--expect-sha256 <asar-hash-from-manifest>]
+scripts/extract-app.sh --expect-version <version>
 ```
 
 (relative to this skill's directory)

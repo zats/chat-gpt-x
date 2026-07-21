@@ -8,7 +8,6 @@ src/
     types.d.ts                  # THE stable public API. Extensions compile against this only, documented with TSDoc.
     bindings/
       <app-version>/            # e.g. 26.715.31925 — bindings bridging that build's internals to types.d.ts
-        manifest.json           # version key + provenance (schema below)
         DERIVATION.md           # how each binding was found: anchors, locations, failure signatures
         ...                     # binding implementation files
   extensions/
@@ -20,19 +19,7 @@ src/
 
 Built extensions are plain JS: the build emits a runnable `.js` bundle plus the `package.json` manifest so the loader knows what it is loading.
 
-### bindings/<app-version>/manifest.json
-
-```json
-{
-  "appVersion": "26.715.31925",
-  "asarSha256": "<sha256 of Contents/Resources/app.asar>",
-  "electronVersion": "150.0.7871.124",
-  "boundAt": "<ISO date>",
-  "appPath": "/Applications/ChatGPT.app"
-}
-```
-
-The directory name is the app's `CFBundleShortVersionString`; the `asarSha256` is the authoritative version key. The plist's own `ElectronAsarIntegrity` hash can disagree with the on-disk asar during a Sparkle update — always hash the artifact itself (`scripts/extract-app.sh` does).
+The bindings directory name is the app's version (`CFBundleShortVersionString`) — that string is the version key.
 
 ## Runtime state (on the user's machine)
 

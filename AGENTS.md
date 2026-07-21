@@ -11,7 +11,7 @@ Properties that define the project:
 - **Non-invasive.** The ChatGPT app bundle is never modified, patched, or re-signed. Injection happens through the environment at launch (`NODE_OPTIONS=--require` into the Electron main process — verified against the installed app), so the app stays stock, keeps its signature, and auto-updates normally.
 - **Stable boundary.** Extensions compile only against `src/platform/types.d.ts`. The app's internals are minified and re-scrambled on every build; the public API is not. Extension authors never see or depend on app internals. "Stable" means stable *across app updates* — not backward-compatible: the API itself evolves by direct in-place change, one way, with no deprecation shims or legacy paths.
 - **Native by construction.** Extensions must be indistinguishable from first-party UI — in look AND in behavior. APIs expose and reuse the app's own components (styling, keyboard navigation, focus, states, accessibility come for free); replicating an existing control is a documented last resort.
-- **Versioned bindings.** `src/platform/bindings/<app-version>/` bridges one specific ChatGPT build to the stable API, keyed by the SHA-256 of that build's `app.asar`. When the app updates, bindings are regenerated for the new build while the public API stays unchanged.
+- **Versioned bindings.** `src/platform/bindings/<app-version>/` bridges one specific ChatGPT build to the stable API. The runtime selects it by app version; its manifest pins the build's `app.asar` SHA-256. When the app updates, bindings are regenerated for the new build while the public API stays unchanged.
 - **Deterministic correctness.** The `api-test-suite` extension mechanically exercises every public API path inside the real app. A binding is "working" exactly when that suite passes — not before.
 
 ## Repository layout
@@ -33,11 +33,22 @@ Extension runtime state lives outside the repo, in `~/.codex/extensions/` (enabl
 
 ## Invariants for any change
 
-1. Extensions depend only on `types.d.ts` — never on app internals, DOM structure, or minified identifiers.
+1. Extensions — and the `api-test-suite` — depend only on `types.d.ts`, never on app internals, DOM structure, or minified identifiers. The suite observes behavior exclusively through the public API so it stays stable as bindings iterate.
 2. The public API changes only on explicit request and only through the process in `.agents/skills/manage-platform-api/SKILL.md`: clarify intent → design for N concurrent extensions (transformer / registration patterns) → document → **write tests first** → research and implement the binding → record the derivation.
-3. Research is done on extracted copies of the app in temp directories (see the skill's `scripts/extract-app.sh`), cleaned up afterwards — never against `/Applications` in place, never by modifying the bundle.
-4. Durable knowledge lives in the skill's `references/`; version-specific findings live in `src/platform/bindings/<version>/DERIVATION.md`. Don't mix the two.
+3. **APIs land only as complete vertical slices.** A public API is "added" only together with its binding for the current (pinned) app version and a passing `api-test-suite` against the live app. `types.d.ts` must never sit ahead of working, validated bindings — an API without a green binding is unfinished work, not an API.
+4. Research is done on extracted copies of the app in temp directories (see the skill's `scripts/extract-app.sh`), cleaned up afterwards — never against `/Applications` in place, never by modifying the bundle.
+5. Durable knowledge lives in the skill's `references/`; version-specific findings live in `src/platform/bindings/<version>/DERIVATION.md`. Don't mix the two.
+
+## Live debugging (CDP)
+
+When doing binding work, debug against the **live app over CDP**, not by guessing from the minified build:
+
+1. Launch through the launcher with a debug port and an isolated profile: `src/macOS/launcher-script-placeholder.sh --user-data-dir=/tmp/<profile> --remote-debugging-port=9222`
+2. Targets are at `http://127.0.0.1:9222/json`; evaluate in the `app://` page via `Runtime.evaluate` (a ready helper lives at `tmp/cdp.mjs`: `node tmp/cdp.mjs '<expression>'`).
+3. The injected host exposes `window.__CGPTX_HOST__._debug` for live probing of the binding.
+
+Rules: CDP is for development-time inspection and hot-probing only — production code must never depend on it; debug scaffolding stays in `tmp/` (gitignored) or `_debug` namespaces, out of shipping paths.
 
 ## Current state
 
-Scaffold: repo layout, the `manage-platform-api` skill, an empty `types.d.ts`, and a no-op `api-test-suite`. No build system, launcher, bridge, or bindings implementation yet — the first real API (and its binding) is the next milestone.
+First vertical slice **landed**: the `menus.profile` API (transformers, stable built-in ids, replace-by-id, submenu model, `getItems`/`activateItem`) is implemented by `src/platform/bindings/26.715.52143/host.js`. It passes the public `api-test-suite` (16/16) and the version-specific live UI suite (15/15) against the live app with an isolated authenticated profile. `multiple-accounts` is the first real consumer. Runtime: macOS launcher + main-process bridge (injection, extension loader, result reporting).

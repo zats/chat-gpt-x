@@ -36,10 +36,9 @@ Sections are tagged by durability:
 
 ## Versioning and updates [durable]
 
-- Sparkle auto-updates swap the whole bundle; an update can leave the bundle transiently inconsistent (observed: plist `ElectronAsarIntegrity` hash ≠ on-disk asar hash). **Version key = sha256 of `Contents/Resources/app.asar` computed at bind time**, recorded in the bindings manifest.
-- The launcher must treat an asar-hash mismatch as "bindings stale" and trigger rebinding.
+- Sparkle auto-updates swap the whole bundle. **Version key = the app version string** (`CFBundleShortVersionString`) — the bindings directory name. The launcher treats a version change as "bindings stale" and triggers rebinding.
 
 ## Testing constraints [durable]
 
 - Deterministic tests launch the app with a throwaway `--user-data-dir`; the bridge must be loaded via `NODE_OPTIONS` the same way as production.
-- Layer the suite: (a) bridge/window-hook/API-surface tests need no login and are fully deterministic; (b) UI-level tests (e.g. profile menu injection) require an authenticated session — seed a test-account session in CI. Do not weaken assertions to compensate for missing auth; report the layer honestly.
+- Layer the suite: (a) bridge/window-hook/API-surface tests need no login and are fully deterministic; (b) UI-level tests (e.g. profile menu injection) require an authenticated session. On a dev machine, get one by **copying the local profile** (`~/Library/Application Support/Codex`, excluding `Cache`/`Code Cache`/`GPUCache`) to a temp dir and launching with `--user-data-dir` — cookie encryption is machine-local, so the copy stays authenticated; in CI, seed a test-account session. Do not weaken assertions to compensate for missing auth; report the layer honestly.

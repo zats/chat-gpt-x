@@ -98,11 +98,17 @@ export interface ProfileMenuApi {
    * `transform` is called synchronously every time the profile menu is
    * rendered, with the menu's current complete item list (the app's built-in
    * items first, in their current order). Return the final list to display:
-   * keep, drop, reorder, or add items freely. It must be cheap and
+   * keep, drop, reorder, replace, or add items freely. It must be cheap and
    * side-effect-free.
    *
-   * Built-in (app) items are inspectable but immutable: to keep one, return
-   * the same object; to remove it, omit it. They cannot be edited.
+   * Built-in (app) items carry a **stable id** derived from the app's own
+   * identifiers (e.g. `"codex.profileDropdown.profile"`), which the binding
+   * guarantees across app versions. To keep an app item as-is, return the
+   * same object. To modify one, return a descriptor with the same `id` —
+   * it replaces the original in place, inheriting any fields you leave
+   * undefined (spread the original to modify it); the original `onClick`
+   * stays available on the input descriptor for wrapping. Nesting an app
+   * item inside another item's `items` moves it there.
    *
    * New items must be one of the item kinds the profile menu supports
    * ({@link ProfileMenuActionItem}, {@link ProfileMenuSeparatorItem}) and
@@ -132,10 +138,50 @@ export interface ProfileMenuApi {
    *     onClick: () => openMyStatus(),
    *   },
    * ]);
+   *
+   * @example
+   * // Turn the built-in Profile item into an in-place expanding submenu
+   * api.menus.profile.transformItems((items) =>
+   *   items.map((item) =>
+   *     item.id === "codex.profileDropdown.profile" && item.kind === "action"
+   *       ? { ...item, items: [myAccountItem] }
+   *       : item,
+   *   ),
+   * );
    */
   transformItems(
     transform: ProfileMenuTransform,
   ): Disposable;
+
+  /**
+   * The profile menu's current effective item list **as displayed in the
+   * app** — built-in items first, with all registered transforms applied,
+   * every built-in resolved to a descriptor with its stable id.
+   *
+   * This is the read side of the menu contract: it reflects what the menu
+   * currently shows, immediately after transforms are registered or
+   * disposed. Extensions use it to inspect the menu; the binding implements
+   * it by observing the app's actual menu state, so it stays truthful even
+   * when the app changes its own items (sign-in state, plan, feature
+   * flags).
+   *
+   * Multi-consumer: returns the global effective list — every extension's
+   * contributions included, in final display order.
+   */
+  getItems(): readonly ProfileMenuItem[];
+
+  /**
+   * Programmatically activate a menu item by id, as if the user had
+   * activated its row.
+   *
+   * For an action item, invokes its `onClick` (isolated, like a real
+   * activation). For a submenu parent, expands its children in place and
+   * does not fire `onClick`. Unknown or disabled ids are not activated.
+   *
+   * @param id stable id of a built-in item, or an extension-namespaced id
+   * @returns true when the item existed and was activated/expanded
+   */
+  activateItem(id: string): boolean;
 }
 
 /**
@@ -168,9 +214,14 @@ export interface ProfileMenuActionItem {
   readonly kind: "action";
 
   /**
-   * Unique, extension-namespaced identifier: `"<extension-id>.<name>"`.
-   * Items whose id does not start with the contributing extension's id are
-   * dropped and logged.
+   * Unique identifier.
+   *
+   * Extension-created items: must be namespaced `"<extension-id>.<name>"` —
+   * items with foreign or duplicate ids are dropped and logged.
+   *
+   * Built-in items: a stable identifier derived from the app's own
+   * identifiers (e.g. `"codex.profileDropdown.profile"`), guaranteed across
+   * app versions by the binding. Use it to locate specific built-in items.
    */
   readonly id: string;
 
@@ -209,8 +260,22 @@ export interface ProfileMenuActionItem {
   /**
    * Invoked when the user activates the row. Runs isolated: a throwing
    * handler is logged and does not affect the app or other extensions.
+   *
+   * On built-in items this is the app's original handler — read it to wrap
+   * or delegate to the original behavior when replacing an item.
+   * Ignored when {@link items} is set (the row expands instead of firing).
    */
   readonly onClick?: () => void;
+
+  /**
+   * Child items. When set, the row renders as an in-place expanding submenu
+   * parent (chevron on the right) using the app's own submenu component —
+   * hover/selection expands the children in place.
+   *
+   * One level of nesting is supported. Children may be new items or built-in
+   * items moved here from elsewhere in the list.
+   */
+  readonly items?: readonly ProfileMenuItem[];
 
   /**
    * Who contributed the item: `"app"` for built-in items, otherwise the

@@ -1,0 +1,10 @@
+{
+  "id": "multiple-accounts",
+  "name": "Multiple Accounts",
+  "version": "0.1.0",
+  "description": "Turns the profile menu's account row into an in-place expanding submenu that groups the app's account-related items (switch account, sign in) under it.",
+  "main": "multiple-accounts.js",
+  "capabilities": [
+    "menus.profile"
+  ]
+}
