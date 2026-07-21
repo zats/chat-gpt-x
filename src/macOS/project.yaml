@@ -24,7 +24,7 @@ targets:
         buildPhase: resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.zats.ChatGPTX
+        PRODUCT_BUNDLE_IDENTIFIER: com.chatgptx.launcher
         PRODUCT_NAME: ChatGPTX
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_CFBundleDisplayName: ChatGPTX

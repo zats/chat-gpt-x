@@ -5,6 +5,7 @@
 # Usage:
 #   extract-app.sh [--app /path/to/ChatGPT.app]
 #                  [--expect-version <CFBundleShortVersionString>]
+# Set CHATGPT_APP_PATH to override macOS bundle discovery.
 #
 # Output: single JSON object on stdout:
 #   { "appPath", "appVersion", "electronVersion",
@@ -19,7 +20,7 @@
 
 set -euo pipefail
 
-APP_PATH="/Applications/ChatGPT.app"
+APP_PATH="${CHATGPT_APP_PATH:-}"
 EXPECT_VERSION=""
 
 while [[ $# -gt 0 ]]; do
@@ -30,11 +31,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -z "$APP_PATH" ]]; then
+  APP_PATH="$(osascript -l JavaScript -e '
+    ObjC.import("AppKit");
+    const url = $.NSWorkspace.sharedWorkspace
+      .URLForApplicationWithBundleIdentifier("com.openai.codex");
+    url ? ObjC.unwrap(url.path) : "";
+  ' 2>/dev/null)"
+fi
+
 PLIST="$APP_PATH/Contents/Info.plist"
 ASAR="$APP_PATH/Contents/Resources/app.asar"
 
-[[ -f "$PLIST" && -f "$ASAR" ]] || {
-  echo "app not found or incomplete at: $APP_PATH" >&2; exit 2;
+[[ -n "$APP_PATH" && -f "$PLIST" && -f "$ASAR" ]] || {
+  echo "ChatGPT.app was not found or is incomplete; use --app or CHATGPT_APP_PATH" >&2
+  exit 2
 }
 
 APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$PLIST")"

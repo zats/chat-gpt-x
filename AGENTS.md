@@ -33,11 +33,12 @@ Extension runtime state lives outside the repo, in `~/.codex/extensions/` (enabl
 
 ## Invariants for any change
 
-1. Extensions — and the `api-test-suite` — depend only on `types.d.ts`, never on app internals, DOM structure, or minified identifiers. The suite observes behavior exclusively through the public API so it stays stable as bindings iterate.
-2. The public API changes only on explicit request and only through the process in `.agents/skills/manage-platform-api/SKILL.md`: clarify intent → design for N concurrent extensions (transformer / registration patterns) → document → **write tests first** → research and implement the binding → record the derivation.
-3. **APIs land only as complete vertical slices.** A public API is "added" only together with its binding for the current (pinned) app version and a passing `api-test-suite` against the live app. `types.d.ts` must never sit ahead of working, validated bindings — an API without a green binding is unfinished work, not an API.
-4. Research is done on extracted copies of the app in temp directories (see the skill's `scripts/extract-app.sh`), cleaned up afterwards — never against `/Applications` in place, never by modifying the bundle.
-5. Durable knowledge lives in the skill's `references/`; version-specific findings live in `src/platform/bindings/<version>/DERIVATION.md`. Don't mix the two.
+1. Product code, tests, documentation, and defaults must work for arbitrary users and machines. Never hard-code a developer identity, account data, home directory, app installation path, or authenticated state. Use synthetic fixtures, OS discovery, configurable paths, and isolated seeded test profiles.
+2. Extensions — and the `api-test-suite` — depend only on `types.d.ts`, never on app internals, DOM structure, or minified identifiers. The suite observes behavior exclusively through the public API so it stays stable as bindings iterate.
+3. The public API changes only on explicit request and only through the process in `.agents/skills/manage-platform-api/SKILL.md`: clarify intent → design for N concurrent extensions (transformer / registration patterns) → document → **write tests first** → research and implement the binding → record the derivation.
+4. **APIs land only as complete vertical slices.** A public API is "added" only together with its binding for the current (pinned) app version and a passing `api-test-suite` against the live app. `types.d.ts` must never sit ahead of working, validated bindings — an API without a green binding is unfinished work, not an API.
+5. Research is done on extracted copies of the app in temp directories (see the skill's `scripts/extract-app.sh`), cleaned up afterwards — never against the installed app in place, never by modifying its bundle.
+6. Durable knowledge lives in the skill's `references/`; version-specific findings live in `src/platform/bindings/<version>/DERIVATION.md`. Don't mix the two.
 
 ## Live debugging (CDP)
 

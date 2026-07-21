@@ -8,6 +8,7 @@ import type {
 import { transformProfileMenuItems } from "./multiple-accounts.ts";
 
 const accountId = "codex.profileDropdown.account";
+const accountLabel = "Example Account";
 
 function action(
   id: string,
@@ -19,7 +20,7 @@ function action(
 
 test("the active account is always exposed through the account submenu", () => {
   const openProfile = () => undefined;
-  const account = action(accountId, "Sash Zats", {
+  const account = action(accountId, accountLabel, {
     icon: "person",
     rightIcon: "external-link",
     onClick: openProfile,
@@ -41,7 +42,7 @@ test("the active account is always exposed through the account submenu", () => {
   assert.deepEqual(current, {
     kind: "action",
     id: "multiple-accounts.current",
-    label: "Sash Zats",
+    label: accountLabel,
     icon: "person",
     onClick: openProfile,
   });
@@ -49,7 +50,7 @@ test("the active account is always exposed through the account submenu", () => {
 });
 
 test("available authentication choices move under the account row", () => {
-  const account = action(accountId, "Sash Zats", { origin: "app" });
+  const account = action(accountId, accountLabel, { origin: "app" });
   const openAI = action(
     "codex.profileDropdown.switchToOpenAIAccount",
     "Use OpenAI account",
@@ -86,7 +87,7 @@ test("children contributed by earlier extensions are preserved", () => {
   const priorChild = action("prior.child", "Prior child", {
     origin: "prior",
   });
-  const account = action(accountId, "Sash Zats", {
+  const account = action(accountId, accountLabel, {
     items: [priorChild],
     origin: "app",
   });
