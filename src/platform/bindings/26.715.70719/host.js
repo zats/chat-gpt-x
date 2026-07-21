@@ -20,6 +20,7 @@
     "./assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~dg0b1kws-Cen01Onw.js";
   const PROFILE_ICON_MODULE =
     "./assets/app-initial~app-main~settings-command-menu-section-items~pull-request-route~new-thread-pane~fnoshreu-CHWJP-re.js";
+  const PLUS_ICON_MODULE = "./assets/plus-BgCJgEEs-DSk_o46V.js";
   const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-CTvO8J1r.js";
   const AUTH_CONTEXT_MODULE =
     "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~k87y25tw-DjPeV3vC.js";
@@ -1034,6 +1035,7 @@
       menuModule,
       iconModule,
       profileIconModule,
+      plusIconModule,
       authModule,
       authContextModule,
       browserModule,
@@ -1043,6 +1045,7 @@
       import(MENU_MODULE),
       import(ICON_MODULE),
       import(PROFILE_ICON_MODULE),
+      import(PLUS_ICON_MODULE),
       import(AUTH_MODULE),
       import(AUTH_CONTEXT_MODULE),
       import(BROWSER_MODULE),
@@ -1053,7 +1056,14 @@
     browserModule.r();
     iconModule.s();
     profileIconModule.i();
+    plusIconModule.t();
     const jsxRuntime = coreModule.zt();
+    const PlusIcon = ({ className = "", ...props }) =>
+      jsxRuntime.jsx(plusIconModule.n, {
+        ...props,
+        className: `${className} lucide-plus-icon`.trim(),
+        size: 16,
+      });
     native = {
       React: coreModule.dn(),
       jsxRuntime,
@@ -1074,6 +1084,7 @@
       iconComponents: new Map([
         ["chevron-right", iconModule.o],
         ["person", profileIconModule.r],
+        ["plus", PlusIcon],
       ]),
     };
     installJsxHook();

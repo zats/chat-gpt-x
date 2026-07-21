@@ -100,7 +100,7 @@ export function transformProfileMenuItems(items: readonly ProfileMenuItem[], cur
             onClick: () => actions.selectAccount(account),
           })),
         ...(row.items ?? []),
-        { kind: "action", id: ADD_ACCOUNT_ITEM_ID, label: "Add account", onClick: actions.addAccount } satisfies ProfileMenuActionItem,
+        { kind: "action", id: ADD_ACCOUNT_ITEM_ID, label: "Add account", icon: "plus", onClick: actions.addAccount } satisfies ProfileMenuActionItem,
       ]
     : undefined;
 

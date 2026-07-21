@@ -92,7 +92,10 @@ test("Add account uses the supplied action", () => {
   if (parent?.kind !== "action") return;
   const add = parent.items?.[1];
   assert.equal(add?.kind, "action");
-  if (add?.kind === "action") add.onClick?.();
+  if (add?.kind === "action") {
+    assert.equal(add.icon, "plus");
+    add.onClick?.();
+  }
   assert.equal(additions, 1);
 });
 
