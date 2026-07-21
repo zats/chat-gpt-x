@@ -118,6 +118,10 @@ async function validateUi() {
     globalThis.__CGPTX_HOST__?._debug.authenticationRefreshCount() >= 1,
     'public credential replacement used ChatGPT post-auth refresh',
   );
+  check(
+    globalThis.__CGPTX_HOST__?._debug.authenticationAccountInfoResetCount() >= 1,
+    'public credential replacement clears the native account-info query',
+  );
   const syntheticClaims = btoa(
     JSON.stringify({
       sub: 'synthetic-user',
@@ -339,16 +343,20 @@ async function validateUi() {
   const account = globalThis.__CGPTX_HOST__
     ?._debug.getCache()
     .find((item) => item.id === 'codex.profileDropdown.account');
-  let accountActivationThrew = false;
-  try {
-    account?.onClick?.();
-  } catch {
-    accountActivationThrew = true;
-  }
+  const profileWasCurrent = Array.from(
+    document.querySelectorAll('[aria-current="page"]'),
+  ).some((element) => element.textContent?.trim() === 'Profile');
+  account?.onClick?.();
+  await sleep(500);
+  const profileIsCurrent = Array.from(
+    document.querySelectorAll('[aria-current="page"]'),
+  ).some((element) => element.textContent?.trim() === 'Profile');
   check(
-    typeof account?.onClick === 'function' && !accountActivationThrew,
-    'account identity public action accepts zero arguments',
-    { accountActivationThrew },
+    typeof account?.onClick === 'function' &&
+      !profileWasCurrent &&
+      profileIsCurrent,
+    'account identity native action opens Profile settings',
+    { profileWasCurrent, profileIsCurrent },
   );
 
   return checks;

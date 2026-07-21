@@ -24,7 +24,9 @@ The built-in Usage remaining row remains attached to its original SubmenuItem ow
 
 The binding captures the nested native Item presentation prop from Usage remaining's own children and passes it to extension-generated submenu children. Their indentation and spacing therefore come from the same native Item component configuration as the app's submenu.
 
-Dynamic rows without a FormatJS id use binding-owned stable ids: `codex.profileDropdown.account`, `codex.profileDropdown.email`, `codex.profileDropdown.usageSummary`, and `codex.profileDropdown.separator-N`. The account row's public action adapts its native event-taking `onSelect` callback to the public zero-argument `onClick` contract because native `onClick` is reserved for Alt-click user-id copying in this build. Rendered built-ins retain their original native event handlers.
+Dynamic rows without a FormatJS id use binding-owned stable ids: `codex.profileDropdown.account`, `codex.profileDropdown.email`, `codex.profileDropdown.usageSummary`, and `codex.profileDropdown.separator-N`. The profile root exposes its exact zero-argument `onOpenProfile` callback; the account row's public action delegates to it. Native `onClick` remains reserved for Alt-click user-id copying in this build. Rendered built-ins retain their original native event handlers.
+
+The profile root also supplies the current `displayName` and native `accountIcon`. The binding refreshes the captured account Item view from those props on every app render, so transformed account rows follow native identity updates.
 
 Transformers run in registration order. Recursive normalization enforces extension-owned ids, removes duplicates and foreign ids, stamps origins, inherits omitted built-in fields, supports moving built-ins, enforces one submenu level, and isolates throwing transforms and handlers.
 
@@ -32,21 +34,22 @@ Transformers run in registration order. Recursive normalization enforces extensi
 
 Native ChatGPT sign-in comes from `chatgpt-desktop-auth-url-CTvO8J1r.js`: export `o` starts `login-with-chatgpt`, export `t` decorates its URL exactly as the app does, and export `r` initializes the module.
 
-The post-authentication refresh hook comes from `app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~k87y25tw-DjPeV3vC.js`: export `g` is `useUpdateAuthNonce` and export `f` initializes its context module. The binding captures the hook inside the profile boundary, which is already below AuthNonceProvider.
+The stock successful-login branch in `login-route-BWCACVOW.js` first removes the exact `account-info` query and then invokes `useUpdateAuthNonce`. The query client hook is export `Bl` and the app query-key builder is export `r` of `app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~ngwudnyz-DEp-3H1N.js`. The auth hook is export `g` of `app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~k87y25tw-DjPeV3vC.js`; export `f` initializes its context module. The binding captures both hooks inside the profile boundary, below their native providers, and runs the same query-removal/auth-nonce sequence after sign-in or credential replacement.
 
 External browser dispatch comes from `app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~c1u3yp5s-9RGNa6St.js`: export `o` dispatches the app's `open-in-browser` message and export `r` initializes the module.
 
 The version-independent runtime preload exposes a narrow request bridge. The main-process bridge reads `~/.codex/auth.json`, validates and atomically replaces it with mode `0600`, and scopes reusable extension storage beneath `~/.codex/extensions/<extension-id>/`.
 
-`getCurrent` and `inspect` derive identity from the opaque credentials without exposing their schema to extensions. The public account label prefers email, then account name, then user id. `startSignIn` starts the native login flow and lets the app process successful completion through `useUpdateAuthNonce`. `replaceCurrent` commits credentials before requesting the same native refresh. Successful sign-in and replacement notify registered public `onDidChange` listeners in registration order with error isolation.
+`getCurrent` and `inspect` derive identity from the opaque credentials without exposing their schema to extensions. The public account label prefers email, then account name, then user id. `startSignIn` starts the native login flow and processes successful completion through the stock post-login sequence. `replaceCurrent` commits credentials before requesting that same sequence. Successful sign-in and replacement notify registered public `onDidChange` listeners in registration order with error isolation.
 
 ## Validation
 
 - Stable public API suite: 20/20.
-- Version-specific native UI suite: 24/24.
+- Version-specific native UI suite: 25/25.
 - Multiple-accounts and shared-storage unit tests: 17/17.
 - Live multiple-accounts UI: the native account row rendered with one chevron; its children used the same native nested Item presentation as Usage remaining and appeared as `Profile`, saved accounts, then `Add account`.
 - Credential storage: the current credentials were copied byte-for-byte to `~/.codex/extensions/multiple-accounts/auth-<user-id>.json` with mode `0600`.
+- Live account switching: switching to a saved account and back changed and restored the authenticated user and email, refreshed the native account view through the stock `account-info`/auth-nonce lifecycle, and preserved working Profile navigation after the switch.
 
 Run the binding UI suite with `node src/platform/bindings/26.715.70719/ui-test.mjs 9451` while the isolated test app is running.
 
@@ -57,4 +60,4 @@ Run the binding UI suite with `node src/platform/bindings/26.715.70719/ui-test.m
 - Missing icons means native Item props or the chevron export changed.
 - A visible chevron that does not expand means SubmenuItem ownership or its `trigger`/`children` contract changed.
 - Authentication startup errors mean the sign-in module initializer or URL/browser exports changed.
-- Credential replacement without an app refresh means `useUpdateAuthNonce` moved or its provider boundary changed.
+- Stale identity after credential replacement means the `account-info` query key, query-client hook, auth-nonce hook, or their provider boundary changed.

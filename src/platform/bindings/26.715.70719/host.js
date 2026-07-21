@@ -23,6 +23,8 @@
     "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~k87y25tw-DjPeV3vC.js";
   const BROWSER_MODULE =
     "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~c1u3yp5s-9RGNa6St.js";
+  const QUERY_MODULE =
+    "./assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~ngwudnyz-DEp-3H1N.js";
 
   function log(...args) {
     console.log(LOG_PREFIX, ...args);
@@ -119,10 +121,12 @@
   let pendingExpandedId = null;
   let nestedItemClassName = null;
   let refreshAuthentication = null;
+  let openNativeProfile = null;
   let activeSignIn = null;
   let authenticationOperations = Promise.resolve();
   let nativeSignInStartCount = 0;
   let authenticationRefreshCount = 0;
+  let authenticationAccountInfoResetCount = 0;
 
   function subscribe(listener) {
     renderListeners.add(listener);
@@ -638,7 +642,10 @@
         }
       }
       const nativeHandler =
-        submenuFiber
+        id === "codex.profileDropdown.account" &&
+        typeof openNativeProfile === "function"
+          ? () => openNativeProfile()
+          : submenuFiber
           ? undefined
           : id === "codex.profileDropdown.account" &&
               typeof props.onSelect === "function"
@@ -858,9 +865,25 @@
     }
   }
 
-  function renderProfileTree(tree, applyTransforms = true) {
+  function refreshNativeAccountView(profileProps) {
+    const view = builtInViews.get("codex.profileDropdown.account");
+    if (view?.kind !== "action") return;
+    const accountIcon = profileProps?.accountIcon;
+    const displayName = profileProps?.displayName;
+    builtInViews.set("codex.profileDropdown.account", {
+      ...view,
+      props: {
+        ...view.props,
+        ...(accountIcon ? { LeftIcon: () => accountIcon } : {}),
+        ...(typeof displayName === "string" ? { children: displayName } : {}),
+      },
+    });
+  }
+
+  function renderProfileTree(tree, applyTransforms = true, profileProps) {
     if (!isElement(tree)) return tree;
     refreshNativeViewsFromTree(tree);
+    refreshNativeAccountView(profileProps);
     const props = {
       ...tree.props,
       "data-cgptx-profile-menu": "",
@@ -888,12 +911,26 @@
     const originalJsx = jsxRuntime.jsx;
     const originalJsxs = jsxRuntime.jsxs;
 
-    function ProfileComponentBoundary({ child }) {
-      const nativeRefreshAuthentication = native.useUpdateAuthNonce();
+    function useNativePostAuthenticationRefresh() {
+      const updateAuthNonce = native.useUpdateAuthNonce();
+      const queryClient = native.useQueryClient();
       refreshAuthentication = () => {
         authenticationRefreshCount += 1;
-        nativeRefreshAuthentication();
+        queryClient.removeQueries({
+          queryKey: native.accountInfoQueryKey("account-info"),
+          exact: true,
+        });
+        authenticationAccountInfoResetCount += 1;
+        updateAuthNonce();
       };
+    }
+
+    function ProfileComponentBoundary({ child }) {
+      useNativePostAuthenticationRefresh();
+      openNativeProfile =
+        typeof child.props?.onOpenProfile === "function"
+          ? child.props.onOpenProfile
+          : null;
       React.useSyncExternalStore(
         subscribe,
         () => renderVersion,
@@ -904,15 +941,11 @@
         captureBuiltInsFromOpenMenu();
         setCaptured(true);
       }, []);
-      return renderProfileTree(child.type(child.props), captured);
+      return renderProfileTree(child.type(child.props), captured, child.props);
     }
 
     function ProfileTreeBoundary({ child }) {
-      const nativeRefreshAuthentication = native.useUpdateAuthNonce();
-      refreshAuthentication = () => {
-        authenticationRefreshCount += 1;
-        nativeRefreshAuthentication();
-      };
+      useNativePostAuthenticationRefresh();
       React.useSyncExternalStore(
         subscribe,
         () => renderVersion,
@@ -965,6 +998,7 @@
       authModule,
       authContextModule,
       browserModule,
+      queryModule,
     ] = await Promise.all([
       import(CORE_MODULE),
       import(MENU_MODULE),
@@ -972,6 +1006,7 @@
       import(AUTH_MODULE),
       import(AUTH_CONTEXT_MODULE),
       import(BROWSER_MODULE),
+      import(QUERY_MODULE),
     ]);
     authModule.r();
     authContextModule.f();
@@ -989,6 +1024,8 @@
       startChatGptSignIn: authModule.o,
       decorateAuthUrl: authModule.t,
       useUpdateAuthNonce: authContextModule.g,
+      useQueryClient: queryModule.Bl,
+      accountInfoQueryKey: queryModule.r,
       openInBrowser: browserModule.o,
       iconComponents: new Map([
         ["chevron-right", iconModule.o],
@@ -1167,6 +1204,8 @@
       nativeReady: () => native !== null,
       authenticationReady: () => typeof refreshAuthentication === "function",
       authenticationRefreshCount: () => authenticationRefreshCount,
+      authenticationAccountInfoResetCount: () =>
+        authenticationAccountInfoResetCount,
       nativeSignInStartCount: () => nativeSignInStartCount,
       inspectAuthentication,
     }),
