@@ -1,3 +1,4 @@
 /tmp/
+/.builds/
 .vscode/
 /src/macOS/*.xcodeproj/
