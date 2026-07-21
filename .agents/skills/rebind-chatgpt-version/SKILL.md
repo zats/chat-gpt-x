@@ -5,9 +5,7 @@ description: Create and validate a new version-pinned binding for an updated Cha
 
 # Rebind ChatGPT Version
 
-Create one new binding directory for the installed build and prove the existing
-public API against the real app. Optimize for the common case where internal
-module paths and exports moved while product behavior stayed the same.
+Create one new binding directory for the installed build and prove the existing public API against the real app. Optimize for the common case where internal module paths and exports moved while product behavior stayed the same.
 
 ## Load the source workflow
 
@@ -18,50 +16,39 @@ Read these files completely before editing:
 3. `../manage-platform-api/references/anchor-heuristics.md`
 4. The newest prior binding's `DERIVATION.md`
 
-Use `manage-platform-api` as the authority for platform invariants and
-research mechanics. This skill supplies the rebinding fast path.
+Use `manage-platform-api` as the authority for platform invariants and research mechanics. This skill supplies the rebinding fast path.
 
 ## Hold these files immutable
 
-- `src/platform/types.d.ts`: the public API and semantics are fixed during a
-  rebind.
+- `src/platform/types.d.ts`: the public API and semantics are fixed during a rebind.
 - `src/extensions/api-test-suite/`: its public-API tests stay unchanged.
-- Existing `src/platform/bindings/<old-version>/` directories: use the newest
-  one as evidence and a copy source; never edit it.
+- Existing `src/platform/bindings/<old-version>/` directories: use the newest one as evidence and a copy source; never edit it.
 
-Create `src/platform/bindings/<new-version>/`. Keep unrelated files and user
-state unchanged. Do not add compatibility paths, fallback bindings,
-machine-specific paths, account names, or profile data.
+Create `src/platform/bindings/<new-version>/`. Keep unrelated files and user state unchanged. Do not add compatibility paths, fallback bindings, machine-specific paths, account names, or profile data.
 
-If the current build makes the API impossible to implement, report that fact
-instead of changing the API.
+If the current build makes the API impossible to implement, report that fact instead of changing the API.
 
 ## Fast workflow
 
 ### 1. Pin the exact installed build
 
 1. Inspect repository status and preserve unrelated work.
-2. Read `CFBundleShortVersionString`, the Electron version, and the SHA-256 of
-   the installed `app.asar`.
+2. Read `CFBundleShortVersionString`, the Electron version, and the SHA-256 of the installed `app.asar`.
 3. Identify the newest completed prior binding.
-4. Run the extraction script from `manage-platform-api` with
-   `--expect-version <new-version>`. Work only in the returned temp directory.
+4. Run the extraction script from `manage-platform-api` with `--expect-version <new-version>`. Work only in the returned temp directory.
 5. Stop if the version or hash changes during the task.
 
-Record the version and hash immediately. They become the directory name and
-manifest identity.
+Record the version and hash immediately. They become the directory name and manifest identity.
 
 ### 2. Bootstrap from the prior binding
 
-Copy the prior binding into the new version directory. Update only the new
-copy:
+Copy the prior binding into the new version directory. Update only the new copy:
 
 - manifest version, app.asar hash, Electron version, and binding date;
 - version constants and usage text in the host and native UI test;
 - version-specific module paths, exports, locators, and derivation findings.
 
-Run syntax and manifest checks early. Verify the immutable paths still have no
-diff before continuing.
+Run syntax and manifest checks early. Verify the immutable paths still have no diff before continuing.
 
 ### 3. Re-derive changed internals narrowly
 
@@ -69,19 +56,15 @@ Treat every old chunk filename and minified export as a hypothesis.
 
 1. Start from the prior `DERIVATION.md` behavioral anchors.
 2. Search the extracted current build by FormatJS ids and protocol strings.
-3. Follow current ESM imports to the app's menu components, shared React/JSX
-   runtime, icons, and other required native components.
-4. Verify export identities from their behavior and prop contracts. Matching
-   minified letters are insufficient evidence.
+3. Follow current ESM imports to the app's menu components, shared React/JSX runtime, icons, and other required native components.
+4. Verify export identities from their behavior and prop contracts. Matching minified letters are insufficient evidence.
 5. Update the new host with the verified current paths and exports.
 
-Avoid broad reverse engineering until an anchor fails. Static inspection
-produces candidates; live behavior confirms them.
+Avoid broad reverse engineering until an anchor fails. Static inspection produces candidates; live behavior confirms them.
 
 ### 4. Capture a stock behavioral baseline
 
-Before testing the binding, run the stock app with an isolated authenticated
-profile and a CDP port. Observe the profile menu without injection.
+Before testing the binding, run the stock app with an isolated authenticated profile and a CDP port. Observe the profile menu without injection.
 
 Inventory every safe built-in affordance relevant to the API:
 
@@ -90,58 +73,41 @@ Inventory every safe built-in affordance relevant to the API:
 - shortcuts, subtext, icons, and dynamic labels;
 - safe navigation actions and focus/keyboard behavior.
 
-Do not activate destructive actions such as Log out. Use renderer state and
-console output alongside screenshots.
+Do not activate destructive actions such as Log out. Use renderer state and console output alongside screenshots.
 
-Compare component ownership across the fiber/element tree. The visible Item
-often owns only presentation. A parent such as SubmenuItem may own expansion,
-state, event handlers, and children. Preserve the native wrapper and its
-children when that is where behavior lives; retaining a chevron prop alone
-can produce a row that looks interactive and does nothing.
+Compare component ownership across the fiber/element tree. The visible Item often owns only presentation. A parent such as SubmenuItem may own expansion, state, event handlers, and children. Preserve the native wrapper and its children when that is where behavior lives; retaining a chevron prop alone can produce a row that looks interactive and does nothing.
 
 ### 5. Implement the binding
 
-Reuse the app's current native components and keep the stable transformer and
-registration semantics intact. Confirm multiple extensions still compose in
-load order and remain isolated.
+Reuse the app's current native components and keep the stable transformer and registration semantics intact. Confirm multiple extensions still compose in load order and remain isolated.
 
 When a built-in component is reconstructed:
 
 - capture the complete native behavior boundary, including owning ancestors;
-- preserve current app children and handlers unless an extension explicitly
-  replaces them through the public API;
+- preserve current app children and handlers unless an extension explicitly replaces them through the public API;
 - keep `getItems()` and `activateItem()` aligned with what is rendered;
 - recapture dynamic app state on each relevant mount.
 
 ### 6. Test against the real app
 
-Use a throwaway `--user-data-dir` and an authenticated profile copy as
-described in `app-facts.md`. Keep the stock app bundle untouched.
+Use a throwaway `--user-data-dir` and an authenticated profile copy as described in `app-facts.md`. Keep the stock app bundle untouched.
 
 Validate in this order:
 
-1. Reproduce any discovered behavioral mismatch with a failing
-   version-specific `ui-test.mjs` check.
+1. Reproduce any discovered behavioral mismatch with a failing version-specific `ui-test.mjs` check.
 2. Run the unchanged public `api-test-suite`; require every test to pass.
 3. Run the new version's native UI suite; require every check to pass.
-4. Run the API test extension together with representative shipped
-   extensions to catch composition failures.
+4. Run the API test extension together with representative shipped extensions to catch composition failures.
 5. Disable the test extension, then verify the normal shipped-extension flow.
-6. When producing a launcher artifact, build Release, verify its signature,
-   compare the packaged binding files with source, and repeat the critical
-   interaction through the packaged bridge.
+6. When producing a launcher artifact, build Release, verify its signature, compare the packaged binding files with source, and repeat the critical interaction through the packaged bridge.
 
-Treat a result file as current only when the bridge log from the test PID and
-timestamp records that exact result. Missing, partial, stale, or unauthenticated
-results fail the run. Never weaken an assertion to obtain green tests.
+Treat a result file as current only when the bridge log from the test PID and timestamp records that exact result. Missing, partial, stale, or unauthenticated results fail the run. Never weaken an assertion to obtain green tests.
 
-Restore extension settings exactly after testing. Stop only the throwaway
-processes and send all temp profiles, extractions, and logs to Trash.
+Restore extension settings exactly after testing. Stop only the throwaway processes and send all temp profiles, extractions, and logs to Trash.
 
 ### 7. Record the final derivation
 
-Write `src/platform/bindings/<new-version>/DERIVATION.md` with only the final
-working approach:
+Write `src/platform/bindings/<new-version>/DERIVATION.md` with only the final working approach:
 
 - pinned version, hash, and Electron version;
 - semantic anchors and current extracted-build locations;
@@ -149,8 +115,7 @@ working approach:
 - binding behavior and meaningful failure signatures;
 - exact public-suite and native-suite commands and results.
 
-Keep version-specific facts in this derivation. Do not copy them into this
-skill or the durable `manage-platform-api` references.
+Keep version-specific facts in this derivation. Do not copy them into this skill or the durable `manage-platform-api` references.
 
 ## Completion gate
 
@@ -158,13 +123,10 @@ Finish only when all conditions hold:
 
 - The new directory and manifest match the installed version and app.asar.
 - Every referenced current-build module exists and its export was verified.
-- The public API, stable suite, and all prior binding directories are
-  unchanged.
+- The public API, stable suite, and all prior binding directories are unchanged.
 - The unchanged public suite passes against the live app.
-- The new native UI suite passes, including every stock interactive
-  affordance observed in the baseline.
+- The new native UI suite passes, including every stock interactive affordance observed in the baseline.
 - Representative shipped extensions work together.
 - The packaged artifact matches source when packaging is in scope.
 - `DERIVATION.md` describes the final current solution.
-- User settings are restored and all throwaway artifacts and processes are
-  cleaned up.
+- User settings are restored and all throwaway artifacts and processes are cleaned up.
