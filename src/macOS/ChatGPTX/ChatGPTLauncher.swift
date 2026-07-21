@@ -19,8 +19,15 @@ struct ChatGPTLauncher {
 
         guard let applicationURL = workspace.urlForApplication(
             withBundleIdentifier: Self.chatGPTBundleIdentifier
-        ), let executableURL = Bundle(url: applicationURL)?.executableURL else {
+        ), let chatGPTBundle = Bundle(url: applicationURL),
+            let executableURL = chatGPTBundle.executableURL else {
             throw LaunchError.chatGPTNotInstalled
+        }
+
+        guard let chatGPTVersion = chatGPTBundle.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String else {
+            throw LaunchError.chatGPTVersionMissing
         }
 
         guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
@@ -51,6 +58,10 @@ struct ChatGPTLauncher {
             try process.run()
         } catch {
             throw LaunchError.processLaunchFailed(error)
+        }
+
+        if !Self.supportsChatGPT(version: chatGPTVersion) {
+            UnsupportedVersionPrompt(version: chatGPTVersion).run()
         }
     }
 
@@ -86,6 +97,16 @@ struct ChatGPTLauncher {
         Darwin.kill(processIdentifier, 0) == 0 || errno != ESRCH
     }
 
+    private static func supportsChatGPT(version: String) -> Bool {
+        guard let resourcesURL = Bundle.main.resourceURL else { return false }
+
+        let bindingURL = resourcesURL
+            .appendingPathComponent("bindings", isDirectory: true)
+            .appendingPathComponent(version, isDirectory: true)
+            .appendingPathComponent("host.js")
+        return FileManager.default.fileExists(atPath: bindingURL.path)
+    }
+
     private static func environment(requiring bridgeURL: URL) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let requireOption = "--require \(quoteNodeOption(bridgeURL.path))"
@@ -104,6 +125,27 @@ struct ChatGPTLauncher {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
+    }
+}
+
+private final class UnsupportedVersionPrompt {
+    private let alert = NSAlert()
+
+    init(version: String) {
+        alert.alertStyle = .warning
+        alert.messageText = "ChatGPT extensions aren’t available"
+        alert.informativeText =
+            "ChatGPT \(version) isn’t supported by this version of ChatGPTX, "
+            + "so extensions couldn’t be enabled. ChatGPT will remain open."
+        alert.addButton(withTitle: "OK")
+    }
+
+    func run() {
+        alert.window.level = .screenSaver
+        alert.window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        alert.window.makeKeyAndOrderFront(nil)
+        alert.runModal()
     }
 }
 
@@ -167,6 +209,7 @@ private final class RestartPrompt {
 
 private enum LaunchError: LocalizedError {
     case chatGPTNotInstalled
+    case chatGPTVersionMissing
     case chatGPTExecutableMissing(URL)
     case bridgeMissing
     case chatGPTWouldNotQuit
@@ -177,6 +220,8 @@ private enum LaunchError: LocalizedError {
         switch self {
         case .chatGPTNotInstalled:
             "ChatGPT.app is not installed."
+        case .chatGPTVersionMissing:
+            "The installed ChatGPT version could not be determined."
         case .chatGPTExecutableMissing(let url):
             "The ChatGPT executable is missing at \(url.path)."
         case .bridgeMissing:
