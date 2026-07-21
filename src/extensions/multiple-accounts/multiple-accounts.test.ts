@@ -72,13 +72,13 @@ test("the account row becomes a submenu whose Profile child preserves native nav
   const openProfile = () => undefined;
   const account = action(accountRowId, "Current Account", { onClick: openProfile, origin: "app" });
   const settings = action("codex.profileDropdown.settingsPage", "Settings", { origin: "app" });
-  const result = transformProfileMenuItems([account, settings], "current-user", [], { addAccount() {}, selectAccount() {}, logOut() {} });
+  const result = transformProfileMenuItems([account, settings], "current-user", "current@example.com", [], { addAccount() {}, selectAccount() {}, logOut() {} });
   const parent = result[0];
 
   assert.equal(parent?.id, accountRowId);
   assert.equal(parent?.kind, "action");
   if (parent?.kind !== "action") return;
-  assert.equal(parent.label, "Current Account");
+  assert.equal(parent.label, "current@example.com");
   assert.equal(parent.items?.length, 2);
   assert.deepEqual(parent.items?.[0], { kind: "action", id: "multiple-accounts.profile", label: "Profile", icon: "person", onClick: openProfile });
   assert.equal(result[1], settings);
@@ -86,7 +86,7 @@ test("the account row becomes a submenu whose Profile child preserves native nav
 
 test("Add account uses the supplied action", () => {
   let additions = 0;
-  const result = transformProfileMenuItems([action(accountRowId, "Current")], "current-user", [], { addAccount: () => additions += 1, selectAccount() {}, logOut() {} });
+  const result = transformProfileMenuItems([action(accountRowId, "Current")], "current-user", "current@example.com", [], { addAccount: () => additions += 1, selectAccount() {}, logOut() {} });
   const parent = result[0];
   assert.equal(parent?.kind, "action");
   if (parent?.kind !== "action") return;
@@ -100,7 +100,7 @@ test("stored accounts exclude the current account and remain selectable", () => 
   const selected: StoredAccount[] = [];
   const current = storedAccount("current-user", "Current");
   const other = storedAccount("other-user", "Other");
-  const result = transformProfileMenuItems([action(accountRowId, "Current")], current.userId, [current, other], { addAccount() {}, selectAccount: (account) => selected.push(account), logOut() {} });
+  const result = transformProfileMenuItems([action(accountRowId, "Current")], current.userId, "current@example.com", [current, other], { addAccount() {}, selectAccount: (account) => selected.push(account), logOut() {} });
   const parent = result[0];
   assert.equal(parent?.kind, "action");
   if (parent?.kind !== "action") return;
@@ -112,7 +112,7 @@ test("stored accounts exclude the current account and remain selectable", () => 
 
 test("children contributed by earlier extensions are preserved", () => {
   const priorChild = action("prior.child", "Prior child", { origin: "prior" });
-  const result = transformProfileMenuItems([action(accountRowId, "Current", { items: [priorChild], origin: "app" })], "current-user", [], { addAccount() {}, selectAccount() {}, logOut() {} });
+  const result = transformProfileMenuItems([action(accountRowId, "Current", { items: [priorChild], origin: "app" })], "current-user", "current@example.com", [], { addAccount() {}, selectAccount() {}, logOut() {} });
   const parent = result[0];
   assert.equal(parent?.kind, "action");
   if (parent?.kind !== "action") return;
@@ -122,14 +122,14 @@ test("children contributed by earlier extensions are preserved", () => {
 
 test("a menu without an account identity row is unchanged", () => {
   const items: readonly ProfileMenuItem[] = [action("codex.profileDropdown.settingsPage", "Settings", { origin: "app" })];
-  assert.equal(transformProfileMenuItems(items, "current-user", [], { addAccount() {}, selectAccount() {}, logOut() {} }), items);
+  assert.equal(transformProfileMenuItems(items, "current-user", "current@example.com", [], { addAccount() {}, selectAccount() {}, logOut() {} }), items);
 });
 
 test("the native Log out row is routed through the extension while preserving its presentation", () => {
   let nativeLogouts = 0;
   const nativeLogout = () => { nativeLogouts += 1; };
   const logout = action(logoutRowId, "Log out", { icon: "log-out", origin: "app", onClick: nativeLogout });
-  const result = transformProfileMenuItems([action(accountRowId, "Current"), logout], "current-user", [], {
+  const result = transformProfileMenuItems([action(accountRowId, "Current"), logout], "current-user", "current@example.com", [], {
     addAccount() {},
     selectAccount() {},
     logOut(original) { original(); },
@@ -234,9 +234,9 @@ test("logging out deletes the current saved account and switches to another save
 
 test("a successful authentication change refreshes the current and stored account menu state", async () => {
   deactivate();
-  const alphaJson = JSON.stringify({ userId: "alpha", label: "Alpha" });
-  const betaJson = JSON.stringify({ userId: "beta", label: "Beta" });
-  let current: CurrentAuthentication = { userId: "alpha", label: "Alpha", authJson: alphaJson };
+  const alphaJson = JSON.stringify({ userId: "alpha", label: "alpha@example.com" });
+  const betaJson = JSON.stringify({ userId: "beta", label: "beta@example.com" });
+  let current: CurrentAuthentication = { userId: "alpha", label: "alpha@example.com", authJson: alphaJson };
   const files: Record<string, string> = {};
   let onChange: (() => void) | undefined;
   let transform: ((items: readonly ProfileMenuItem[]) => readonly ProfileMenuItem[]) | undefined;
@@ -276,14 +276,15 @@ test("a successful authentication change refreshes the current and stored accoun
     activate(api);
     for (let attempt = 0; attempt < 20 && !transform; attempt += 1) await new Promise((resolve) => setImmediate(resolve));
     assert(transform, "initial account state loaded");
-    current = { userId: "beta", label: "Beta", authJson: betaJson };
+    current = { userId: "beta", label: "beta@example.com", authJson: betaJson };
     onChange?.();
     for (let attempt = 0; attempt < 20 && !files[authenticationFileName("beta")]; attempt += 1) await new Promise((resolve) => setImmediate(resolve));
     const result = transform([action(accountRowId, "Beta")]);
     const parent = result[0];
     assert.equal(parent?.kind, "action");
     if (parent?.kind !== "action") return;
-    assert.deepEqual(parent.items?.map((item) => item.label), ["Profile", "Alpha", "Add account"]);
+    assert.equal(parent.label, "beta@example.com");
+    assert.deepEqual(parent.items?.map((item) => item.label), ["Profile", "alpha@example.com", "Add account"]);
   } finally {
     deactivate();
     globalThis.__CGPTX_RUNTIME__ = undefined;

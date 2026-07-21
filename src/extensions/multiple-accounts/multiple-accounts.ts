@@ -83,7 +83,7 @@ export async function logOutCurrent(storage: ExtensionStorage, authentication: A
   nativeLogout();
 }
 
-export function transformProfileMenuItems(items: readonly ProfileMenuItem[], currentUserId: string, accounts: readonly StoredAccount[], actions: AccountMenuActions): readonly ProfileMenuItem[] {
+export function transformProfileMenuItems(items: readonly ProfileMenuItem[], currentUserId: string, currentLabel: string, accounts: readonly StoredAccount[], actions: AccountMenuActions): readonly ProfileMenuItem[] {
   const row = items.find((item) => item.id === ACCOUNT_ROW_ID && item.kind === "action");
   const logout = items.find((item) => item.id === LOGOUT_ROW_ID && item.kind === "action" && typeof item.onClick === "function");
   if (!row && !logout) return items;
@@ -105,7 +105,7 @@ export function transformProfileMenuItems(items: readonly ProfileMenuItem[], cur
     : undefined;
 
   return items.map((item): ProfileMenuItem => {
-    if (item.id === ACCOUNT_ROW_ID && row && accountItems) return { ...row, items: accountItems };
+    if (item.id === ACCOUNT_ROW_ID && row && accountItems) return { ...row, label: currentLabel, items: accountItems };
     if (item.id === LOGOUT_ROW_ID && item.kind === "action" && typeof item.onClick === "function") {
       const nativeLogout = item.onClick;
       return { ...item, onClick: () => actions.logOut(nativeLogout) };
@@ -122,13 +122,14 @@ interface MenuState {
   generation: number;
   refreshGeneration: number;
   currentUserId: string;
+  currentLabel: string;
   accounts: readonly StoredAccount[];
 }
 
 export function activate(api: PlatformApi): void {
   const generation = ++activationGeneration;
   const storage = createExtensionStorage(EXTENSION_ID);
-  const state: MenuState = { generation, refreshGeneration: 0, currentUserId: "", accounts: [] };
+  const state: MenuState = { generation, refreshGeneration: 0, currentUserId: "", currentLabel: "", accounts: [] };
   authenticationRegistration = api.authentication.onDidChange(() => {
     void refreshMenuState(api, storage, state).catch((error) => console.error(`[${EXTENSION_ID}] failed to refresh accounts`, error));
   });
@@ -143,6 +144,7 @@ async function refreshMenuState(api: PlatformApi, storage: ExtensionStorage, sta
   const accounts = await discoverAccounts(storage, api.authentication);
   if (state.generation !== activationGeneration || refreshGeneration !== state.refreshGeneration) return;
   state.currentUserId = current.userId;
+  state.currentLabel = current.label;
   state.accounts = accounts;
 
   const actions: AccountMenuActions = {
@@ -156,7 +158,7 @@ async function refreshMenuState(api: PlatformApi, storage: ExtensionStorage, sta
       void logOutCurrent(storage, api.authentication, state.accounts, nativeLogout).catch((error) => console.error(`[${EXTENSION_ID}] failed to log out`, error));
     },
   };
-  registration ??= api.menus.profile.transformItems((items) => transformProfileMenuItems(items, state.currentUserId, state.accounts, actions));
+  registration ??= api.menus.profile.transformItems((items) => transformProfileMenuItems(items, state.currentUserId, state.currentLabel, state.accounts, actions));
 }
 
 export function deactivate(): void {
