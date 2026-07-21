@@ -197,7 +197,7 @@ test("profile-menu: accepts and preserves all item affordances", () => {
       kind: "action",
       id: ID_RICH,
       label: "Rich",
-      icon: "settings",
+      icon: "person",
       rightIcon: "chevron-right",
       subText: "sub",
       keyboardShortcut: "⌘T",
@@ -208,7 +208,7 @@ test("profile-menu: accepts and preserves all item affordances", () => {
   assert(item && item.kind === "action", "rich item is in the effective list");
   if (item && item.kind === "action") {
     assert(item.label === "Rich", "label preserved");
-    assert(item.icon === "settings", "icon preserved");
+    assert(item.icon === "person", "icon preserved");
     assert(item.rightIcon === "chevron-right", "rightIcon preserved");
     assert(item.subText === "sub", "subText preserved");
     assert(item.keyboardShortcut === "⌘T", "keyboardShortcut preserved");
@@ -552,7 +552,7 @@ function installVisualFixture(): void {
       kind: "action",
       id: VISUAL_RICH_ID,
       label: "Binding Rich Item",
-      icon: "settings",
+      icon: "person",
       rightIcon: "chevron-right",
       subText: "Binding subtext",
       keyboardShortcut: "⌘T",

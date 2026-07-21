@@ -18,6 +18,8 @@
     "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~appgen-settings-p~evbmo86c-D4aWp9Ck.js";
   const ICON_MODULE =
     "./assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~dg0b1kws-Cen01Onw.js";
+  const PROFILE_ICON_MODULE =
+    "./assets/app-initial~app-main~settings-command-menu-section-items~pull-request-route~new-thread-pane~fnoshreu-CHWJP-re.js";
   const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-CTvO8J1r.js";
   const AUTH_CONTEXT_MODULE =
     "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~k87y25tw-DjPeV3vC.js";
@@ -1031,6 +1033,7 @@
       coreModule,
       menuModule,
       iconModule,
+      profileIconModule,
       authModule,
       authContextModule,
       browserModule,
@@ -1039,6 +1042,7 @@
       import(CORE_MODULE),
       import(MENU_MODULE),
       import(ICON_MODULE),
+      import(PROFILE_ICON_MODULE),
       import(AUTH_MODULE),
       import(AUTH_CONTEXT_MODULE),
       import(BROWSER_MODULE),
@@ -1048,6 +1052,7 @@
     authContextModule.f();
     browserModule.r();
     iconModule.s();
+    profileIconModule.i();
     const jsxRuntime = coreModule.zt();
     native = {
       React: coreModule.dn(),
@@ -1068,6 +1073,7 @@
       useNavigate: browserModule.mt,
       iconComponents: new Map([
         ["chevron-right", iconModule.o],
+        ["person", profileIconModule.r],
       ]),
     };
     installJsxHook();

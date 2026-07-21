@@ -320,9 +320,9 @@ export interface ProfileMenuActionItem {
 
   /**
    * Name of an app icon to render on the left, resolved by the binding to
-   * the app's own icon component (kebab-case icon names as used by the app's
-   * design system, e.g. `"play-outline"`). Unknown names render the item
-   * without an icon and log a warning.
+   * the app's own icon component. For example, `"person"` reuses the exact
+   * icon shown by ChatGPT's Settings → Profile navigation item. Unknown names
+   * render the item without an icon and log a warning.
    */
   readonly icon?: string;
 

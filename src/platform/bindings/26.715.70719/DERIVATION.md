@@ -16,7 +16,7 @@ The native menu components come from `app-initial~artifact-tab-content.electron~
 
 The singleton React and mutable JSX runtime come from `app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~kppdhley-Hrn9ylUK.js` through exports `dn()` and `zt()`.
 
-The native chevron comes from export `o` of `app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~dg0b1kws-Cen01Onw.js`; export `s` initializes that module. Other icons are captured from live built-in Item props.
+The native chevron comes from export `o` of `app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~dg0b1kws-Cen01Onw.js`; export `s` initializes that module. The `person` icon is export `r` of `app-initial~app-main~settings-command-menu-section-items~pull-request-route~new-thread-pane~fnoshreu-CHWJP-re.js`, initialized by export `i`. ChatGPT's settings-navigation map assigns that exact component to its `profile` section, and its native profile-dropdown row uses the same export. The binding registers it directly because workspace accounts omit the native profile-dropdown row that previously supplied the component opportunistically. Other icons are captured from live built-in Item props.
 
 The binding wraps the shared JSX runtime, identifies the profile root through semantic child props, captures exact built-in descriptors from native Item fibers, and rerenders the transformed list inside the original Radix menu root. Native keyboard navigation, focus, selection, disabled state, styling, accessibility, animation, and submenu behavior remain app-owned.
 
@@ -50,6 +50,7 @@ The version-independent runtime preload exposes a narrow request bridge. The mai
 - Version-specific native UI suite with workspace and alternate-account fixtures: 30/30.
 - Multiple-accounts and shared-storage unit tests: 17/17.
 - Live multiple-accounts UI: the native account row rendered with one chevron; its children used the same native nested Item presentation as Usage remaining and appeared as `Profile`, saved accounts, then `Add account`.
+- Native Profile icon: the workspace-account fixture rendered the extension's nested Profile row with the exact Settings → Profile icon even though ChatGPT omitted its own profile-dropdown row.
 - Credential storage: the current credentials were copied byte-for-byte to `~/.codex/extensions/multiple-accounts/auth-<user-id>.json` with mode `0600`.
 - Live account switching: Computer Use switched from workspace to personal and back in the packaged launcher. Each direction updated the menu email and native Profile identity, avatar rendering, handle, and account-specific activity data without restarting the desktop process. The nested Profile item opened native Profile settings in both account states, including the workspace state where ChatGPT omits its profile-menu callback.
 
