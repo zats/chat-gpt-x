@@ -111,7 +111,7 @@ export interface CurrentAuthentication extends AuthenticationIdentity {
 /**
  * APIs for using ChatGPT's native authentication lifecycle.
  *
- * Authentication changes are process-global. Calls from concurrent extensions are serialized in invocation order. A sign-in request made while the native sign-in flow is already active focuses that flow. Credential replacement validates and writes the new credentials atomically before invoking the app's native post-authentication reload behavior.
+ * Authentication changes are process-global. Calls from concurrent extensions are serialized in invocation order. A sign-in request made while the native sign-in flow is already active focuses that flow. Credential replacement validates and writes the new credentials atomically before completing the app's native post-authentication reload behavior.
  *
  * @group Authentication
  */
@@ -146,7 +146,7 @@ export interface AuthenticationApi {
   /**
    * Replace `~/.codex/auth.json` with previously captured credentials and make the app adopt them through its native post-authentication reload flow.
    *
-   * The JSON is validated before the current file is changed, and the replacement is atomic. Resolves after the replacement is committed and the reload is scheduled.
+   * The JSON is validated before the current file is changed, and the replacement is atomic. Resolves after ChatGPT's native app server has reinitialized with the replacement and its authentication refresh has been requested.
    *
    * @param authJson exact serialized contents previously returned by {@link getCurrent}
    */
@@ -155,7 +155,7 @@ export interface AuthenticationApi {
   /**
    * Observe successful native sign-in and credential replacement.
    *
-   * Listeners run in registration order after ChatGPT's native authentication refresh is requested. A throwing listener is isolated. Dispose the returned handle to stop observing changes.
+   * Listeners run in registration order after ChatGPT's native authentication refresh is requested. For credential replacement, the native app server has already reinitialized with the selected account. A throwing listener is isolated. Dispose the returned handle to stop observing changes.
    *
    * @param listener callback invoked after the active authentication changes
    * @example

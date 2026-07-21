@@ -5,9 +5,22 @@
  * api-test-suite remains limited to src/platform/types.d.ts.
  *
  * Usage: node src/platform/bindings/26.715.70719/ui-test.mjs [port]
+ *   [--expect-native-profile-callback-missing]
+ *   [--alternate-auth=/path/to/auth.json]
  */
 
+import { readFile } from 'node:fs/promises';
+
 const port = process.argv[2] ?? '9222';
+const expectNativeProfileCallbackMissing = process.argv.includes(
+  '--expect-native-profile-callback-missing',
+);
+const alternateAuthPath = process.argv
+  .find((argument) => argument.startsWith('--alternate-auth='))
+  ?.slice('--alternate-auth='.length);
+const alternateAuthJson = alternateAuthPath
+  ? await readFile(alternateAuthPath, 'utf8')
+  : undefined;
 const targets = await fetch('http://127.0.0.1:' + port + '/json').then((response) =>
   response.json(),
 );
@@ -64,7 +77,10 @@ async function waitFor(expression, timeoutMs = 20000) {
   throw new Error('Timed out waiting for: ' + expression);
 }
 
-async function validateUi() {
+async function validateUi(
+  expectMissingProfileCallback,
+  alternateAuthentication,
+) {
   const checks = [];
   const check = (condition, name, detail) => {
     checks.push({ name, pass: Boolean(condition), detail });
@@ -122,6 +138,17 @@ async function validateUi() {
     globalThis.__CGPTX_HOST__?._debug.authenticationAccountInfoResetCount() >= 1,
     'public credential replacement clears the native account-info query',
   );
+  check(
+    globalThis.__CGPTX_HOST__?._debug.authenticationAppServerRestartCount() >= 1,
+    'public credential replacement restarts ChatGPT\'s native app server',
+  );
+  if (expectMissingProfileCallback) {
+    check(
+      globalThis.__CGPTX_HOST__?._debug.profileMenuHasNativeProfileCallback() ===
+        false,
+      'fixture omits ChatGPT\'s conditional profile-menu callback',
+    );
+  }
   const syntheticClaims = btoa(
     JSON.stringify({
       sub: 'synthetic-user',
@@ -340,24 +367,137 @@ async function validateUi() {
   ).find((element) => element.textContent?.trim() === 'Back to app');
   backToApp?.click();
   await sleep(300);
-  const account = globalThis.__CGPTX_HOST__
-    ?._debug.getCache()
-    .find((item) => item.id === 'codex.profileDropdown.account');
+  globalThis.__CGPTX_HOST__.registerExtension(
+    'profile-navigation-fixture',
+    {
+      activate(api) {
+        api.menus.profile.transformItems((items) => {
+          const findAccount = (candidates) => {
+            for (const candidate of candidates) {
+              if (
+                candidate.id === 'codex.profileDropdown.account' &&
+                candidate.kind === 'action'
+              ) {
+                return candidate;
+              }
+              if (candidate.kind === 'action' && candidate.items) {
+                const found = findAccount(candidate.items);
+                if (found) return found;
+              }
+            }
+          };
+          const withoutAccount = (candidates) =>
+            candidates.flatMap((candidate) => {
+              if (candidate.id === 'codex.profileDropdown.account') return [];
+              if (candidate.kind !== 'action' || !candidate.items) {
+                return [candidate];
+              }
+              return [
+                {
+                  ...candidate,
+                  items: withoutAccount(candidate.items),
+                },
+              ];
+            });
+          const nativeAccount = findAccount(items);
+          if (!nativeAccount) return items;
+          return [
+            {
+              ...nativeAccount,
+              items: [
+                {
+                  kind: 'action',
+                  id: 'profile-navigation-fixture.profile',
+                  label: 'Profile',
+                  onClick: nativeAccount.onClick,
+                },
+              ],
+            },
+            ...withoutAccount(items),
+          ];
+        });
+      },
+    },
+  );
   const profileWasCurrent = Array.from(
     document.querySelectorAll('[aria-current="page"]'),
   ).some((element) => element.textContent?.trim() === 'Profile');
-  account?.onClick?.();
+  column = await openProfile();
+  const account = column?.querySelector(
+    '[data-cgptx-id="codex.profileDropdown.account"]',
+  );
+  account?.click();
+  await sleep(100);
+  const profile = column?.querySelector(
+    '[data-cgptx-id="profile-navigation-fixture.profile"]',
+  );
+  profile?.click();
   await sleep(500);
   const profileIsCurrent = Array.from(
     document.querySelectorAll('[aria-current="page"]'),
   ).some((element) => element.textContent?.trim() === 'Profile');
   check(
-    typeof account?.onClick === 'function' &&
+    Boolean(account && profile) &&
       !profileWasCurrent &&
       profileIsCurrent,
-    'account identity native action opens Profile settings',
-    { profileWasCurrent, profileIsCurrent },
+    'account submenu Profile child opens native Profile settings',
+    {
+      profileWasCurrent,
+      profileIsCurrent,
+      foundAccount: Boolean(account),
+      foundProfile: Boolean(profile),
+    },
   );
+
+  if (alternateAuthentication) {
+    let authenticationApi;
+    globalThis.__CGPTX_HOST__.registerExtension('authentication-switch-fixture', {
+      activate(api) {
+        authenticationApi = api.authentication;
+      },
+    });
+    const original = await authenticationApi.getCurrent();
+    const alternate = await authenticationApi.inspect(alternateAuthentication);
+    check(
+      Boolean(original && original.userId !== alternate.userId),
+      'alternate authentication fixture identifies a different account',
+    );
+    if (original && original.userId !== alternate.userId) {
+      try {
+        await authenticationApi.replaceCurrent(alternateAuthentication);
+        const adopted = await authenticationApi.getCurrent();
+        const nativeAccount =
+          await globalThis.__CGPTX_HOST__._debug.nativeAccount();
+        check(
+          adopted?.userId === alternate.userId &&
+            nativeAccount?.account?.email === alternate.label,
+          'credential replacement makes the native app server adopt the selected account',
+          {
+            selectedUserId: alternate.userId,
+            adoptedUserId: adopted?.userId,
+            selectedLabel: alternate.label,
+            nativeEmail: nativeAccount?.account?.email,
+          },
+        );
+      } finally {
+        await authenticationApi.replaceCurrent(original.authJson);
+      }
+      const restored = await authenticationApi.getCurrent();
+      const restoredNativeAccount =
+        await globalThis.__CGPTX_HOST__._debug.nativeAccount();
+      check(
+        restored?.userId === original.userId &&
+          restoredNativeAccount?.account?.email === original.label,
+        'credential replacement restores the original native account',
+        {
+          selectedUserId: original.userId,
+          restoredUserId: restored?.userId,
+          selectedLabel: original.label,
+          nativeEmail: restoredNativeAccount?.account?.email,
+        },
+      );
+    }
+  }
 
   return checks;
 }
@@ -369,7 +509,15 @@ if (failedSemantic.length > 0) {
   throw new Error('Public API suite failed: ' + JSON.stringify(failedSemantic));
 }
 
-const report = await evaluate('(' + validateUi.toString() + ')()');
+const report = await evaluate(
+  '(' +
+    validateUi.toString() +
+    ')(' +
+    JSON.stringify(expectNativeProfileCallbackMissing) +
+    ',' +
+    JSON.stringify(alternateAuthJson) +
+    ')',
+);
 socket.close();
 const failed = report.filter((check) => !check.pass);
 console.log(

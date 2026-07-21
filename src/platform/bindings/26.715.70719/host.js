@@ -25,6 +25,7 @@
     "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~c1u3yp5s-9RGNa6St.js";
   const QUERY_MODULE =
     "./assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~ngwudnyz-DEp-3H1N.js";
+  const AUTHENTICATION_RESTART_TIMEOUT_MS = 20_000;
 
   function log(...args) {
     console.log(LOG_PREFIX, ...args);
@@ -122,11 +123,14 @@
   let nestedItemClassName = null;
   let refreshAuthentication = null;
   let openNativeProfile = null;
+  let profileMenuHasNativeProfileCallback = null;
+  let nativeAppServerRegistry = null;
   let activeSignIn = null;
   let authenticationOperations = Promise.resolve();
   let nativeSignInStartCount = 0;
   let authenticationRefreshCount = 0;
   let authenticationAccountInfoResetCount = 0;
+  let authenticationAppServerRestartCount = 0;
 
   function subscribe(listener) {
     renderListeners.add(listener);
@@ -429,20 +433,45 @@
 
   async function replaceCurrentAuthentication(authJson) {
     inspectAuthentication(authJson);
-    if (typeof refreshAuthentication !== "function") {
+    if (!native?.messageBus || typeof refreshAuthentication !== "function") {
       throw new Error("ChatGPT post-authentication refresh is unavailable");
     }
     await runtimeRequest("authentication.replace-current", { authJson });
-    await new Promise((resolve) => {
-      setTimeout(() => {
-        try {
-          refreshAuthentication();
-          emitAuthenticationChange();
-        } catch (error) {
-          warn("native post-authentication refresh failed", error);
-        }
-        resolve();
-      }, 0);
+    await new Promise((resolve, reject) => {
+      let unsubscribe;
+      const timeout = setTimeout(() => {
+        unsubscribe?.();
+        reject(
+          new Error(
+            "ChatGPT app server did not restart after authentication changed",
+          ),
+        );
+      }, AUTHENTICATION_RESTART_TIMEOUT_MS);
+      unsubscribe = native.messageBus.subscribe(
+        "codex-app-server-initialized",
+        (message) => {
+          if (message?.hostId !== "local") return;
+          clearTimeout(timeout);
+          unsubscribe();
+          authenticationAppServerRestartCount += 1;
+          try {
+            refreshAuthentication();
+            emitAuthenticationChange();
+            resolve();
+          } catch (error) {
+            reject(error);
+          }
+        },
+      );
+      try {
+        native.messageBus.dispatchMessage("codex-app-server-restart", {
+          hostId: "local",
+        });
+      } catch (error) {
+        clearTimeout(timeout);
+        unsubscribe();
+        reject(error);
+      }
     });
   }
 
@@ -914,6 +943,8 @@
     function useNativePostAuthenticationRefresh() {
       const updateAuthNonce = native.useUpdateAuthNonce();
       const queryClient = native.useQueryClient();
+      const appServerRegistry = native.useAppServerRegistry();
+      nativeAppServerRegistry = appServerRegistry;
       refreshAuthentication = () => {
         authenticationRefreshCount += 1;
         queryClient.removeQueries({
@@ -925,12 +956,16 @@
       };
     }
 
+    function useNativeProfileNavigation() {
+      const navigate = native.useNavigate();
+      openNativeProfile = () => navigate("/settings/profile");
+    }
+
     function ProfileComponentBoundary({ child }) {
       useNativePostAuthenticationRefresh();
-      openNativeProfile =
-        typeof child.props?.onOpenProfile === "function"
-          ? child.props.onOpenProfile
-          : null;
+      useNativeProfileNavigation();
+      profileMenuHasNativeProfileCallback =
+        typeof child.props?.onOpenProfile === "function";
       React.useSyncExternalStore(
         subscribe,
         () => renderVersion,
@@ -946,6 +981,7 @@
 
     function ProfileTreeBoundary({ child }) {
       useNativePostAuthenticationRefresh();
+      useNativeProfileNavigation();
       React.useSyncExternalStore(
         subscribe,
         () => renderVersion,
@@ -1024,9 +1060,12 @@
       startChatGptSignIn: authModule.o,
       decorateAuthUrl: authModule.t,
       useUpdateAuthNonce: authContextModule.g,
+      useAppServerRegistry: authContextModule.A,
       useQueryClient: queryModule.Bl,
       accountInfoQueryKey: queryModule.r,
+      messageBus: queryModule.m,
       openInBrowser: browserModule.o,
+      useNavigate: browserModule.mt,
       iconComponents: new Map([
         ["chevron-right", iconModule.o],
       ]),
@@ -1206,6 +1245,11 @@
       authenticationRefreshCount: () => authenticationRefreshCount,
       authenticationAccountInfoResetCount: () =>
         authenticationAccountInfoResetCount,
+      authenticationAppServerRestartCount: () =>
+        authenticationAppServerRestartCount,
+      profileMenuHasNativeProfileCallback: () =>
+        profileMenuHasNativeProfileCallback,
+      nativeAccount: () => nativeAppServerRegistry?.getDefault().getAccount(),
       nativeSignInStartCount: () => nativeSignInStartCount,
       inspectAuthentication,
     }),
