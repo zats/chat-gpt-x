@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ChatGPTX: Rebuild and Run",
+      "type": "lldb-dap",
+      "request": "launch",
+      "program": "/usr/bin/open",
+      "args": [
+        "${workspaceFolder}/.builds/ChatGPTX.app"
+      ],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "ChatGPTX: Build",
+      "noDebug": true,
+      "disableSTDIO": true,
+      "stopOnEntry": false,
+      "internalConsoleOptions": "neverOpen"
+    }
+  ]
+}

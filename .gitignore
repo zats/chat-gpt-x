@@ -2,4 +2,6 @@
 /.builds/
 /.vscode/*
 !/.vscode/tasks.json
+!/.vscode/launch.json
+!/.vscode/extensions.json
 /src/macOS/*.xcodeproj/
