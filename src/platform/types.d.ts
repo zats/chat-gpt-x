@@ -1,16 +1,18 @@
 /**
  * ChatGPT Extension Platform — stable public API.
  *
- * The ONLY surface extensions compile against. App internals are minified and
- * re-scrambled every build; bindings in `src/platform/bindings/<version>/`
- * bridge them to this API, so this file stays stable across app updates.
+ * The only surface through which extensions access ChatGPT capabilities. App
+ * internals are minified and re-scrambled every build; bindings in
+ * `src/platform/bindings/<version>/` bridge them to this API, so this file
+ * stays stable across app updates. ChatGPTX-owned utilities live separately
+ * under `src/platform/utilities/`.
  *
  * Rules for anything exported here:
  * - Declarations only: no implementations, app internals, DOM/Electron
  *   shapes, or minified identifiers.
  * - Full TSDoc required: intent, behavior, parameter semantics,
  *   multi-consumer semantics, `@example`, and exactly one `@group`:
- *   Lifecycle | Menus | Conversation | Commands | Windows | Events.
+ *   Lifecycle | Menus | Authentication | Conversation | Commands | Windows | Events.
  * - Designed for N concurrent extensions: transformers for state-shaping
  *   APIs (full state in, new state out, chained in load order), registration
  *   for notifications (invoked in load order, isolated). Extensions never
@@ -72,6 +74,94 @@ export interface Disposable {
 export interface PlatformApi {
   /** Menu contribution APIs. */
   readonly menus: MenusApi;
+
+  /** The ChatGPT app's authentication lifecycle. */
+  readonly authentication: AuthenticationApi;
+}
+
+// ---------------------------------------------------------------------------
+// Authentication
+// ---------------------------------------------------------------------------
+
+/**
+ * A stable account identity derived from ChatGPT authentication data.
+ *
+ * @group Authentication
+ */
+export interface AuthenticationIdentity {
+  /** Stable account identifier used to distinguish stored accounts. */
+  readonly userId: string;
+
+  /** User-facing account label, preferring the account name and then its email address. */
+  readonly label: string;
+}
+
+/**
+ * The current account identity and its complete opaque `auth.json` contents.
+ *
+ * Extensions may persist `authJson` and later pass it unchanged to {@link AuthenticationApi.replaceCurrent}. They must not inspect or modify its private schema; use {@link AuthenticationApi.inspect} for identity metadata.
+ *
+ * @group Authentication
+ */
+export interface CurrentAuthentication extends AuthenticationIdentity {
+  /** Exact serialized JSON credentials currently stored by ChatGPT. */
+  readonly authJson: string;
+}
+
+/**
+ * APIs for using ChatGPT's native authentication lifecycle.
+ *
+ * Authentication changes are process-global. Calls from concurrent extensions are serialized in invocation order. A sign-in request made while the native sign-in flow is already active focuses that flow. Credential replacement validates and writes the new credentials atomically before invoking the app's native post-authentication reload behavior.
+ *
+ * @group Authentication
+ */
+export interface AuthenticationApi {
+  /**
+   * Read the current account and the exact credentials stored in `~/.codex/auth.json`.
+   *
+   * Returns `undefined` when no valid current authentication exists. The returned object is a snapshot; changing it has no effect.
+   *
+   * @example
+   * const current = await api.authentication.getCurrent();
+   * if (current) await accountStorage.write(current.userId, current.authJson);
+   */
+  getCurrent(): Promise<CurrentAuthentication | undefined>;
+
+  /**
+   * Derive stable identity metadata from serialized ChatGPT credentials without activating them.
+   *
+   * Rejects malformed or unsupported credentials. This is the supported way to label stored accounts; extensions must treat the underlying JSON schema as opaque.
+   *
+   * @param authJson exact serialized contents previously returned by {@link getCurrent}
+   */
+  inspect(authJson: string): Promise<AuthenticationIdentity>;
+
+  /**
+   * Start the app's existing sign-in flow for adding another account.
+   *
+   * Resolves once the native flow has started. Successful authentication continues through the app's existing post-sign-in lifecycle. Concurrent callers share the active native flow.
+   */
+  startSignIn(): Promise<void>;
+
+  /**
+   * Replace `~/.codex/auth.json` with previously captured credentials and make the app adopt them through its native post-authentication reload flow.
+   *
+   * The JSON is validated before the current file is changed, and the replacement is atomic. Resolves after the replacement is committed and the reload is scheduled.
+   *
+   * @param authJson exact serialized contents previously returned by {@link getCurrent}
+   */
+  replaceCurrent(authJson: string): Promise<void>;
+
+  /**
+   * Observe successful native sign-in and credential replacement.
+   *
+   * Listeners run in registration order after ChatGPT's native authentication refresh is requested. A throwing listener is isolated. Dispose the returned handle to stop observing changes.
+   *
+   * @param listener callback invoked after the active authentication changes
+   * @example
+   * const registration = api.authentication.onDidChange(() => refreshAccounts());
+   */
+  onDidChange(listener: () => void): Disposable;
 }
 
 /**

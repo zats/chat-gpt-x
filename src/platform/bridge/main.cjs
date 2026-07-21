@@ -39,6 +39,9 @@ function init() {
   const LOG_FILE = path.join(LOG_DIR, `bridge-${process.pid}.log`);
   const SETTINGS_FILE = path.join(STATE_DIR, "settings.json");
   const RESULTS_FILE = path.join(LOG_DIR, "test-results.json");
+  const PRELOAD_FILE = path.join(__dirname, "preload.cjs");
+  const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const AUTH_FILE = path.join(CODEX_HOME, "auth.json");
 
   function log(event, data) {
     try {
@@ -102,7 +105,7 @@ function init() {
 
   function patchElectron(electron) {
     log("electron-intercepted");
-    const { app, BrowserWindow } = electron;
+    const { app, BrowserWindow, ipcMain, session } = electron;
     if (!app || !BrowserWindow) return undefined;
 
     const version = app.getVersion();
@@ -139,6 +142,137 @@ function init() {
         }
       })
       .filter(Boolean);
+    const enabledExtensionIds = new Set(extensions.map((extension) => extension.id));
+
+    function assertAppSender(event) {
+      if (!event.sender.getURL().startsWith("app:")) {
+        throw new Error("ChatGPTX runtime requests are limited to app pages");
+      }
+    }
+
+    function extensionRoot(extensionId) {
+      if (
+        typeof extensionId !== "string" ||
+        !/^[a-z0-9][a-z0-9._-]*$/i.test(extensionId) ||
+        !enabledExtensionIds.has(extensionId)
+      ) {
+        throw new Error("Unknown extension storage scope");
+      }
+      return path.join(STATE_DIR, extensionId);
+    }
+
+    function scopedPath(extensionId, relativePath) {
+      if (typeof relativePath !== "string" || relativePath.length === 0) {
+        throw new TypeError("A relative storage path is required");
+      }
+      const root = extensionRoot(extensionId);
+      const normalized = path.posix.normalize(relativePath.replaceAll("\\", "/"));
+      if (
+        normalized === "." ||
+        normalized === ".." ||
+        normalized.startsWith("../") ||
+        path.posix.isAbsolute(normalized)
+      ) {
+        throw new Error("Storage path escapes the extension scope");
+      }
+      const resolved = path.resolve(root, ...normalized.split("/"));
+      if (!resolved.startsWith(root + path.sep)) {
+        throw new Error("Storage path escapes the extension scope");
+      }
+      return { root, resolved };
+    }
+
+    function atomicWrite(file, contents) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const temporary = path.join(
+        path.dirname(file),
+        `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`,
+      );
+      try {
+        fs.writeFileSync(temporary, contents, { encoding: "utf8", mode: 0o600 });
+        fs.renameSync(temporary, file);
+      } finally {
+        try {
+          fs.unlinkSync(temporary);
+        } catch {}
+      }
+    }
+
+    function listFiles(root, directory = root) {
+      let entries;
+      try {
+        entries = fs.readdirSync(directory, { withFileTypes: true });
+      } catch (error) {
+        if (error?.code === "ENOENT") return [];
+        throw error;
+      }
+      return entries.flatMap((entry) => {
+        const absolute = path.join(directory, entry.name);
+        if (entry.isDirectory()) return listFiles(root, absolute);
+        if (!entry.isFile()) return [];
+        return [path.relative(root, absolute).split(path.sep).join("/")];
+      });
+    }
+
+    ipcMain.handle("chatgptx:runtime", async (event, request) => {
+      assertAppSender(event);
+      const method = request?.method;
+      const parameters = request?.parameters ?? {};
+      switch (method) {
+        case "authentication.read-current": {
+          try {
+            return fs.readFileSync(AUTH_FILE, "utf8");
+          } catch (error) {
+            if (error?.code === "ENOENT") return null;
+            throw error;
+          }
+        }
+        case "authentication.replace-current": {
+          const authJson = parameters.authJson;
+          if (typeof authJson !== "string") {
+            throw new TypeError("authJson must be a string");
+          }
+          const parsed = JSON.parse(authJson);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new TypeError("authJson must contain a JSON object");
+          }
+          atomicWrite(AUTH_FILE, authJson);
+          return null;
+        }
+        case "extension-storage.list": {
+          const root = extensionRoot(parameters.extensionId);
+          return listFiles(root).sort((left, right) => left.localeCompare(right));
+        }
+        case "extension-storage.read-text": {
+          const { resolved } = scopedPath(parameters.extensionId, parameters.path);
+          try {
+            return fs.readFileSync(resolved, "utf8");
+          } catch (error) {
+            if (error?.code === "ENOENT") return null;
+            throw error;
+          }
+        }
+        case "extension-storage.write-text": {
+          if (typeof parameters.contents !== "string") {
+            throw new TypeError("Storage contents must be a string");
+          }
+          const { resolved } = scopedPath(parameters.extensionId, parameters.path);
+          atomicWrite(resolved, parameters.contents);
+          return null;
+        }
+        case "extension-storage.delete": {
+          const { resolved } = scopedPath(parameters.extensionId, parameters.path);
+          try {
+            fs.unlinkSync(resolved);
+          } catch (error) {
+            if (error?.code !== "ENOENT") throw error;
+          }
+          return null;
+        }
+        default:
+          throw new Error(`Unknown ChatGPTX runtime method: ${String(method)}`);
+      }
+    });
 
     app.whenReady().then(() => {
       log("app-ready", { version });
@@ -184,6 +318,16 @@ function init() {
     const OriginalBrowserWindow = BrowserWindow;
     const PatchedBrowserWindow = class extends OriginalBrowserWindow {
       constructor(options) {
+        const webPreferences = options?.webPreferences ?? {};
+        const targetSession =
+          webPreferences.session ??
+          (webPreferences.partition
+            ? session.fromPartition(webPreferences.partition)
+            : session.defaultSession);
+        const preloads = targetSession.getPreloads();
+        if (!preloads.includes(PRELOAD_FILE)) {
+          targetSession.setPreloads([...preloads, PRELOAD_FILE]);
+        }
         super(options);
         log("window-created", {
           preload: options?.webPreferences?.preload ?? null,

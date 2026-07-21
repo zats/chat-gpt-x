@@ -9,7 +9,7 @@ The platform ships inside a small external launcher app. When the user runs it, 
 Properties that define the project:
 
 - **Non-invasive.** The ChatGPT app bundle is never modified, patched, or re-signed. Injection happens through the environment at launch (`NODE_OPTIONS=--require` into the Electron main process — verified against the installed app), so the app stays stock, keeps its signature, and auto-updates normally.
-- **Stable boundary.** Extensions compile only against `src/platform/types.d.ts`. The app's internals are minified and re-scrambled on every build; the public API is not. Extension authors never see or depend on app internals. "Stable" means stable *across app updates* — not backward-compatible: the API itself evolves by direct in-place change, one way, with no deprecation shims or legacy paths.
+- **Stable boundary.** Extensions access capabilities exposed by ChatGPT only through `src/platform/types.d.ts`. The app's internals are minified and re-scrambled on every build; the public API is not. Version-independent functionality supplied by ChatGPTX itself lives in shared TypeScript utilities under `src/platform/utilities/`, outside the ChatGPT API and its versioned bindings. Extension authors never see or depend on app internals. "Stable" means stable *across app updates* — not backward-compatible: the API itself evolves by direct in-place change, one way, with no deprecation shims or legacy paths.
 - **Native by construction.** Extensions must be indistinguishable from first-party UI — in look AND in behavior. APIs expose and reuse the app's own components (styling, keyboard navigation, focus, states, accessibility come for free); replicating an existing control is a documented last resort.
 - **Versioned bindings.** `src/platform/bindings/<app-version>/` bridges one specific ChatGPT build to the stable API. The runtime selects it by app version; its manifest pins the build's `app.asar` SHA-256. When the app updates, bindings are regenerated for the new build while the public API stays unchanged.
 - **Deterministic correctness.** The `api-test-suite` extension mechanically exercises every public API path inside the real app. A binding is "working" exactly when that suite passes — not before.
@@ -19,7 +19,8 @@ Properties that define the project:
 ```
 src/
   platform/
-    types.d.ts                  # the stable public API — the only thing extensions ever see
+    types.d.ts                  # stable API for capabilities exposed by ChatGPT
+    utilities/                  # shared version-independent TypeScript utilities for extensions
     bindings/
       <app-version>/            # per-build bridge to the API + manifest.json + DERIVATION.md
   extensions/
@@ -34,8 +35,8 @@ Extension runtime state lives outside the repo, in `~/.codex/extensions/` (enabl
 ## Invariants for any change
 
 1. Product code, tests, documentation, and defaults must work for arbitrary users and machines. Never hard-code a developer identity, account data, home directory, app installation path, or authenticated state. Use synthetic fixtures, OS discovery, configurable paths, and isolated seeded test profiles.
-2. Extensions — and the `api-test-suite` — depend only on `types.d.ts`, never on app internals, DOM structure, or minified identifiers. The suite observes behavior exclusively through the public API so it stays stable as bindings iterate.
-3. The public API changes only on explicit request and only through the process in `.agents/skills/manage-platform-api/SKILL.md`: clarify intent → design for N concurrent extensions (transformer / registration patterns) → document → **write tests first** → research and implement the binding → record the derivation.
+2. Extensions — and the `api-test-suite` — access ChatGPT only through `types.d.ts`, never through app internals, DOM structure, or minified identifiers. The suite observes ChatGPT behavior exclusively through the public API so it stays stable as bindings iterate. Shared utilities may depend only on ChatGPTX-owned, version-independent runtime services.
+3. Every extension feature request must first be decomposed into **extension-specific logic**, **reusable ChatGPT integration**, and **reusable ChatGPTX functionality**. Extension-specific behavior belongs in `src/extensions/<extension-id>/`. Required ChatGPT capabilities belong in the public API; if one is missing, evolve `src/platform/types.d.ts` through `.agents/skills/manage-platform-api/SKILL.md`: clarify intent → design for N concurrent extensions (transformer / registration patterns) → document → **write tests first** → implement the current-version binding → record the derivation. Reusable functionality that ChatGPTX itself can provide without ChatGPT internals belongs in `src/platform/utilities/` and must remain separate from `types.d.ts` and versioned bindings. Extensions consume ChatGPT capabilities only through the public API, while version-specific bindings maintain that integration across ChatGPT releases.
 4. **APIs land only as complete vertical slices.** A public API is "added" only together with its binding for the current (pinned) app version and a passing `api-test-suite` against the live app. `types.d.ts` must never sit ahead of working, validated bindings — an API without a green binding is unfinished work, not an API.
 5. Research is done on extracted copies of the app in temp directories (see the skill's `scripts/extract-app.sh`), cleaned up afterwards — never against the installed app in place, never by modifying its bundle.
 6. Durable knowledge lives in the skill's `references/`; version-specific findings live in `src/platform/bindings/<version>/DERIVATION.md`. Don't mix the two.
@@ -52,4 +53,4 @@ Rules: CDP is for development-time inspection and hot-probing only — productio
 
 ## Current state
 
-First vertical slice **landed**: the `menus.profile` API (transformers, stable built-in ids, replace-by-id, submenu model, `getItems`/`activateItem`) is implemented by `src/platform/bindings/26.715.52143/host.js`. It passes the public `api-test-suite` (17/17) and the version-specific live UI suite (16/16) against the live app with an isolated authenticated profile. `multiple-accounts` is the first real consumer. Runtime: macOS launcher + main-process bridge (injection, extension loader, result reporting).
+The current binding is `src/platform/bindings/26.715.70719/`. It implements `menus.profile` plus the native authentication lifecycle used by `multiple-accounts`, and passes the public API suite (20/20) and version-specific native UI suite (23/23). Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + main-process bridge (injection, extension loader, scoped utility services, result reporting).

@@ -481,6 +481,48 @@ test("profile-menu: validates nested item namespaces and duplicates", () => {
 });
 
 // --------------------------------------------------------------------------
+// Tests: authentication API
+// --------------------------------------------------------------------------
+
+test("authentication: current credentials expose stable inspectable identity", async () => {
+  const current = await api.authentication.getCurrent();
+  assert(current, "authenticated test profile has current credentials");
+  assert(current.userId.length > 0, "current credentials have a user id");
+  assert(current.label.length > 0, "current credentials have a display label");
+  assert(current.authJson.length > 0, "current credentials include opaque JSON");
+  const inspected = await api.authentication.inspect(current.authJson);
+  assert(inspected.userId === current.userId, "inspection returns the same user id");
+  assert(inspected.label === current.label, "inspection returns the same display label");
+});
+
+test("authentication: invalid serialized credentials are rejected", async () => {
+  let rejected = false;
+  try {
+    await api.authentication.inspect("not json");
+  } catch {
+    rejected = true;
+  }
+  assert(rejected, "invalid credentials are rejected");
+});
+
+test("authentication: native sign-in starts and credential replacement preserves the selected account", async () => {
+  const current = await api.authentication.getCurrent();
+  assert(current, "authenticated test profile has credentials to restore");
+  let changes = 0;
+  const registration = api.authentication.onDidChange(() => {
+    changes += 1;
+  });
+  await api.authentication.startSignIn();
+  await api.authentication.replaceCurrent(current.authJson);
+  const restored = await api.authentication.getCurrent();
+  assert(restored?.userId === current.userId, "replacement committed the selected account");
+  assert(changes === 1, "replacement emits one authentication change");
+  registration.dispose();
+  await api.authentication.replaceCurrent(current.authJson);
+  assert(changes === 1, "disposed authentication listener is not called");
+});
+
+// --------------------------------------------------------------------------
 // Entry points
 // --------------------------------------------------------------------------
 
