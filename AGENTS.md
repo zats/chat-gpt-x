@@ -44,7 +44,7 @@ Extension runtime state lives outside the repo, in `~/.codex/extensions/` (enabl
 
 When doing binding work, debug against the **live app over CDP**, not by guessing from the minified build:
 
-1. Launch through the launcher with a debug port and an isolated profile: `src/macOS/launcher-script-placeholder.sh --user-data-dir=/tmp/<profile> --remote-debugging-port=9222`
+1. Launch through the launcher with a debug port and an isolated profile: `src/macOS/scripts/launcher-script-placeholder.sh --user-data-dir=/tmp/<profile> --remote-debugging-port=9222`
 2. Targets are at `http://127.0.0.1:9222/json`; evaluate in the `app://` page via `Runtime.evaluate` (a ready helper lives at `tmp/cdp.mjs`: `node tmp/cdp.mjs '<expression>'`).
 3. The injected host exposes `window.__CGPTX_HOST__._debug` for live probing of the binding.
 

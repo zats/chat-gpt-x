@@ -1,0 +1,46 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ChatGPTX: Build",
+      "type": "process",
+      "command": "${workspaceFolder}/src/macOS/scripts/build.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "group": {
+        "kind": "build"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "ChatGPTX: Rebuild and Run",
+      "type": "process",
+      "command": "/usr/bin/open",
+      "args": [
+        "${workspaceFolder}/.builds/ChatGPTX.app"
+      ],
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ChatGPTX: Build"
+      ],
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "clear": true
+      }
+    }
+  ]
+}
