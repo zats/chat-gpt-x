@@ -117,7 +117,7 @@ private final class RestartPrompt {
 
         alert.alertStyle = .warning
         alert.messageText = "Restart ChatGPT?"
-        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "Restart")
         alert.addButton(withTitle: "Cancel")
         alert.buttons[1].keyEquivalent = "\u{1b}"
         updateCountdown()

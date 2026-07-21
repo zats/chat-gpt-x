@@ -13,7 +13,7 @@
         "kind": "build"
       },
       "presentation": {
-        "reveal": "always",
+        "reveal": "silent",
         "focus": false,
         "panel": "dedicated",
         "clear": true
@@ -36,7 +36,7 @@
         "isDefault": true
       },
       "presentation": {
-        "reveal": "always",
+        "reveal": "silent",
         "focus": false,
         "panel": "dedicated",
         "clear": true

@@ -3,17 +3,19 @@
   "configurations": [
     {
       "name": "ChatGPTX: Rebuild and Run",
-      "type": "lldb-dap",
+      "type": "pwa-node",
       "request": "launch",
-      "program": "/usr/bin/open",
-      "args": [
+      "runtimeExecutable": "/usr/bin/open",
+      "runtimeArgs": [
         "${workspaceFolder}/.builds/ChatGPTX.app"
       ],
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "ChatGPTX: Build",
       "noDebug": true,
-      "disableSTDIO": true,
-      "stopOnEntry": false,
+      "autoAttachChildProcesses": false,
+      "trace": false,
+      "console": "internalConsole",
+      "outputCapture": "std",
       "internalConsoleOptions": "neverOpen"
     }
   ]
