@@ -2,7 +2,7 @@
   "id": "multiple-accounts",
   "name": "Multiple Accounts",
   "version": "0.1.0",
-  "description": "Turns the profile menu's account row into an in-place expanding submenu that groups the app's account-related items (switch account, sign in) under it.",
+  "description": "Turns the profile identity row into an in-place submenu containing the active account and any authentication choices exposed by ChatGPT.",
   "main": "multiple-accounts.js",
   "capabilities": [
     "menus.profile"

@@ -70,6 +70,11 @@ Dynamic rows without a profile message id use these binding-owned stable ids:
 - rate-limit summary: codex.profileDropdown.usageSummary
 - separators: codex.profileDropdown.separator-N
 
+The avatar identity row exposes two handlers in this build: `onClick` handles
+Alt-click user-id copying, while `onSelect` performs the normal Profile
+navigation. Its public `onClick` action is therefore bound to the native
+`onSelect` callback.
+
 Recapturing on every mount keeps getItems() aligned with sign-in state, plan,
 feature flags, labels, and current handlers.
 
@@ -94,16 +99,17 @@ native trigger, which expands the app SubmenuItem.
 
 The stable extension suite exercises the public surface only:
 
-- Result: 16/16
+- Result: 17/17
 
 The version-specific live UI test verifies the rendered binding:
 
     node src/platform/bindings/26.715.52143/ui-test.mjs 9222
 
-- Result: 15/15
+- Result: 16/16
 - Verifies action order, separators, app icons, subtext, shortcuts, disabled
   state, native submenu markup, Radix keyboard navigation, user activation,
-  moved built-ins, child activation, and public activateItem() expansion.
+  moved built-ins, child activation, public activateItem() expansion, and the
+  account identity action's native Profile navigation.
 
 ### Rebinding failure signatures
 

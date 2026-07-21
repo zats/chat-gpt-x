@@ -340,6 +340,18 @@ test("profile-menu: built-in items expose stable, unique ids", () => {
   );
 });
 
+test("profile-menu: account identity exposes its native action", () => {
+  const account = byId("codex.profileDropdown.account");
+  assert(
+    account?.kind === "action",
+    "account identity row is exposed as an action",
+  );
+  assert(
+    account?.kind === "action" && typeof account.onClick === "function",
+    "account identity row exposes its native activation handler",
+  );
+});
+
 test("profile-menu: replaces a built-in item in place by id", () => {
   const victim = items().find(
     (item) => item.origin === "app" && item.kind === "action",

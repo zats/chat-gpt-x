@@ -415,11 +415,14 @@
       const id = stableIdForRow(row, props);
       if (!id || views.has(id)) continue;
       const handler =
-        typeof props.onClick === "function"
-          ? props.onClick
-          : typeof props.onSelect === "function"
-            ? props.onSelect
-            : undefined;
+        id === "codex.profileDropdown.account" &&
+        typeof props.onSelect === "function"
+          ? props.onSelect
+          : typeof props.onClick === "function"
+            ? props.onClick
+            : typeof props.onSelect === "function"
+              ? props.onSelect
+              : undefined;
       const descriptor = {
         kind: "action",
         id,

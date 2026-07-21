@@ -1,46 +1,73 @@
 /**
- * multiple-accounts — groups the profile menu's account-related built-in
- * items under the account row as an in-place expanding submenu (chevron).
+ * multiple-accounts — turns the profile menu's account identity row into an
+ * in-place expanding submenu (chevron).
  *
- * Contributes no new items: it locates built-in items by their stable ids
- * (derived from the app's own i18n message ids — see
- * src/platform/bindings/<version>/DERIVATION.md) and moves them inside the
- * account row's `items`. Identity-preserved moves keep the app's original
- * icons, labels, and onClick handlers.
- *
- * No-op when the account row or no account-related items are present (the
- * set of auth items varies with sign-in state).
+ * The active identity is always the first child. Any authentication choices
+ * ChatGPT currently exposes are moved below it. App labels, icons, and
+ * handlers are preserved.
  */
 
-import type { PlatformApi, ProfileMenuItem } from "../../platform/types";
+import type {
+  Disposable,
+  PlatformApi,
+  ProfileMenuActionItem,
+  ProfileMenuItem,
+} from "../../platform/types";
 
 /** Stable id of the profile menu's account (identity) row. */
 const ACCOUNT_ROW_ID = "codex.profileDropdown.account";
 
-/** Stable ids of built-in account-related items to group under the row. */
-const ACCOUNT_ITEM_IDS = new Set([
+const CURRENT_ACCOUNT_ITEM_ID = "multiple-accounts.current";
+
+/** Stable ids of built-in authentication choices to group under the row. */
+const ACCOUNT_ACTION_IDS = new Set([
   "codex.profileDropdown.switchToOpenAIAccount",
   "codex.profileDropdown.switchToCopilotAccount",
   "codex.profileDropdown.signInWithOpenAI",
 ]);
 
-export function activate(api: PlatformApi): void {
-  api.menus.profile.transformItems((items) => {
-    const row = items.find(
-      (item) => item.id === ACCOUNT_ROW_ID && item.kind === "action",
+export function transformProfileMenuItems(
+  items: readonly ProfileMenuItem[],
+): readonly ProfileMenuItem[] {
+  const row = items.find(
+    (item) => item.id === ACCOUNT_ROW_ID && item.kind === "action",
+  );
+  if (!row || row.kind !== "action") return items;
+
+  const accountActions = items.filter((item) =>
+    ACCOUNT_ACTION_IDS.has(item.id),
+  );
+  const {
+    id: _id,
+    items: _items,
+    origin: _origin,
+    rightIcon: _rightIcon,
+    ...activeAccountFields
+  } = row;
+  const activeAccount: ProfileMenuActionItem = {
+    ...activeAccountFields,
+    id: CURRENT_ACCOUNT_ITEM_ID,
+  };
+
+  return items
+    .filter((item) => !ACCOUNT_ACTION_IDS.has(item.id))
+    .map((item): ProfileMenuItem =>
+      item.id === ACCOUNT_ROW_ID
+        ? {
+            ...row,
+            items: [activeAccount, ...accountActions, ...(row.items ?? [])],
+          }
+        : item,
     );
-    const accounts = items.filter((item) => ACCOUNT_ITEM_IDS.has(item.id));
-    if (!row || row.kind !== "action" || accounts.length === 0) {
-      return items;
-    }
-    return items
-      .filter((item) => !ACCOUNT_ITEM_IDS.has(item.id))
-      .map((item): ProfileMenuItem =>
-        item.id === ACCOUNT_ROW_ID ? { ...row, items: accounts } : item,
-      );
-  });
+}
+
+let registration: Disposable | undefined;
+
+export function activate(api: PlatformApi): void {
+  registration = api.menus.profile.transformItems(transformProfileMenuItems);
 }
 
 export function deactivate(): void {
-  // no-op
+  registration?.dispose();
+  registration = undefined;
 }

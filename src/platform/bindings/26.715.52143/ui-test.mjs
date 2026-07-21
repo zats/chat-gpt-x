@@ -251,6 +251,34 @@ async function validateUi() {
     'public activateItem opens the native submenu',
   );
 
+  document.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+  );
+  await sleep(100);
+  const backToApp = Array.from(
+    document.querySelectorAll('button, a, [role="button"]'),
+  ).find((element) => element.textContent?.trim() === 'Back to app');
+  backToApp?.click();
+  await sleep(300);
+  const account = globalThis.__CGPTX_HOST__
+    ?._debug.getCache()
+    .find((item) => item.id === 'codex.profileDropdown.account');
+  const profileWasCurrent = Array.from(
+    document.querySelectorAll('[aria-current="page"]'),
+  ).some((element) => element.textContent?.trim() === 'Profile');
+  account?.onClick?.();
+  await sleep(500);
+  const profileIsCurrent = Array.from(
+    document.querySelectorAll('[aria-current="page"]'),
+  ).some((element) => element.textContent?.trim() === 'Profile');
+  check(
+    typeof account?.onClick === 'function' &&
+      !profileWasCurrent &&
+      profileIsCurrent,
+    'account identity native action opens Profile settings',
+    { profileWasCurrent, profileIsCurrent },
+  );
+
   return checks;
 }
 

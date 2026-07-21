@@ -51,4 +51,4 @@ Rules: CDP is for development-time inspection and hot-probing only — productio
 
 ## Current state
 
-First vertical slice **landed**: the `menus.profile` API (transformers, stable built-in ids, replace-by-id, submenu model, `getItems`/`activateItem`) is implemented by `src/platform/bindings/26.715.52143/host.js`. It passes the public `api-test-suite` (16/16) and the version-specific live UI suite (15/15) against the live app with an isolated authenticated profile. `multiple-accounts` is the first real consumer. Runtime: macOS launcher + main-process bridge (injection, extension loader, result reporting).
+First vertical slice **landed**: the `menus.profile` API (transformers, stable built-in ids, replace-by-id, submenu model, `getItems`/`activateItem`) is implemented by `src/platform/bindings/26.715.52143/host.js`. It passes the public `api-test-suite` (17/17) and the version-specific live UI suite (16/16) against the live app with an isolated authenticated profile. `multiple-accounts` is the first real consumer. Runtime: macOS launcher + main-process bridge (injection, extension loader, result reporting).
