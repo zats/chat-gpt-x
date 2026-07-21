@@ -1,0 +1,33 @@
+name: ChatGPTX
+
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+
+targets:
+  ChatGPTX:
+    type: application
+    platform: macOS
+    sources:
+      - path: ChatGPTX
+      - path: ../platform/bridge
+        type: folder
+        buildPhase: resources
+      - path: ../platform/bindings
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zats.ChatGPTX
+        PRODUCT_NAME: ChatGPTX
+        GENERATE_INFOPLIST_FILE: true
+        INFOPLIST_KEY_CFBundleDisplayName: ChatGPTX
+        INFOPLIST_KEY_LSUIElement: true
+        ENABLE_HARDENED_RUNTIME: true
+        CODE_SIGN_STYLE: Automatic
