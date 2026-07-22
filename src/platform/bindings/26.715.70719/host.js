@@ -25,7 +25,11 @@
     "./assets/app-initial~app-main~plugin-detail-page~settings-page~projects-index-page~appgen-library-pa~nsqr45u8-w2kLKHJV.js";
   const REACT_DOM_MODULE =
     "./assets/app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~gsbyx6su-BgGJHe-c.js";
+  const REACT_DOM_CORE_MODULE =
+    "./assets/app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~elr7dp2m-Dzby7gOc.js";
   const THREAD_MENU_MODULE = "./assets/thread-overflow-menu-C_zMj6Vd.js";
+  const THREAD_ROW_MODULE =
+    "./assets/app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~chatgpt-~j34jmud9-BtWAey-a.js";
   const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-CTvO8J1r.js";
   const AUTH_CONTEXT_MODULE =
     "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~k87y25tw-DjPeV3vC.js";
@@ -110,6 +114,10 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     var(--header-foreground-color) 70%,
     transparent
   ) !important;
+}
+[data-cgptx-thread-list-owner]
+  [data-thread-title-trigger]:has(> [data-cgptx-thread-list-leading-views]) {
+  position: relative;
 }
 html.electron-light [data-cgptx-thread-menu-color-icon] {
   background-color: var(--cgptx-thread-menu-color-light);
@@ -211,6 +219,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
   const transformers = [];
   const threadTransformers = [];
+  const threadListRegistrations = [];
   const currentThreadListeners = [];
   const authenticationListeners = [];
   const headerPropertyRegistrations = [];
@@ -797,6 +806,40 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       }
     }
     return items;
+  }
+
+  function normalizeThreadListItem(item) {
+    if (item === undefined) return undefined;
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new TypeError("thread-list provider must return an item or undefined");
+    }
+    if (typeof item.view !== "function") {
+      throw new TypeError("thread-list item view must be a function");
+    }
+    return Object.freeze({ view: item.view });
+  }
+
+  function computeThreadListItems(context) {
+    const items = [];
+    for (const registration of threadListRegistrations) {
+      let cached = registration.cache.get(context.threadId);
+      if (!cached || !sameThreadContext(cached.context, context)) {
+        let item;
+        try {
+          item = normalizeThreadListItem(registration.provider(context));
+        } catch (error) {
+          warn(
+            `thread-list provider of ${registration.extId} threw; skipped`,
+            error,
+          );
+          item = undefined;
+        }
+        cached = { context, item };
+        registration.cache.set(context.threadId, cached);
+      }
+      if (cached.item) items.push(cached.item);
+    }
+    return Object.freeze(items);
   }
 
   function sameThreadDescriptor(left, right) {
@@ -2072,6 +2115,118 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       openNativeProfile = () => navigate("/settings/profile");
     }
 
+    function ThreadListItemViewHost({ view }) {
+      const ref = React.useRef(null);
+      React.useLayoutEffect(() => {
+        let element;
+        try {
+          element = view();
+        } catch (error) {
+          warn("thread-list item view threw; skipped", error);
+          return undefined;
+        }
+        if (!(element instanceof HTMLElement)) {
+          warn("thread-list item view did not return an HTMLElement; skipped");
+          return undefined;
+        }
+        const container = ref.current;
+        container.replaceChildren(element);
+        return () => container.replaceChildren();
+      }, [view]);
+      return native.jsx("span", {
+        ref,
+        className: "contents",
+        "data-cgptx-thread-list-item-view": "",
+      });
+    }
+
+    function ThreadListLeadingViews({ items }) {
+      const children = items.map((item, index) =>
+        native.jsx(
+          ThreadListItemViewHost,
+          { view: item.view },
+          `cgptx-thread-list-item-${index}`,
+        ),
+      );
+      return native.jsx("span", {
+        style: {
+          position: "absolute",
+          right: "calc(100% + 3px)",
+          top: "50%",
+          transform: "translateY(-50%)",
+          flexDirection: "row-reverse",
+          pointerEvents: "none",
+          zIndex: 1,
+        },
+        className: "flex h-4 items-center gap-0.5 overflow-visible",
+        "data-cgptx-thread-list-leading-views": "",
+        children,
+      });
+    }
+
+    let threadListRowOwnerSequence = 0;
+
+    function ThreadListRowBoundary({ child }) {
+      React.useSyncExternalStore(
+        subscribe,
+        () => renderVersion,
+        () => renderVersion,
+      );
+      const ownerRef = React.useRef();
+      if (ownerRef.current == null) {
+        threadListRowOwnerSequence += 1;
+        ownerRef.current = `cgptx-thread-list-row-${threadListRowOwnerSequence}`;
+      }
+      const owner = ownerRef.current;
+      const tree = child.type({
+        ...child.props,
+        dataAttributes: {
+          ...child.props.dataAttributes,
+          "data-cgptx-thread-list-owner": owner,
+        },
+      });
+      const [target, setTarget] = React.useState(null);
+      React.useLayoutEffect(() => {
+        const row = document.querySelector(
+          `[data-cgptx-thread-list-owner="${CSS.escape(owner)}"]`,
+        );
+        const titleTrigger = row?.querySelector("[data-thread-title-trigger]");
+        setTarget((current) =>
+          current === titleTrigger ? current : titleTrigger,
+        );
+      }, [owner, tree]);
+      const summary = child.props.threadSummary;
+      const renderedTitle = tree?.props?.title;
+      const title =
+        typeof summary?.title === "string"
+          ? summary.title
+          : typeof renderedTitle === "string"
+            ? renderedTitle
+            : "";
+      const workingDirectory =
+        typeof child.props.displayCwd === "string"
+          ? child.props.displayCwd
+          : typeof summary?.cwd === "string"
+            ? summary.cwd
+            : undefined;
+      const context = Object.freeze({
+        threadId: child.props.conversationId,
+        title,
+        ...(workingDirectory ? { workingDirectory } : {}),
+      });
+      const items = computeThreadListItems(context);
+      const overlay =
+        target && items.length > 0
+          ? native.createPortal(
+              native.jsx(ThreadListLeadingViews, { items }),
+              target,
+            )
+          : null;
+      return native.jsx(React.Fragment, {
+        children: [tree, overlay],
+      });
+    }
+
     function ThreadMenuBoundary({ child }) {
       React.useSyncExternalStore(
         subscribe,
@@ -2129,6 +2284,17 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     function wrap(original) {
       return function cgptxJsx(type, props, key) {
         if (
+          type === native.ThreadListRow &&
+          typeof props?.conversationId === "string" &&
+          props.conversationId.length > 0
+        ) {
+          return originalJsx(
+            ThreadListRowBoundary,
+            { child: original(type, props, key) },
+            key,
+          );
+        }
+        if (
           type === native.ThreadMenu &&
           typeof props?.conversationId === "string" &&
           props.conversationId.length > 0
@@ -2178,7 +2344,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       paletteIconModule,
       colorPickerModule,
       reactDomModule,
+      reactDomCoreModule,
       threadMenuModule,
+      threadRowModule,
       authModule,
       authContextModule,
       browserModule,
@@ -2192,7 +2360,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       import(PALETTE_ICON_MODULE),
       import(COLOR_PICKER_MODULE),
       import(REACT_DOM_MODULE),
+      import(REACT_DOM_CORE_MODULE),
       import(THREAD_MENU_MODULE),
+      import(THREAD_ROW_MODULE),
       import(AUTH_MODULE),
       import(AUTH_CONTEXT_MODULE),
       import(BROWSER_MODULE),
@@ -2207,6 +2377,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     paletteIconModule.n();
     colorPickerModule.i();
     threadMenuModule.n();
+    threadRowModule.o();
     const jsxRuntime = coreModule.zt();
     const PlusIcon = ({ className = "", ...props }) =>
       jsxRuntime.jsx(plusIconModule.n, {
@@ -2217,6 +2388,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     native = {
       React: coreModule.dn(),
       ReactDOM: reactDomModule.t(),
+      createPortal: reactDomCoreModule.b().createPortal,
       jsxRuntime,
       jsx: jsxRuntime.jsx,
       Item: menuModule.i,
@@ -2225,6 +2397,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       FlyoutSubmenuItem: menuModule.r.FlyoutSubmenuItem,
       MenuRoot: menuModule.t,
       ThreadMenu: threadMenuModule.t,
+      ThreadListRow: threadRowModule.a,
       ColorPicker: colorPickerModule.r,
       startChatGptSignIn: authModule.o,
       decorateAuthUrl: authModule.t,
@@ -2457,6 +2630,8 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
   function makeThreadsApi(extId) {
     return Object.freeze({
+      list: makeThreadListApi(extId),
+
       getCurrent() {
         return currentThread;
       },
@@ -2479,6 +2654,45 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
             disposed = true;
             const index = currentThreadListeners.indexOf(record);
             if (index >= 0) currentThreadListeners.splice(index, 1);
+          },
+        });
+      },
+    });
+  }
+
+  function makeThreadListApi(extId) {
+    return Object.freeze({
+      registerItem(provider) {
+        if (typeof provider !== "function") {
+          throw new TypeError("thread-list registerItem requires a function");
+        }
+        const registration = {
+          extId,
+          provider,
+          cache: new Map(),
+        };
+        threadListRegistrations.push(registration);
+        emitChange();
+        let disposed = false;
+        return Object.freeze({
+          invalidate(threadId) {
+            if (disposed) return;
+            if (threadId === undefined) registration.cache.clear();
+            else {
+              if (typeof threadId !== "string" || threadId.length === 0) {
+                throw new TypeError("thread-list invalidate requires a thread id");
+              }
+              registration.cache.delete(threadId);
+            }
+            emitChange();
+          },
+          dispose() {
+            if (disposed) return;
+            disposed = true;
+            const index = threadListRegistrations.indexOf(registration);
+            if (index >= 0) threadListRegistrations.splice(index, 1);
+            registration.cache.clear();
+            emitChange();
           },
         });
       },

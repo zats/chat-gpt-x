@@ -3,7 +3,7 @@
   "name": "Multiple Accounts",
   "version": "0.1.0",
   "description": "Adds native profile, add-account, and saved-account actions beneath the profile identity row.",
-  "main": "multiple-accounts.js",
+  "main": "contents/main.js",
   "capabilities": [
     "menus.profile",
     "authentication"

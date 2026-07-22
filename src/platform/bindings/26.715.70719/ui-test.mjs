@@ -219,7 +219,7 @@ async function validateUi(
       document.querySelectorAll('[data-app-action-sidebar-thread-row]'),
     ).find((row) => row.getBoundingClientRect().height > 0);
     if (!persistedThreadRow) throw new Error('Persisted thread row missing');
-    activateButton(persistedThreadRow);
+    persistedThreadRow.click();
     await waitUntil(() => threadsApi.getCurrent() !== undefined);
     originalThread = threadsApi.getCurrent();
   }
@@ -234,7 +234,7 @@ async function validateUi(
       button.getBoundingClientRect().width > 0,
   );
   if (!newChat) throw new Error('New-chat action missing');
-  activateButton(newChat);
+  newChat.click();
   await waitUntil(() => threadsApi.getCurrent() === undefined);
   const clearedThread = threadsApi.getCurrent();
   const originalThreadRow = Array.from(
@@ -245,7 +245,7 @@ async function validateUi(
       ?.endsWith(originalThread.threadId),
   );
   if (!originalThreadRow) throw new Error('Original thread row missing');
-  activateButton(originalThreadRow);
+  originalThreadRow.click();
   await waitUntil(
     () => threadsApi.getCurrent()?.threadId === originalThread.threadId,
   );
@@ -258,6 +258,77 @@ async function validateUi(
       currentThreadDeliveries.at(-1) === originalThread.threadId,
     'current-thread subscription follows native navigation and restoration',
     { currentThreadDeliveries },
+  );
+  await waitUntil(() =>
+    Boolean(
+      originalThreadRow.querySelector(
+        '[data-api-test-suite-thread-list-view]',
+      ),
+    ),
+  );
+  const threadListView = originalThreadRow.querySelector(
+    '[data-api-test-suite-thread-list-view]',
+  );
+  const threadListViewHost = threadListView?.closest(
+    '[data-cgptx-thread-list-leading-views]',
+  );
+  const threadTitle = originalThreadRow.querySelector('[data-thread-title]');
+  const archiveButton = Array.from(originalThreadRow.querySelectorAll('button')).find(
+    (button) => button.getAttribute('aria-label') === 'Archive chat',
+  );
+  const rowRect = originalThreadRow.getBoundingClientRect();
+  const viewRect = threadListView?.getBoundingClientRect();
+  const hostRect = threadListViewHost?.getBoundingClientRect();
+  const titleRect = threadTitle?.getBoundingClientRect();
+  const archiveRect = archiveButton?.getBoundingClientRect();
+  const leadingInset = hostRect ? hostRect.left - rowRect.left : undefined;
+  const trailingInset = archiveRect ? rowRect.right - archiveRect.right : undefined;
+  const titleGap = hostRect && titleRect ? titleRect.left - hostRect.right : undefined;
+  const mountedViewRects = Array.from(
+    threadListViewHost?.querySelectorAll(
+      '[data-cgptx-thread-list-item-view]',
+    ) ?? [],
+  )
+    .map((view) => view.firstElementChild?.getBoundingClientRect())
+    .filter(Boolean);
+  const titleLeftWithView = titleRect?.left;
+  if (threadListViewHost) threadListViewHost.style.display = 'none';
+  const titleLeftWithoutView = threadTitle?.getBoundingClientRect().left;
+  if (threadListViewHost) threadListViewHost.style.removeProperty('display');
+  check(
+    Boolean(
+      threadListView &&
+        threadListViewHost &&
+        viewRect?.width === 3 &&
+        viewRect?.height === 16 &&
+        hostRect &&
+        titleRect &&
+        archiveRect &&
+        Math.abs(titleGap - 3) <= 0.5 &&
+        mountedViewRects.every(
+          (rect, index) =>
+            index === 0 || rect.right < mountedViewRects[index - 1].left,
+        ) &&
+        Math.abs(titleLeftWithView - titleLeftWithoutView) <= 0.5 &&
+        Number.parseFloat(getComputedStyle(threadListView).borderRadius) > 0,
+    ),
+    'thread-list extension view hangs at the leading edge without moving the title',
+    {
+      rowRect: rowRect.toJSON(),
+      viewRect: viewRect?.toJSON(),
+      hostRect: hostRect?.toJSON(),
+      titleRect: titleRect?.toJSON(),
+      archiveRect: archiveRect?.toJSON(),
+      leadingInset,
+      trailingInset,
+      titleGap,
+      mountedViewRects: mountedViewRects.map((rect) => rect.toJSON()),
+      titleLeftWithView,
+      titleLeftWithoutView,
+      rowActive: originalThreadRow.getAttribute(
+        'data-app-action-sidebar-thread-active',
+      ),
+    },
   );
   currentThreadRegistration.dispose();
   markProgress('current-thread');
@@ -843,7 +914,7 @@ async function validateUi(
     { name: 'Pink', light: 'rgb(240, 119, 175)', dark: 'rgb(240, 119, 175)' },
     { name: 'Orange', light: 'rgb(238, 124, 55)', dark: 'rgb(238, 124, 55)' },
     { name: 'Purple', light: 'rgb(166, 125, 226)', dark: 'rgb(166, 125, 226)' },
-    { name: 'Black', light: 'rgb(0, 0, 0)', dark: 'rgb(255, 255, 255)' },
+    { name: 'Black', light: 'rgb(0, 0, 0)', dark: 'rgb(0, 0, 0)' },
   ];
   const colorNames = [...expectedColors.map(({ name }) => name), 'Custom'];
   let colorFlyout = Array.from(document.querySelectorAll('[role="menu"]')).find(
@@ -951,7 +1022,14 @@ async function validateUi(
     'Color flyout participates in native keyboard navigation',
   );
   activateButton(colorRows[1]);
-  await sleep(100);
+  await waitUntil(() =>
+    Boolean(
+      originalThreadRow.querySelector('[data-thread-colors-indicator]'),
+    ),
+  );
+  const blueThreadIndicator = originalThreadRow.querySelector(
+    '[data-thread-colors-indicator]',
+  );
   check(
     JSON.stringify(headerAppearance.getProperties()) ===
       JSON.stringify({
@@ -961,6 +1039,14 @@ async function validateUi(
       getComputedStyle(threadHeaderRegion).backgroundColor ===
         'rgb(58, 131, 247)',
     'selecting Blue applies its CSS to the native header',
+  );
+  check(
+    blueThreadIndicator?.closest(
+      '[data-cgptx-thread-list-leading-views]',
+    ) === threadListViewHost &&
+      getComputedStyle(blueThreadIndicator).backgroundColor ===
+        'rgb(58, 131, 247)',
+    'selecting Blue adds the thread indicator at the native row edge',
   );
 
   threadMenu = await openThreadMenu();
@@ -974,12 +1060,20 @@ async function validateUi(
         JSON.stringify(colorNames),
   );
   activateButton(menuRows(colorFlyout)[0]);
-  await sleep(100);
+  await waitUntil(
+    () =>
+      originalThreadRow.querySelector('[data-thread-colors-indicator]') ===
+      null,
+  );
   check(
     Object.keys(headerAppearance.getProperties()).length === 0 &&
       root.style.getPropertyValue('--header-background-color') === '' &&
       root.style.getPropertyValue('--header-foreground-color') === '',
     'selecting Default restores ChatGPT native header CSS',
+  );
+  check(
+    originalThreadRow.querySelector('[data-thread-colors-indicator]') === null,
+    'selecting Default removes the thread indicator',
   );
   markProgress('thread-menu');
 

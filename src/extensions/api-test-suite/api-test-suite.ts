@@ -834,6 +834,95 @@ test("threads: exposes the current thread and immediately subscribes", () => {
   subscription.dispose();
 });
 
+test("thread-list: registers leading views in registration order", async () => {
+  assert(observedThreadContext, "thread context is available");
+  const threadId = observedThreadContext.threadId;
+  const calls: string[] = [];
+  let mountedViews = 0;
+  const first = api.threads.list.registerItem((context) => {
+    calls.push(`first:${context.threadId}`);
+    return {
+      view: () => {
+        mountedViews += 1;
+        return document.createElement("span");
+      },
+    };
+  });
+  const second = api.threads.list.registerItem((context) => {
+    calls.push(`second:${context.threadId}`);
+    return { view: () => document.createElement("span") };
+  });
+  activeTestDisposables?.push(first, second);
+  assert(
+    await waitFor(
+      () =>
+        calls.includes(`first:${threadId}`) &&
+        calls.includes(`second:${threadId}`) &&
+        mountedViews > 0,
+      5000,
+    ),
+    "providers and a view factory run for the native thread row",
+  );
+  assert(
+    calls.indexOf(`first:${threadId}`) < calls.indexOf(`second:${threadId}`),
+    "registration order is retained",
+  );
+});
+
+test("thread-list: invalidation reevaluates cached providers", async () => {
+  assert(observedThreadContext, "thread context is available");
+  const threadId = observedThreadContext.threadId;
+  const calls = new Map<string, number>();
+  const registration = api.threads.list.registerItem((thread) => {
+    calls.set(thread.threadId, (calls.get(thread.threadId) ?? 0) + 1);
+    return { view: () => document.createElement("span") };
+  });
+  activeTestDisposables?.push(registration);
+  assert(
+    await waitFor(() => (calls.get(threadId) ?? 0) > 0, 5000),
+    "provider runs for the native thread row",
+  );
+  const cachedCalls = calls.get(threadId) ?? 0;
+  registration.invalidate(threadId);
+  assert(
+    await waitFor(() => (calls.get(threadId) ?? 0) > cachedCalls, 5000),
+    "thread invalidation reevaluates the provider",
+  );
+  const afterThreadInvalidation = calls.get(threadId) ?? 0;
+  registration.invalidate();
+  assert(
+    await waitFor(
+      () => (calls.get(threadId) ?? 0) > afterThreadInvalidation,
+      5000,
+    ),
+    "global invalidation reevaluates the provider",
+  );
+});
+
+test("thread-list: throwing providers are isolated and disposal is final", async () => {
+  assert(observedThreadContext, "thread context is available");
+  const threadId = observedThreadContext.threadId;
+  let goodCalls = 0;
+  const throwing = api.threads.list.registerItem(() => {
+    throw new Error("intentional thread-list provider failure");
+  });
+  const good = api.threads.list.registerItem((thread) => {
+    if (thread.threadId === threadId) goodCalls += 1;
+    return { view: () => document.createElement("span") };
+  });
+  activeTestDisposables?.push(throwing, good);
+  assert(
+    await waitFor(() => goodCalls > 0, 5000),
+    "later provider still runs",
+  );
+  good.dispose();
+  good.dispose();
+  const callsAfterDispose = goodCalls;
+  good.invalidate(threadId);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert(goodCalls === callsAfterDispose, "disposed registration stays inactive");
+});
+
 // --------------------------------------------------------------------------
 // Tests: appearance API
 // --------------------------------------------------------------------------
@@ -1086,7 +1175,7 @@ test("authentication: native sign-in starts and credential replacement preserves
 // --------------------------------------------------------------------------
 
 let api: PlatformApi;
-let visualFixture: Disposable | undefined;
+let visualFixtures: Disposable[] = [];
 
 export function activate(platformApi: PlatformApi): void {
   api = platformApi;
@@ -1094,8 +1183,8 @@ export function activate(platformApi: PlatformApi): void {
 }
 
 export function deactivate(): void {
-  visualFixture?.dispose();
-  visualFixture = undefined;
+  for (const fixture of visualFixtures.reverse()) fixture.dispose();
+  visualFixtures = [];
 }
 
 function installVisualFixture(): void {
@@ -1104,7 +1193,7 @@ function installVisualFixture(): void {
   );
   assert(builtInToMove, "visual fixture found a built-in item to move");
 
-  visualFixture = register((current) => [
+  visualFixtures.push(register((current) => [
     ...current.filter((item) => item.id !== builtInToMove.id),
     { kind: "separator", id: VISUAL_SEPARATOR_ID },
     {
@@ -1145,7 +1234,22 @@ function installVisualFixture(): void {
         builtInToMove,
       ],
     },
-  ]);
+  ]));
+  visualFixtures.push(
+    api.threads.list.registerItem((thread) => {
+      if (thread.threadId !== observedThreadContext?.threadId) return undefined;
+      return {
+        view: () => {
+          const bar = document.createElement("span");
+          bar.setAttribute("aria-hidden", "true");
+          bar.setAttribute("data-api-test-suite-thread-list-view", "");
+          bar.style.cssText =
+            "display:block;width:3px;height:16px;flex:none;border-radius:9999px;background:#E11D48";
+          return bar;
+        },
+      };
+    }),
+  );
   (globalThis as Record<string, unknown>).__CGPTX_VISUAL_MOVED_ID__ =
     builtInToMove.id;
   (

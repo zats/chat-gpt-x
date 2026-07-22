@@ -7,6 +7,7 @@ import type {
   HeaderThemeColor,
   PlatformApi,
   ThreadContext,
+  ThreadListItemRegistration,
   ThreadMenuActionItem,
   ThreadMenuItem,
 } from "../../platform/types";
@@ -233,7 +234,7 @@ export const THREAD_COLORS: readonly ThreadColorPreset[] = [
   colorPreset("pink", "Pink", "#F077AF"),
   colorPreset("orange", "Orange", "#EE7C37"),
   colorPreset("purple", "Purple", "#A67DE2"),
-  colorPreset("black", "Black", "#000000", "#FFFFFF"),
+  colorPreset("black", "Black", "#000000"),
 ];
 
 const COLORS_BY_ID = new Map(THREAD_COLORS.map((color) => [color.id, color]));
@@ -289,6 +290,7 @@ export function transformThreadMenuItems(
 let menuRegistration: Disposable | undefined;
 let appearanceRegistration: HeaderCssPropertiesRegistration | undefined;
 let currentThreadRegistration: Disposable | undefined;
+let threadListRegistration: ThreadListItemRegistration | undefined;
 let activeState: ThreadColorState | undefined;
 let activationGeneration = 0;
 
@@ -387,6 +389,30 @@ function propertiesForSelection(
     : propertiesForBackground(selection.colors);
 }
 
+function backgroundForSelection(
+  selection: ThreadColorSelection | undefined,
+): HeaderThemeColor | undefined {
+  if (!selection) return undefined;
+  return selection.kind === "preset"
+    ? COLORS_BY_ID.get(selection.preset)?.properties[
+        "--header-background-color"
+      ]
+    : selection.colors;
+}
+
+function createThreadColorView(colors: HeaderThemeColor): HTMLElement {
+  const bar = document.createElement("span");
+  bar.setAttribute("aria-hidden", "true");
+  bar.setAttribute("data-thread-colors-indicator", "");
+  bar.style.display = "block";
+  bar.style.width = "3px";
+  bar.style.height = "14px";
+  bar.style.flex = "none";
+  bar.style.borderRadius = "9999px";
+  bar.style.backgroundColor = `light-dark(${colors.light}, ${colors.dark})`;
+  return bar;
+}
+
 function applyCurrentThreadColor(state: ThreadColorState): void {
   if (!state.loaded) return;
   const selection = state.currentThread
@@ -404,6 +430,7 @@ function selectThreadColor(
   if (color.id === "default") state.selections.delete(threadId);
   else state.selections.set(threadId, { kind: "preset", preset: color.id });
   if (state.currentThread?.threadId === threadId) applyCurrentThreadColor(state);
+  threadListRegistration?.invalidate(threadId);
   persistSelections(state);
 }
 
@@ -488,6 +515,7 @@ async function selectCustomThreadColor(
     colors: customThemeColors(confirmed, scheme),
   });
   applyCurrentThreadColor(state);
+  threadListRegistration?.invalidate(threadId);
   persistSelections(state);
 }
 
@@ -497,6 +525,14 @@ async function initialize(api: PlatformApi, state: ThreadColorState): Promise<vo
   state.selections = selections;
   state.loaded = true;
   applyCurrentThreadColor(state);
+  threadListRegistration = api.threads.list.registerItem((thread) => {
+    const background = backgroundForSelection(
+      state.selections.get(thread.threadId),
+    );
+    return background
+      ? { view: () => createThreadColorView(background) }
+      : undefined;
+  });
   menuRegistration = api.menus.thread.transformItems((items, context) => {
     const selection = state.selections.get(context.threadId);
     return transformThreadMenuItems(
@@ -548,6 +584,8 @@ export function deactivate(): void {
   activeState = undefined;
   menuRegistration?.dispose();
   menuRegistration = undefined;
+  threadListRegistration?.dispose();
+  threadListRegistration = undefined;
   currentThreadRegistration?.dispose();
   currentThreadRegistration = undefined;
   appearanceRegistration?.dispose();

@@ -123,11 +123,92 @@ export type CurrentThreadListener = (thread: ThreadContext | undefined) => void;
  * @group Threads
  */
 export interface ThreadsApi {
+  /** Contributions rendered at the leading edge of persisted thread rows. */
+  readonly list: ThreadListApi;
+
   /** Return the current persisted thread, or `undefined` outside a thread. */
   getCurrent(): ThreadContext | undefined;
 
   /** Subscribe to the current snapshot and subsequent thread changes. */
   subscribe(listener: CurrentThreadListener): Disposable;
+}
+
+/**
+ * Adds compact extension-owned views to the leading edge of persisted thread
+ * rows in ChatGPT's sidebar.
+ *
+ * ChatGPT retains ownership of the row, including selection, status, hover
+ * actions, keyboard behavior, and accessibility. The platform mounts every
+ * contributed view three CSS pixels before the native title without changing
+ * the title or action layout. The first registration is closest to the title;
+ * later registrations extend outward to the left. Providers are evaluated
+ * lazily and cached until their thread context changes or the registration is
+ * invalidated.
+ *
+ * @group Threads
+ */
+export interface ThreadListApi {
+  /**
+   * Register one optional leading item for each persisted thread row.
+   *
+   * `provider` runs synchronously with the row's current thread snapshot.
+   * Return `undefined` when the extension has nothing to show. A throwing
+   * provider is isolated and contributes no item for that evaluation.
+   *
+   * Multi-consumer: registrations are evaluated and rendered in extension
+   * load and registration order. Each registration owns only its item and
+   * cannot inspect or replace another extension's contribution.
+   *
+   * @example
+   * const registration = api.threads.list.registerItem((thread) => {
+   *   const color = colors.get(thread.threadId);
+   *   if (!color) return undefined;
+   *   return {
+   *     view: () => {
+   *       const bar = document.createElement("span");
+   *       bar.style.cssText = `display:block;width:3px;height:16px;border-radius:2px;background:${color}`;
+   *       bar.setAttribute("aria-hidden", "true");
+   *       return bar;
+   *     },
+   *   };
+   * });
+   * registration.invalidate(threadId);
+   */
+  registerItem(provider: ThreadListItemProvider): ThreadListItemRegistration;
+}
+
+/**
+ * Produces an extension's leading item for one persisted thread.
+ *
+ * @group Threads
+ */
+export type ThreadListItemProvider = (
+  thread: ThreadContext,
+) => ThreadListItem | undefined;
+
+/**
+ * One extension-owned view mounted at ChatGPT's native thread-row leading
+ * edge. The factory must return a fresh, non-interactive HTML element for each
+ * mount because the same thread can be rendered in more than one list.
+ *
+ * @group Threads
+ */
+export interface ThreadListItem {
+  readonly view: () => HTMLElement;
+}
+
+/**
+ * Controls one thread-list item provider.
+ *
+ * @group Threads
+ */
+export interface ThreadListItemRegistration extends Disposable {
+  /**
+   * Clear the provider's cached result and update the affected native rows.
+   * Pass a thread id to update one row; omit it to update every observed row.
+   * Calling this after disposal has no effect.
+   */
+  invalidate(threadId?: string): void;
 }
 
 // ---------------------------------------------------------------------------

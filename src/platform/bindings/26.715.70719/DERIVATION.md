@@ -42,11 +42,19 @@ The native Palette icon is export `t` of `palette-lzFbWMQk-Cg3hGH0S.js`, initial
 
 The app's own project-appearance picker provides the color-icon precedent in `app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~hox8u96i-BXuN_B5E.js`. Its `codex.projectAppearance.color.option.aria_label` choices render nested native `rounded-full` swatches. Extension color icons reuse the Item icon wrapper and that circular presentation. Their CSS custom properties select the declared light or dark color from the app's `electron-light` / `electron-dark` root classes without remounting the menu.
 
-The `thread-colors` extension inserts a Palette flyout immediately before the first native separator. Its parent uses the extension-provided 16-point Lucide Palette SVG with a 1.75-point stroke. Its choices supply the exact requested colors through the public icon descriptor, including a black icon that becomes white in dark appearance. Programmatic flyout activation targets the mounted native row or opens the owning thread menu first, then delegates to the native flyout trigger.
+The `thread-colors` extension inserts a Palette flyout immediately before the first native separator. Its parent uses the extension-provided 16-point Lucide Palette SVG with a 1.75-point stroke. Its choices supply the exact requested colors through the public icon descriptor. Programmatic flyout activation targets the mounted native row or opens the owning thread menu first, then delegates to the native flyout trigger.
 
 Thread transformers compose independently for every observed thread. Recursive normalization enforces extension namespaces and unique ids, supports one native flyout level, inherits omitted built-in fields and handlers, preserves moved built-ins, and isolates throwing transforms and actions.
 
 The intercepted persisted-thread component is also the source for `threads.getCurrent()` and `threads.subscribe()`. A layout effect publishes its stable `conversationId`, title, and optional working directory after mount. Cleanup is deferred by one microtask and guarded by a generation counter, so a same-commit thread replacement emits the replacement directly while New Chat emits `undefined`. Subscriptions receive the current snapshot immediately and subsequent changes in registration order with error isolation.
+
+## threads.list
+
+Persisted sidebar rows are export `a` of `app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~chatgpt-~j34jmud9-BtWAey-a.js`; export `o` initializes the module. The row receives `conversationId`, `threadSummary`, and `displayCwd`. The binding intercepts this exact component and retains its complete native row tree, behavior, status, title layout, and hover actions.
+
+Each registration supplies one synchronous per-thread provider. Results are cached by thread id and stable thread context, isolated on failure, and recomputed only after a context change or explicit thread/global invalidation. The binding preserves registration order and mounts each returned `HTMLElement` through the app's React renderer with deterministic cleanup.
+
+The binding adds a stable owner attribute to the native row and portals contributed views into its native `data-thread-title-trigger` with React DOM export `b` of `app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~elr7dp2m-Dzby7gOc.js`. The absolute container ends two points before the title and grows leftward in registration order. It does not participate in flex layout, so adding or removing a marker leaves the native title and trailing actions at their original positions.
 
 ## authentication
 
@@ -88,8 +96,8 @@ Picker requests are serialized globally in invocation order. The chrome-free nat
 
 ## Validation
 
-- Stable public API suite: 36/36.
-- Version-specific native UI suite: 56/56.
+- Stable public API suite: 39/39.
+- Version-specific native UI suite: 59/59.
 - Live CDP with both panels collapsed: the registered background covered the persistent bottom- and side-panel control region; both controls remained hit-testable with 5.83:1 contrast.
 - Live CDP with the side panel open: the covering fifth header region was transparent; visible native tab/header controls remained painted, interactive, and at or above 5.48:1 contrast. Both overflow gradients resolved to the selected background rather than the native white/black surface.
 - Multiple-accounts, thread-colors, and shared-storage unit tests: 23/23.
@@ -100,6 +108,7 @@ Picker requests are serialized globally in invocation order. The chrome-free nat
 - Live thread menu: `Color` rendered immediately before the first native separator with ChatGPT's Palette icon. Its nine choices opened in a separate native flyout with exact light/dark color icons and retained stock hover, pointer, focus, and keyboard behavior. Selecting Blue applied the registered background and computed foreground CSS; selecting Default removed the thread entry and restored ChatGPT's appearance.
 - Live custom color: selecting `Custom` dismissed both menus and opened only the native picker at the top, centered under the invoking row. Dragging changed background and APCA-selected foreground immediately. A light-mode `#30BF56` selection generated dark-mode `#003610`; clicking outside committed and dismissed the picker.
 - Thread-color persistence: `~/.codex/extensions/thread-colors/settings.json` stores tagged selections under one `colors` map: presets as `{"type":"preset","id":"<preset-id>"}` and custom pairs as `{"type":"custom","light":"#RRGGBB","dark":"#RRGGBB"}`. Default removes the thread entry.
+- Live thread-list view: the extension marker was portaled three points before the native title, retained stock navigation and hover actions, grew leftward for multiple registrations, and left the title at the same horizontal position when shown or hidden.
 
 Run the binding UI suite with `node src/platform/bindings/26.715.70719/ui-test.mjs 9451` while the isolated test app is running. With a workspace account, append `--expect-native-profile-callback-missing`. Append `--alternate-auth=/path/to/another/auth.json` to switch the live native app server to a distinct account and restore the original account.
 

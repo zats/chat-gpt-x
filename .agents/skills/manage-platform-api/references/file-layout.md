@@ -11,13 +11,14 @@ src/
         DERIVATION.md           # how each binding was found: anchors, locations, failure signatures
         ...                     # binding implementation files
   extensions/
+    build.sh                    # canonical extension build and installation entry point
     <extension-id>/             # one folder per extension, TypeScript source
       package.json              # manifest: id, version, name, description, capabilities (VS Code-style)
       ...
     api-test-suite/             # the mechanical e2e test extension — exercises every public API path
 ```
 
-Built extensions are plain JS: the build emits a runnable `.js` bundle plus the `package.json` manifest so the loader knows what it is loading.
+`src/extensions/build.sh [<extension-id> ...]` is the only extension build and installation entry point. With no ids it builds all extensions. Each manifest must declare `"main": "contents/main.js"`; the script compiles `<extension-id>.ts` as browser-targeted CommonJS and installs the bundle and manifest in the canonical runtime layout below. `CHATGPTX_EXTENSIONS_DIR` overrides the root only for isolated builds and tests.
 
 The bindings directory name is the app's version (`CFBundleShortVersionString`) — that string is the version key.
 
@@ -25,8 +26,13 @@ The bindings directory name is the app's version (`CFBundleShortVersionString`) 
 
 ```
 ~/.codex/extensions/
-  settings.json                 # discovered extensions + enabled/disabled flag; only enabled ones load
-  <extension-id>/               # per-extension data, scratch, caches
+  settings.json                 # global extension enablement, load order, and canonical bundle paths
+  <extension-id>/
+    package.json                # installed manifest
+    contents/
+      main.js                   # built extension entry point
+    settings.json               # extension-owned persistent settings
+    ...                         # other extension-owned data, scratch, and caches
 ```
 
 Extension **load order** is defined by the platform (settings), and is the ordering guarantee referenced by the multi-consumer API semantics (transformer chains and callback invocation order).

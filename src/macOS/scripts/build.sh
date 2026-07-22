@@ -16,7 +16,6 @@ command -v xcodebuild >/dev/null || {
   echo "xcodebuild is required; install Xcode command-line tools" >&2
   exit 1
 }
-
 BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/chatgptx-build.XXXXXX")"
 cleanup() {
   rm -rf "$BUILD_ROOT"
@@ -45,3 +44,5 @@ APP_PATH="$OUTPUT_DIR/ChatGPTX.app"
   echo "build succeeded without producing $APP_PATH" >&2
   exit 1
 }
+
+"$REPO_ROOT/src/extensions/build.sh"

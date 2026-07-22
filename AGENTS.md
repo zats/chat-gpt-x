@@ -25,12 +25,19 @@ src/
       <app-version>/            # per-build bridge to the API + manifest.json + DERIVATION.md
   extensions/
     api-test-suite/             # mechanical e2e test extension (defines "working")
-    <extension-id>/             # first- and third-party extensions (TypeScript → built JS + package.json)
+    <extension-id>/             # source: <extension-id>.ts + package.json
+    build.sh                    # canonical extension build and installation entry point
 .agents/skills/
   manage-platform-api/          # process skill for any public-API change (required reading)
 ```
 
-Extension runtime state lives outside the repo, in `~/.codex/extensions/` (enable/disable state in `settings.json`, per-extension data in `<id>/`).
+`src/extensions/build.sh [<extension-id> ...]` builds every extension, or only
+the listed extensions, and installs each bundle at
+`~/.codex/extensions/<extension-id>/contents/main.js`. Manifests must declare
+that exact `main` path. The script preserves extension-owned state; persistent
+extension settings belong at `~/.codex/extensions/<extension-id>/settings.json`.
+The global `~/.codex/extensions/settings.json` controls enablement and load
+order. Set `CHATGPTX_EXTENSIONS_DIR` only for isolated builds and tests.
 
 ## Invariants for any change
 

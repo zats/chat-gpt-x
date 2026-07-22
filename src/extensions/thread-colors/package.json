@@ -3,10 +3,11 @@
   "name": "Thread Colors",
   "version": "0.1.0",
   "description": "Adds native thread-header color choices to thread overflow menus.",
-  "main": "thread-colors.js",
+  "main": "contents/main.js",
   "capabilities": [
     "menus.thread",
     "threads.current",
+    "threads.list",
     "appearance.header",
     "appearance.color-picker",
     "appearance.color-scheme"

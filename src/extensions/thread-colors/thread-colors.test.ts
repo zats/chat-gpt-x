@@ -107,7 +107,7 @@ test("presets keep exact backgrounds and choose the higher APCA contrast foregro
     ["pink", "#F077AF", "#F077AF", "#FFFFFF", "#FFFFFF"],
     ["orange", "#EE7C37", "#EE7C37", "#FFFFFF", "#FFFFFF"],
     ["purple", "#A67DE2", "#A67DE2", "#FFFFFF", "#FFFFFF"],
-    ["black", "#000000", "#FFFFFF", "#FFFFFF", "#000000"],
+    ["black", "#000000", "#000000", "#FFFFFF", "#FFFFFF"],
   ] as const;
 
   assert.deepEqual(
@@ -158,6 +158,11 @@ test("thread changes and color choices apply complete foreground/background pair
     title: "First",
   };
   let menuDisposed = false;
+  let threadListDisposed = false;
+  let threadListProvider:
+    | Parameters<PlatformApi["threads"]["list"]["registerItem"]>[0]
+    | undefined;
+  const threadListInvalidations: Array<string | undefined> = [];
   let appearanceDisposed = false;
   let threadSubscriptionDisposed = false;
   let colorScheme: AppearanceColorScheme = "light";
@@ -197,6 +202,19 @@ test("thread changes and color choices apply complete foreground/background pair
       },
     },
     threads: {
+      list: {
+        registerItem(provider) {
+          threadListProvider = provider;
+          return {
+            invalidate(threadId?: string) {
+              threadListInvalidations.push(threadId);
+            },
+            dispose() {
+              threadListDisposed = true;
+            },
+          };
+        },
+      },
       getCurrent() {
         return currentThread;
       },
@@ -262,6 +280,38 @@ test("thread changes and color choices apply complete foreground/background pair
 
   activate(api);
   await waitFor(() => updates.length >= 2);
+  const originalDocument = globalThis.document;
+  const indicator = {
+    style: {} as CSSStyleDeclaration,
+    setAttribute() {},
+  } as HTMLElement;
+  Object.defineProperty(globalThis, "document", {
+    configurable: true,
+    value: { createElement: () => indicator },
+  });
+  try {
+    threadListProvider?.({ threadId: "thread-1", title: "First" })?.view();
+    assert.equal(indicator.style.width, "3px");
+    assert.equal(indicator.style.height, "14px");
+  } finally {
+    if (originalDocument === undefined) {
+      Reflect.deleteProperty(globalThis, "document");
+    } else {
+      Object.defineProperty(globalThis, "document", {
+        configurable: true,
+        value: originalDocument,
+      });
+    }
+  }
+  assert.equal(
+    typeof threadListProvider?.({ threadId: "thread-1", title: "First" })
+      ?.view,
+    "function",
+  );
+  assert.equal(
+    threadListProvider?.({ threadId: "thread-3", title: "Third" }),
+    undefined,
+  );
   assert.deepEqual(updates.at(-1), THREAD_COLORS[1].properties);
   assertCompletePair(updates.at(-1) ?? {});
 
@@ -280,6 +330,12 @@ test("thread changes and color choices apply complete foreground/background pair
   assert.equal(purple?.kind, "action");
   if (purple?.kind !== "action") return;
   purple.onClick?.();
+  assert.equal(threadListInvalidations.at(-1), "thread-3");
+  assert.equal(
+    typeof threadListProvider?.({ threadId: "thread-3", title: "Third" })
+      ?.view,
+    "function",
+  );
   assert.deepEqual(updates.at(-1), THREAD_COLORS[6].properties);
   assertCompletePair(updates.at(-1) ?? {});
   await waitFor(() => writes.length === 1);
@@ -298,6 +354,11 @@ test("thread changes and color choices apply complete foreground/background pair
   assert.equal(defaultChoice?.kind, "action");
   if (defaultChoice?.kind !== "action") return;
   defaultChoice.onClick?.();
+  assert.equal(threadListInvalidations.at(-1), "thread-3");
+  assert.equal(
+    threadListProvider?.({ threadId: "thread-3", title: "Third" }),
+    undefined,
+  );
   assert.deepEqual(updates.at(-1), {});
   await waitFor(() => writes.length === 2);
   assert.deepEqual(JSON.parse(writes[1].contents), {
@@ -331,6 +392,7 @@ test("thread changes and color choices apply complete foreground/background pair
   );
   pickerResolve?.("#336699");
   await waitFor(() => writes.length === 3);
+  assert.equal(threadListInvalidations.at(-1), "thread-3");
   assert.deepEqual(JSON.parse(writes[2].contents), {
     colors: {
       "thread-1": { type: "preset", id: "blue" },
@@ -357,6 +419,7 @@ test("thread changes and color choices apply complete foreground/background pair
 
   deactivate();
   assert.equal(menuDisposed, true);
+  assert.equal(threadListDisposed, true);
   assert.equal(appearanceDisposed, true);
   assert.equal(threadSubscriptionDisposed, true);
   globalThis.__CGPTX_RUNTIME__ = undefined;

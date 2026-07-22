@@ -3,11 +3,12 @@
   "name": "API Test Suite",
   "version": "0.0.1",
   "description": "Mechanical end-to-end test extension for the platform. Exercises every public API path deterministically and defines whether a binding is 'working'. Internal tooling, not a user extension.",
-  "main": "api-test-suite.js",
+  "main": "contents/main.js",
   "capabilities": [
     "menus.profile",
     "menus.thread",
     "threads.current",
+    "threads.list",
     "authentication",
     "appearance.header",
     "appearance.color-picker",
