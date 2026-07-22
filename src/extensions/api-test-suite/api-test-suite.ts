@@ -25,6 +25,8 @@ import type {
   HeaderCssPropertiesRegistration,
   PlatformApi,
   ProfileMenuItem,
+  ThreadContext,
+  ThreadMenuItem,
 } from "../../platform/types";
 
 const EXT_ID = "api-test-suite";
@@ -89,6 +91,28 @@ function register(
   ) => readonly ProfileMenuItem[],
 ): Disposable {
   const disposable = api.menus.profile.transformItems(transform);
+  activeTestDisposables?.push(disposable);
+  return disposable;
+}
+
+let observedThreadContext: ThreadContext | undefined;
+
+function threadItems(): readonly ThreadMenuItem[] {
+  assert(observedThreadContext, "thread context is available");
+  return api.menus.thread.getItems(observedThreadContext.threadId);
+}
+
+function threadById(id: string): ThreadMenuItem | undefined {
+  return threadItems().find((item) => item.id === id);
+}
+
+function registerThread(
+  transform: (
+    items: readonly ThreadMenuItem[],
+    context: ThreadContext,
+  ) => readonly ThreadMenuItem[],
+): Disposable {
+  const disposable = api.menus.thread.transformItems(transform);
   activeTestDisposables?.push(disposable);
   return disposable;
 }
@@ -493,10 +517,390 @@ test("profile-menu: validates nested item namespaces and duplicates", () => {
 });
 
 // --------------------------------------------------------------------------
+// Tests: thread menu API
+// --------------------------------------------------------------------------
+
+const THREAD_BASIC_ID = `${EXT_ID}.thread-basic`;
+const THREAD_CHAIN_A_ID = `${EXT_ID}.thread-chain-a`;
+const THREAD_CHAIN_B_ID = `${EXT_ID}.thread-chain-b`;
+const THREAD_PARENT_ID = `${EXT_ID}.thread-parent`;
+const THREAD_CHILD_ID = `${EXT_ID}.thread-child`;
+const THREAD_SVG_ID = `${EXT_ID}.thread-svg`;
+const THREAD_INVALID_SVG_ID = `${EXT_ID}.thread-invalid-svg`;
+const THREAD_DISABLED_ID = `${EXT_ID}.thread-disabled`;
+
+test("thread-menu: exposes the owning persisted thread and native items", () => {
+  assert(observedThreadContext, "thread context was observed");
+  assert(observedThreadContext.threadId.length > 0, "thread id is non-empty");
+  assert(typeof observedThreadContext.title === "string", "title is a string");
+  assert(
+    observedThreadContext.workingDirectory === undefined ||
+      observedThreadContext.workingDirectory.length > 0,
+    "working directory is absent or non-empty",
+  );
+  const builtIns = threadItems().filter((item) => item.origin === "app");
+  assert(builtIns.length > 0, "thread menu contains native items");
+  assert(
+    new Set(builtIns.map((item) => item.id)).size === builtIns.length,
+    "native thread item ids are unique",
+  );
+});
+
+test("thread-menu: contributes an item and dispose removes it", () => {
+  const registration = registerThread((items) => [
+    ...items,
+    { kind: "action", id: THREAD_BASIC_ID, label: "Thread Basic" },
+  ]);
+  assert(threadById(THREAD_BASIC_ID), "thread contribution is effective");
+  registration.dispose();
+  assert(!threadById(THREAD_BASIC_ID), "thread contribution is removed");
+  registration.dispose();
+});
+
+test("thread-menu: transformers chain with the same thread context", () => {
+  const contexts: ThreadContext[] = [];
+  registerThread((items, context) => {
+    contexts.push(context);
+    return [
+      ...items,
+      { kind: "action", id: THREAD_CHAIN_A_ID, label: "Thread Chain A" },
+    ];
+  });
+  registerThread((items, context) => {
+    contexts.push(context);
+    assert(
+      items.some((item) => item.id === THREAD_CHAIN_A_ID),
+      "second transformer sees the first contribution",
+    );
+    return [
+      ...items,
+      { kind: "action", id: THREAD_CHAIN_B_ID, label: "Thread Chain B" },
+    ];
+  });
+  assert(
+    threadItems().findIndex((item) => item.id === THREAD_CHAIN_A_ID) <
+      threadItems().findIndex((item) => item.id === THREAD_CHAIN_B_ID),
+    "thread transformer order is deterministic",
+  );
+  assert(
+    contexts.every(
+      (context) => context.threadId === observedThreadContext?.threadId,
+    ),
+    "every transformer receives the owning thread",
+  );
+});
+
+test("thread-menu: throwing transformer is isolated", () => {
+  registerThread(() => {
+    throw new Error("intentional thread transformer failure");
+  });
+  registerThread((items) => [
+    ...items,
+    { kind: "action", id: THREAD_BASIC_ID, label: "After throw" },
+  ]);
+  assert(threadById(THREAD_BASIC_ID), "later thread transformer still runs");
+  assert(
+    threadItems().some((item) => item.origin === "app"),
+    "native thread items remain",
+  );
+});
+
+test("thread-menu: preserves flyout children and native affordances", () => {
+  registerThread((items) => [
+    ...items,
+    {
+      kind: "action",
+      id: THREAD_PARENT_ID,
+      label: "Thread Parent",
+      icon: { kind: "native", name: "palette" },
+      items: [
+        {
+          kind: "action",
+          id: THREAD_CHILD_ID,
+          label: "Thread Child",
+          keyboardShortcut: "⌘T",
+          icon: { kind: "color", light: "#3A83F7", dark: "#3A83F7" },
+        },
+        {
+          kind: "action",
+          id: THREAD_SVG_ID,
+          label: "Thread SVG",
+          icon: {
+            kind: "svg",
+            source:
+              '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 12h14" /></svg>',
+          },
+        },
+      ],
+    },
+  ]);
+  const parent = threadById(THREAD_PARENT_ID);
+  assert(parent?.kind === "action", "flyout parent is effective");
+  if (parent?.kind !== "action") return;
+  assert(
+    parent.icon?.kind === "native" && parent.icon.name === "palette",
+    "native icon descriptor is preserved",
+  );
+  assert(parent.items?.length === 2, "flyout children are preserved");
+  const child = parent.items?.[0];
+  assert(child?.origin === EXT_ID, "flyout child origin is stamped");
+  assert(
+    child?.kind === "action" && child.keyboardShortcut === "⌘T",
+    "flyout child affordances are preserved",
+  );
+  assert(
+    child?.kind === "action" &&
+      child.icon?.kind === "color" &&
+      child.icon.light === "#3A83F7" &&
+      child.icon.dark === "#3A83F7",
+    "theme-aware color icon is preserved",
+  );
+  assert(
+    child?.kind === "action" && Object.isFrozen(child.icon),
+    "thread-menu icon descriptor is immutable",
+  );
+  const svgChild = parent.items?.[1];
+  assert(
+    svgChild?.kind === "action" &&
+      svgChild.icon?.kind === "svg" &&
+      svgChild.icon.source ===
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 12h14" /></svg>',
+    "extension SVG icon is preserved",
+  );
+});
+
+test("thread-menu: activates leaves and requests native flyouts", () => {
+  let clicks = 0;
+  registerThread((items) => [
+    ...items,
+    {
+      kind: "action",
+      id: THREAD_PARENT_ID,
+      label: "Thread Parent",
+      onClick: () => {
+        clicks += 100;
+      },
+      items: [
+        {
+          kind: "action",
+          id: THREAD_CHILD_ID,
+          label: "Thread Child",
+          onClick: () => {
+            clicks += 1;
+          },
+        },
+      ],
+    },
+    {
+      kind: "action",
+      id: THREAD_DISABLED_ID,
+      label: "Thread Disabled",
+      disabled: true,
+      onClick: () => {
+        clicks += 1000;
+      },
+    },
+  ]);
+  const threadId = observedThreadContext?.threadId ?? "";
+  assert(
+    api.menus.thread.activateItem(threadId, THREAD_PARENT_ID),
+    "flyout activation is accepted",
+  );
+  assert(clicks === 0, "flyout parent handler is ignored");
+  assert(
+    api.menus.thread.activateItem(threadId, THREAD_CHILD_ID),
+    "flyout child activates",
+  );
+  assert(Number(clicks) === 1, "flyout child handler runs once");
+  assert(
+    !api.menus.thread.activateItem(threadId, THREAD_DISABLED_ID),
+    "disabled action is rejected",
+  );
+  assert(
+    !api.menus.thread.activateItem(threadId, "missing.thread-item"),
+    "unknown action is rejected",
+  );
+});
+
+test("thread-menu: rejects malformed SVG icons", () => {
+  registerThread((items) => [
+    ...items,
+    {
+      kind: "action",
+      id: THREAD_INVALID_SVG_ID,
+      label: "Invalid SVG",
+      icon: { kind: "svg", source: "<div>not an SVG</div>" },
+    },
+  ]);
+  assert(
+    !threadById(THREAD_INVALID_SVG_ID),
+    "malformed SVG contribution is rejected",
+  );
+  assert(
+    threadItems().some((item) => item.origin === "app"),
+    "malformed SVG does not affect native items",
+  );
+});
+
+test("thread-menu: enforces namespaces and duplicate ids recursively", () => {
+  registerThread((items) => [
+    ...items,
+    { kind: "action", id: "foreign.thread-item", label: "Foreign" },
+    { kind: "action", id: THREAD_BASIC_ID, label: "First" },
+    { kind: "action", id: THREAD_BASIC_ID, label: "Duplicate" },
+    {
+      kind: "action",
+      id: THREAD_PARENT_ID,
+      label: "Parent",
+      items: [
+        { kind: "action", id: THREAD_CHILD_ID, label: "Child" },
+        { kind: "action", id: THREAD_CHILD_ID, label: "Duplicate Child" },
+        { kind: "action", id: "foreign.child", label: "Foreign Child" },
+      ],
+    },
+  ]);
+  assert(!threadById("foreign.thread-item"), "foreign root id is dropped");
+  assert(
+    threadItems().filter((item) => item.id === THREAD_BASIC_ID).length === 1,
+    "duplicate root id is dropped",
+  );
+  const parent = threadById(THREAD_PARENT_ID);
+  assert(
+    parent?.kind === "action" && parent.items?.length === 1,
+    "invalid flyout children are dropped",
+  );
+});
+
+test("thread-menu: built-in replacement inherits native fields", () => {
+  const builtIn = threadItems().find(
+    (item) =>
+      item.origin === "app" &&
+      item.kind === "action" &&
+      typeof item.onClick === "function",
+  );
+  assert(builtIn?.kind === "action", "activatable native item exists");
+  if (builtIn?.kind !== "action") return;
+  const originalHandler = builtIn.onClick;
+  const originalIndex = threadItems().findIndex(
+    (item) => item.id === builtIn.id,
+  );
+  registerThread((items) =>
+    items.map((item) =>
+      item.id === builtIn.id
+        ? { kind: "action", id: builtIn.id, label: "Replaced Thread Item" }
+        : item,
+    ),
+  );
+  const replacement = threadById(builtIn.id);
+  assert(
+    replacement?.kind === "action" && replacement.onClick === originalHandler,
+    "native activation handler is inherited",
+  );
+  assert(
+    threadItems().findIndex((item) => item.id === builtIn.id) === originalIndex,
+    "replacement retains its position",
+  );
+});
+
+// --------------------------------------------------------------------------
+// Tests: current thread API
+// --------------------------------------------------------------------------
+
+test("threads: exposes the current thread and immediately subscribes", () => {
+  assert(observedThreadContext, "thread readiness captured a current thread");
+  const current = api.threads.getCurrent();
+  assert(current, "current persisted thread is available");
+  assert(
+    current.threadId === observedThreadContext.threadId,
+    "current thread matches the mounted native thread menu",
+  );
+
+  let delivered: ThreadContext | undefined;
+  let deliveries = 0;
+  const throwing = api.threads.subscribe(() => {
+    throw new Error("intentional current-thread listener failure");
+  });
+  const subscription = api.threads.subscribe((thread) => {
+    delivered = thread;
+    deliveries += 1;
+  });
+  activeTestDisposables?.push(throwing, subscription);
+  assert(deliveries === 1, "subscription immediately delivers one snapshot");
+  assert(
+    delivered?.threadId === current.threadId,
+    "subscription snapshot matches getCurrent",
+  );
+  subscription.dispose();
+  subscription.dispose();
+});
+
+// --------------------------------------------------------------------------
 // Tests: appearance API
 // --------------------------------------------------------------------------
 
-test("appearance.header: properties update immediately and dispose restores defaults", () => {
+test("appearance: reports the effective color scheme", () => {
+  const scheme = api.appearance.getColorScheme();
+  assert(
+    scheme === "light" || scheme === "dark",
+    "effective appearance is light or dark",
+  );
+});
+
+test("appearance: native color-picker sessions dismiss and settle", async () => {
+  const first = api.appearance.openColorPicker({
+    initialColor: "#3A83F7",
+    title: "API test color",
+    onChange() {},
+  });
+  const second = api.appearance.openColorPicker({
+    initialColor: "#53B559",
+    title: "Queued API test color",
+    onChange() {},
+  });
+  activeTestDisposables?.push(first, second);
+
+  first.dispose();
+  assert(
+    (await first.result) === undefined,
+    "disposing the visible picker settles without a color",
+  );
+  second.dispose();
+  assert(
+    (await second.result) === undefined,
+    "disposing a queued picker settles without a color",
+  );
+  first.dispose();
+  second.dispose();
+});
+
+test("appearance: native color picker rejects invalid options", () => {
+  let invalidColorRejected = false;
+  try {
+    api.appearance.openColorPicker({
+      initialColor: "red" as `#${string}`,
+      title: "Invalid color",
+      onChange() {},
+    });
+  } catch {
+    invalidColorRejected = true;
+  }
+  assert(invalidColorRejected, "non-hex initial colors are rejected");
+
+  let missingCallbackRejected = false;
+  try {
+    api.appearance.openColorPicker({
+      initialColor: "#3A83F7",
+      title: "Invalid callback",
+      onChange: undefined as never,
+    });
+  } catch {
+    missingCallbackRejected = true;
+  }
+  assert(missingCallbackRejected, "a live-change callback is required");
+});
+
+test("appearance.header: properties update immediately and dispose restores prior values", () => {
+  const baseline = api.appearance.header.getProperties();
   const registration = registerHeaderProperties({
     "--header-background-color": {
       light: "rgb(220, 252, 231)",
@@ -528,24 +932,33 @@ test("appearance.header: properties update immediately and dispose restores defa
       dark: "rgb(23, 37, 84)",
     },
   });
+  const updatedProperties = api.appearance.header.getProperties();
+  const expectedUpdatedProperties = {
+    ...baseline,
+    "--header-background-color":
+      updatedProperties["--header-background-color"],
+  };
   assert(
     ["rgb(219, 234, 254)", "rgb(23, 37, 84)"].includes(
-      api.appearance.header.getProperties()["--header-background-color"] ?? "",
+      updatedProperties["--header-background-color"] ?? "",
     ) &&
-      Object.keys(api.appearance.header.getProperties()).length === 1,
+      JSON.stringify(updatedProperties) ===
+        JSON.stringify(expectedUpdatedProperties),
     "update replaces the registration and applies immediately",
   );
 
   registration.update({});
   assert(
-    Object.keys(api.appearance.header.getProperties()).length === 0,
-    "an empty registration preserves ChatGPT's native appearance",
+    JSON.stringify(api.appearance.header.getProperties()) ===
+      JSON.stringify(baseline),
+    "an empty registration reveals the prior appearance",
   );
 
   registration.dispose();
   assert(
-    Object.keys(api.appearance.header.getProperties()).length === 0,
-    "dispose restores native header properties",
+    JSON.stringify(api.appearance.header.getProperties()) ===
+      JSON.stringify(baseline),
+    "dispose restores prior header properties",
   );
   registration.dispose();
 });
@@ -759,6 +1172,28 @@ async function runAll(): Promise<void> {
     });
     (globalThis as Record<string, unknown>)[RESULTS_KEY] = results;
     console.error(`[${EXT_ID}] readiness gate failed`);
+    return;
+  }
+  const threadReady = await waitFor(
+    () => {
+      observedThreadContext = api.threads.getCurrent();
+      return (
+        observedThreadContext !== undefined &&
+        api.menus.thread
+          .getItems(observedThreadContext.threadId)
+          .some((item) => item.origin === "app")
+      );
+    },
+    20000,
+  );
+  if (!threadReady) {
+    results.push({
+      name: "readiness: built-in thread menu items present",
+      pass: false,
+      error: "no persisted thread menu within 20s",
+    });
+    (globalThis as Record<string, unknown>)[RESULTS_KEY] = results;
+    console.error(`[${EXT_ID}] thread readiness gate failed`);
     return;
   }
   for (const { name, fn } of tests) {

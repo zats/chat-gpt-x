@@ -30,6 +30,24 @@ The profile root also supplies the current `displayName` and native `accountIcon
 
 Transformers run in registration order. Recursive normalization enforces extension-owned ids, removes duplicates and foreign ids, stamps origins, inherits omitted built-in fields, supports moving built-ins, enforces one submenu level, and isolates throwing transforms and handlers.
 
+## menus.thread
+
+The persisted-thread overflow is export `t` of `thread-overflow-menu-C_zMj6Vd.js`; export `n` initializes the module. Its stable input includes `conversationId`, `title`, and optional `cwd`. The binding intercepts that exact component and transforms the native menu tree it returns, so pending threads without an id never enter the public surface.
+
+Top-level actions use the shared native Item and Separator exports documented under `menus.profile`. Native flyouts use `r.FlyoutSubmenuItem` from the same menu module. The component retains the app's Radix trigger, separate portal, positioning, focus management, keyboard navigation, hover state, animation, and accessibility. Extension leaf rows without a public handler receive an internal no-op selection prop because the native Item enables its interactive presentation from the presence of an activation prop; this preserves standard highlight and pointer behavior without changing public activation semantics.
+
+FormatJS ids under `sidebarElectron.*` and `threadHeader.*` provide stable built-in ids. The lazily rendered Add scheduled task row is owned by an opaque conditional component, so the binding captures its semantic Item after the menu opens and restores it at the same source-tree position. Public models and the rendered native menu then remain in identical order as conditional rows appear.
+
+The native Palette icon is export `t` of `palette-lzFbWMQk-Cg3hGH0S.js`, initialized by export `n`. Thread-menu icon descriptors select an app-owned named component, an extension-owned SVG, or a theme-aware circular color icon through the same native Item leading-icon slot. The native Item passes its `icon-xs` presentation class to the supplied component; SVG descriptors retain that class while rendering their complete extension-owned `<svg>` markup.
+
+The app's own project-appearance picker provides the color-icon precedent in `app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~settings-command-~hox8u96i-BXuN_B5E.js`. Its `codex.projectAppearance.color.option.aria_label` choices render nested native `rounded-full` swatches. Extension color icons reuse the Item icon wrapper and that circular presentation. Their CSS custom properties select the declared light or dark color from the app's `electron-light` / `electron-dark` root classes without remounting the menu.
+
+The `thread-colors` extension inserts a Palette flyout immediately before the first native separator. Its parent uses the extension-provided 16-point Lucide Palette SVG with a 1.75-point stroke. Its choices supply the exact requested colors through the public icon descriptor, including a black icon that becomes white in dark appearance. Programmatic flyout activation targets the mounted native row or opens the owning thread menu first, then delegates to the native flyout trigger.
+
+Thread transformers compose independently for every observed thread. Recursive normalization enforces extension namespaces and unique ids, supports one native flyout level, inherits omitted built-in fields and handlers, preserves moved built-ins, and isolates throwing transforms and actions.
+
+The intercepted persisted-thread component is also the source for `threads.getCurrent()` and `threads.subscribe()`. A layout effect publishes its stable `conversationId`, title, and optional working directory after mount. Cleanup is deferred by one microtask and guarded by a generation counter, so a same-commit thread replacement emits the replacement directly while New Chat emits `undefined`. Subscriptions receive the current snapshot immediately and subsequent changes in registration order with error isolation.
+
 ## authentication
 
 Native ChatGPT sign-in comes from `chatgpt-desktop-auth-url-CTvO8J1r.js`: export `o` starts `login-with-chatgpt`, export `t` decorates its URL exactly as the app does, and export `r` initializes the module.
@@ -46,9 +64,11 @@ The version-independent runtime preload exposes a narrow request bridge. The mai
 
 ## appearance.header
 
-The native full-width header is `header.app-header-tint`. Its second direct layout region owns the left header and its third owns the thread header. The right panel is `aside[data-app-shell-focus-area="right-panel"]`; its tab strip is the direct `.h-toolbar` child of `[data-app-shell-tabs="true"]`.
+The native full-width header is `header.app-header-tint`. Its second direct layout region owns the left header, its third owns the thread header, and its fifth owns the persistent bottom- and side-panel controls. The right panel is `aside[data-app-shell-focus-area="right-panel"]`; its tab strip is the direct `.h-toolbar` child of `[data-app-shell-tabs="true"]`.
 
-The full-width header retains its native isolation and stacking. When `--header-background-color` is active, the binding leaves that header transparent and paints its second and third direct regions. An eight-point shadow fills their native gap. The right-panel tab toolbar and its nested `bg-token-main-surface-primary` surfaces use the same property. This keeps the right-side header buttons and side-panel tabs above their original hit-test surfaces.
+The full-width header retains its native isolation and stacking. When `--header-background-color` is active, the binding leaves that header transparent and paints its second, third, and fifth direct regions. An eight-point shadow fills the native gap between the second and third regions. ChatGPT keeps the right-panel `aside` mounted at `opacity: 0; width: 0px` while closed; the fifth region remains painted in that state. Once the native inline state reaches `opacity: 1`, the fifth region becomes transparent because it spans the open tab strip and would otherwise cover its controls.
+
+The right-panel tab toolbar and its nested `bg-token-main-surface-primary` surfaces use the selected background. The binding also scopes ChatGPT's `--color-token-main-surface-primary` to that value inside the toolbar, so both native overflow pseudo-element gradients fade into the selected header color at narrow widths. This keeps the right-side header buttons and side-panel tabs above their original hit-test surfaces.
 
 `--header-foreground-color` overrides the native foreground tokens inside the full header and directly colors the right-panel tab and action controls. The active tab background is derived with `color-mix`. Selectors stop at the tab toolbar, so the browser/content toolbar below it retains ChatGPT's own foreground colors.
 
@@ -58,24 +78,38 @@ ChatGPT's preload exposes `getSystemThemeVariant` and `subscribeToSystemThemeVar
 
 Registration, theme change, update, disposal, and direct changes to an active custom property repaint through CSS without remounting app UI.
 
+## appearance color picker
+
+The `codex.remoteHostColorPicker.*` FormatJS ids locate ChatGPT's native color picker in `app-initial~notebook-preview-panel~app-main~pull-request-route~projects-index-page~cloud-en~lpx9dmpy-CmvXvPMG.js`. Its controlled picker is export `r` of `app-initial~app-main~plugin-detail-page~settings-page~projects-index-page~appgen-library-pa~nsqr45u8-w2kLKHJV.js`; export `i` initializes the bundled `react-colorful` implementation.
+
+The binding mounts one persistent picker host through ChatGPT's React DOM renderer. Export `t()` of `app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~gsbyx6su-BgGJHe-c.js` supplies the exact renderer used by the app root. This keeps the native picker available independently of profile and thread menu mount state.
+
+Picker requests are serialized globally in invocation order. The chrome-free native control is positioned eight points below `header.app-header-tint`, centered near the pointer that invoked it, and the originating menu is free to dismiss. Native drag and keyboard interaction emit normalized six-digit colors immediately. Clicking outside or pressing Enter confirms; Escape and disposal cancel. Throwing preview callbacks are isolated.
+
 ## Validation
 
-- Stable public API suite: 23/23.
-- Version-specific native UI suite with alternate-account fixtures: 36/36.
-- Computer Use: green background and white foreground were visible on both the thread header and browser side-panel tab header; all tab, add, expand, bottom-panel, and side-panel controls remained visible.
-- Multiple-accounts and shared-storage unit tests: 17/17.
+- Stable public API suite: 36/36.
+- Version-specific native UI suite: 56/56.
+- Live CDP with both panels collapsed: the registered background covered the persistent bottom- and side-panel control region; both controls remained hit-testable with 5.83:1 contrast.
+- Live CDP with the side panel open: the covering fifth header region was transparent; visible native tab/header controls remained painted, interactive, and at or above 5.48:1 contrast. Both overflow gradients resolved to the selected background rather than the native white/black surface.
+- Multiple-accounts, thread-colors, and shared-storage unit tests: 23/23.
 - Live multiple-accounts UI: the native account row rendered with one chevron; its children used the same native nested Item presentation as Usage remaining and appeared as `Profile`, saved accounts, then `Add account`.
 - Native Profile icon: the workspace-account fixture rendered the extension's nested Profile row with the exact Settings → Profile icon even though ChatGPT omitted its own profile-dropdown row.
 - Credential storage: the current credentials were copied byte-for-byte to `~/.codex/extensions/multiple-accounts/auth-<user-id>.json` with mode `0600`.
 - Live account switching: Computer Use switched from workspace to personal and back in the packaged launcher. Each direction updated the menu email and native Profile identity, avatar rendering, handle, and account-specific activity data without restarting the desktop process. The nested Profile item opened native Profile settings in both account states, including the workspace state where ChatGPT omits its profile-menu callback.
+- Live thread menu: `Color` rendered immediately before the first native separator with ChatGPT's Palette icon. Its nine choices opened in a separate native flyout with exact light/dark color icons and retained stock hover, pointer, focus, and keyboard behavior. Selecting Blue applied the registered background and computed foreground CSS; selecting Default removed the thread entry and restored ChatGPT's appearance.
+- Live custom color: selecting `Custom` dismissed both menus and opened only the native picker at the top, centered under the invoking row. Dragging changed background and APCA-selected foreground immediately. A light-mode `#30BF56` selection generated dark-mode `#003610`; clicking outside committed and dismissed the picker.
+- Thread-color persistence: `~/.codex/extensions/thread-colors/settings.json` stores tagged selections under one `colors` map: presets as `{"type":"preset","id":"<preset-id>"}` and custom pairs as `{"type":"custom","light":"#RRGGBB","dark":"#RRGGBB"}`. Default removes the thread entry.
 
 Run the binding UI suite with `node src/platform/bindings/26.715.70719/ui-test.mjs 9451` while the isolated test app is running. With a workspace account, append `--expect-native-profile-callback-missing`. Append `--alternate-auth=/path/to/another/auth.json` to switch the live native app server to a distinct account and restore the original account.
 
 ## Rebinding failure signatures
 
 - Native binding installation failure means a hashed module path, export, or lazy initializer changed.
-- Empty `getItems()` means profile-root semantic props, Item fibers, or FormatJS ids changed.
+- Empty profile `getItems()` means profile-root semantic props, Item fibers, or FormatJS ids changed.
+- Empty thread `getItems(threadId)` means the thread component export, Menu root export, or thread FormatJS ids changed.
 - Missing icons means native Item props or the chevron export changed.
 - A visible chevron that does not expand means SubmenuItem ownership or its `trigger`/`children` contract changed.
+- A thread flyout without interaction styling means the native Item activation-derived class contract changed.
 - Authentication startup errors mean the sign-in module initializer or URL/browser exports changed.
 - Stale identity after credential replacement means the message-bus export, app-server restart/initialized message contract, account-info query key, auth-nonce hook, or provider boundary changed.

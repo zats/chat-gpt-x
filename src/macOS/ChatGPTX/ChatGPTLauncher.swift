@@ -17,8 +17,8 @@ struct ChatGPTLauncher {
 
         let workspace = NSWorkspace.shared
 
-        guard let applicationURL = workspace.urlForApplication(
-            withBundleIdentifier: Self.chatGPTBundleIdentifier
+        guard let applicationURL = Self.installedChatGPTURL(
+            workspace: workspace
         ), let chatGPTBundle = Bundle(url: applicationURL),
             let executableURL = chatGPTBundle.executableURL else {
             throw LaunchError.chatGPTNotInstalled
@@ -91,6 +91,47 @@ struct ChatGPTLauncher {
         !NSRunningApplication.runningApplications(
             withBundleIdentifier: chatGPTBundleIdentifier
         ).isEmpty
+    }
+
+    private static func installedChatGPTURL(workspace: NSWorkspace) -> URL? {
+        let fileManager = FileManager.default
+        let domains: [FileManager.SearchPathDomainMask] = [
+            .localDomainMask,
+            .userDomainMask,
+        ]
+
+        for domain in domains {
+            for directory in fileManager.urls(
+                for: .applicationDirectory,
+                in: domain
+            ) {
+                let candidates = (try? fileManager.contentsOfDirectory(
+                    at: directory,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                ))?.sorted { $0.path < $1.path } ?? []
+
+                for candidate in candidates where isChatGPTBundle(candidate) {
+                    return candidate
+                }
+            }
+        }
+
+        guard let candidate = workspace.urlForApplication(
+            withBundleIdentifier: chatGPTBundleIdentifier
+        ), isChatGPTBundle(candidate) else {
+            return nil
+        }
+        return candidate
+    }
+
+    private static func isChatGPTBundle(_ url: URL) -> Bool {
+        guard let bundle = Bundle(url: url),
+            bundle.bundleIdentifier == chatGPTBundleIdentifier,
+            let executableURL = bundle.executableURL else {
+            return false
+        }
+        return FileManager.default.isExecutableFile(atPath: executableURL.path)
     }
 
     private static func isProcessRunning(_ processIdentifier: pid_t) -> Bool {

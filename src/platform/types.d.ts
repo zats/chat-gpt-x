@@ -75,11 +75,59 @@ export interface PlatformApi {
   /** Menu contribution APIs. */
   readonly menus: MenusApi;
 
+  /** Current ChatGPT thread lifecycle. */
+  readonly threads: ThreadsApi;
+
   /** The ChatGPT app's authentication lifecycle. */
   readonly authentication: AuthenticationApi;
 
   /** Native ChatGPT appearance customization. */
   readonly appearance: AppearanceApi;
+}
+
+// ---------------------------------------------------------------------------
+// Threads
+// ---------------------------------------------------------------------------
+
+/**
+ * The persisted thread currently displayed by ChatGPT.
+ *
+ * @group Threads
+ */
+export interface ThreadContext {
+  /** ChatGPT's stable identifier for the persisted thread. */
+  readonly threadId: string;
+
+  /** The thread title currently displayed by ChatGPT. */
+  readonly title: string;
+
+  /** The thread's working directory when ChatGPT supplies one. */
+  readonly workingDirectory?: string;
+}
+
+/**
+ * Listener for current-thread changes. `undefined` means no persisted thread
+ * is currently displayed.
+ *
+ * @group Threads
+ */
+export type CurrentThreadListener = (thread: ThreadContext | undefined) => void;
+
+/**
+ * Observes the persisted thread currently displayed by ChatGPT.
+ *
+ * Multi-consumer: listeners run in registration order with error isolation.
+ * Each subscription receives the current snapshot immediately, then every
+ * subsequent change. Disposing a subscription stops future delivery.
+ *
+ * @group Threads
+ */
+export interface ThreadsApi {
+  /** Return the current persisted thread, or `undefined` outside a thread. */
+  getCurrent(): ThreadContext | undefined;
+
+  /** Subscribe to the current snapshot and subsequent thread changes. */
+  subscribe(listener: CurrentThreadListener): Disposable;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +199,78 @@ export interface HeaderCssPropertiesRegistration extends Disposable {
 export interface AppearanceApi {
   /** The thread header and side-panel tab header. */
   readonly header: HeaderAppearanceApi;
+
+  /**
+   * Return ChatGPT's currently effective light or dark appearance.
+   *
+   * This reflects the resolved app appearance, including a system-following
+   * preference. It is a read-only snapshot and has no cross-extension
+   * ordering or conflict semantics.
+   *
+   * @example
+   * const scheme = api.appearance.getColorScheme();
+   *
+   * @group Appearance
+   */
+  getColorScheme(): AppearanceColorScheme;
+
+  /**
+   * Open ChatGPT's native color picker.
+   *
+   * Calls are serialized in invocation order across all extensions so only
+   * one picker is visible at a time. The picker appears directly below the
+   * app header near the invoking pointer. `onChange` receives every valid
+   * color produced while the user drags the picker; callback failures are
+   * isolated. Clicking outside or pressing Enter confirms the current color.
+   * Escape or disposal resolves the result to `undefined`.
+   *
+   * @example
+   * const picker = api.appearance.openColorPicker({
+   *   initialColor: "#3A83F7",
+   *   title: "Custom color",
+   *   onChange: (color) => preview(color),
+   * });
+   * const color = await picker.result;
+   *
+   * @group Appearance
+   */
+  openColorPicker(options: ColorPickerOptions): ColorPickerSession;
+}
+
+/**
+ * ChatGPT's resolved appearance mode.
+ *
+ * @group Appearance
+ */
+export type AppearanceColorScheme = "light" | "dark";
+
+/**
+ * Options for one native ChatGPT color-picker session.
+ *
+ * @group Appearance
+ */
+export interface ColorPickerOptions {
+  /** Initial opaque sRGB color in six-digit hexadecimal form. */
+  readonly initialColor: `#${string}`;
+
+  /** Accessible label for the native picker. */
+  readonly title: string;
+
+  /** Called synchronously for each valid color selected during interaction. */
+  readonly onChange: (color: `#${string}`) => void;
+}
+
+/**
+ * One queued or visible native color-picker interaction.
+ *
+ * `dispose()` cancels the session and is idempotent. Queued sessions can be
+ * disposed before becoming visible. The result promise settles exactly once.
+ *
+ * @group Appearance
+ */
+export interface ColorPickerSession extends Disposable {
+  /** Confirmed color, or `undefined` after dismissal or disposal. */
+  readonly result: Promise<`#${string}` | undefined>;
 }
 
 /**
@@ -299,6 +419,9 @@ export interface AuthenticationApi {
 export interface MenusApi {
   /** The profile menu (the dropdown opened from the avatar/profile button). */
   readonly profile: ProfileMenuApi;
+
+  /** The overflow menu opened from a persisted thread's header. */
+  readonly thread: ThreadMenuApi;
 }
 
 /**
@@ -515,5 +638,205 @@ export interface ProfileMenuSeparatorItem {
   readonly id: string;
 
   /** Set by the platform — see {@link ProfileMenuActionItem.origin}. */
+  readonly origin?: "app" | string;
+}
+
+/**
+ * APIs for the overflow menu opened from the ellipsis button in a persisted
+ * thread's header. Pending threads without a ChatGPT thread id are outside
+ * this surface.
+ *
+ * @group Menus
+ */
+export interface ThreadMenuApi {
+  /**
+   * Transform every persisted thread overflow menu.
+   *
+   * `transform` runs synchronously whenever ChatGPT renders a thread menu.
+   * It receives that menu's complete current item list and a snapshot of the
+   * owning thread. Return the final list to keep, drop, reorder, replace, or
+   * add items. The transformer must be cheap and side-effect-free.
+   *
+   * Built-in items carry stable ids derived from ChatGPT's semantic
+   * identifiers. Returning a descriptor with a built-in id replaces that
+   * item and inherits omitted fields, including its native `onClick`.
+   * Extension-created ids must be namespaced `"<extension-id>.<name>"`;
+   * foreign and duplicate ids are dropped and logged.
+   *
+   * Multi-consumer: transformers chain in extension load order for each
+   * thread. Every transformer receives the previous transformer's output. A
+   * throwing transformer is skipped and logged without affecting ChatGPT or
+   * other extensions.
+   *
+   * @param transform mapper from one thread's current items to its final items
+   * @returns an idempotent handle that unregisters the transformer
+   *
+   * @example
+   * api.menus.thread.transformItems((items, thread) => {
+   *   const firstSeparator = items.findIndex(
+   *     (item) => item.kind === "separator",
+   *   );
+   *   const insertionIndex = firstSeparator < 0 ? items.length : firstSeparator;
+   *   const colorItem: ThreadMenuActionItem = {
+   *     kind: "action",
+   *     id: "thread-colors.color",
+   *     label: `Color for ${thread.title}`,
+   *     icon: { kind: "native", name: "palette" },
+   *     items: [
+   *       { kind: "action", id: "thread-colors.default", label: "Default" },
+   *       { kind: "action", id: "thread-colors.blue", label: "Blue" },
+   *     ],
+   *   };
+   *   return [
+   *     ...items.slice(0, insertionIndex),
+   *     colorItem,
+   *     ...items.slice(insertionIndex),
+   *   ];
+   * });
+   */
+  transformItems(transform: ThreadMenuTransform): Disposable;
+
+  /**
+   * Return the latest effective item list observed for `threadId`, including
+   * every registered transform in final display order. Returns an empty list
+   * until that thread's header has rendered in this app window.
+   *
+   * @param threadId ChatGPT's stable thread identifier
+   */
+  getItems(threadId: string): readonly ThreadMenuItem[];
+
+  /**
+   * Programmatically activate an effective item for a thread.
+   *
+   * Leaf actions invoke their isolated `onClick`. Submenu parents open their
+   * native flyout when the thread header is mounted. Unknown, disabled, and
+   * non-activatable items return `false`.
+   *
+   * @param threadId ChatGPT's stable thread identifier
+   * @param id stable built-in id or extension-namespaced item id
+   * @returns whether the item was activated or its flyout was requested
+   */
+  activateItem(threadId: string, id: string): boolean;
+}
+
+/**
+ * Mapper from a thread's current overflow-menu items to its final items.
+ *
+ * @group Menus
+ */
+export type ThreadMenuTransform = (
+  items: readonly ThreadMenuItem[],
+  context: ThreadContext,
+) => readonly ThreadMenuItem[];
+
+/**
+ * An action row or separator in a thread overflow menu.
+ *
+ * @group Menus
+ */
+export type ThreadMenuItem = ThreadMenuActionItem | ThreadMenuSeparatorItem;
+
+/**
+ * A native ChatGPT thread-menu action row.
+ *
+ * Leaf rows use ChatGPT's own menu Item component. Rows with `items` use its
+ * flyout-submenu component and retain native focus, keyboard navigation,
+ * accessibility, hover state, animation, and portal behavior.
+ *
+ * @group Menus
+ */
+export interface ThreadMenuActionItem {
+  readonly kind: "action";
+
+  /**
+   * Unique stable identifier. New items must use
+   * `"<extension-id>.<name>"`; built-ins use binding-stable semantic ids.
+   */
+  readonly id: string;
+
+  /** Visible row label. */
+  readonly label: string;
+
+  /** Leading native app icon or theme-aware circular color icon. */
+  readonly icon?: ThreadMenuIcon;
+
+  /** Native app icon rendered on the right side of a leaf row. */
+  readonly rightIcon?: string;
+
+  /** Secondary text rendered by ChatGPT on a leaf row. */
+  readonly subText?: string;
+
+  /** Display-only keyboard shortcut hint on a leaf row. */
+  readonly keyboardShortcut?: string;
+
+  /** Disable activation while retaining ChatGPT's native disabled state. */
+  readonly disabled?: boolean;
+
+  /**
+   * Handler invoked for leaf activation. Built-ins expose their native
+   * handler for wrapping. Throwing handlers are isolated and logged. Ignored
+   * when `items` contains submenu children.
+   */
+  readonly onClick?: () => void;
+
+  /**
+   * Native flyout children. One nesting level is supported; children may be
+   * extension items or built-ins moved from the root list.
+   */
+  readonly items?: readonly ThreadMenuItem[];
+
+  /** Contributor id, assigned by the platform; `"app"` denotes ChatGPT. */
+  readonly origin?: "app" | string;
+}
+
+/** Leading visual rendered through ChatGPT's native menu icon slot. */
+export type ThreadMenuIcon =
+  | ThreadMenuNativeIcon
+  | ThreadMenuColorIcon
+  | ThreadMenuSvgIcon;
+
+/** A named icon component supplied by ChatGPT. */
+export interface ThreadMenuNativeIcon {
+  readonly kind: "native";
+
+  /** `"palette"` uses ChatGPT's Lucide Palette icon. */
+  readonly name: string;
+}
+
+/** A circular color icon that follows ChatGPT's active appearance. */
+export interface ThreadMenuColorIcon {
+  readonly kind: "color";
+
+  /** CSS color used with ChatGPT's light appearance. */
+  readonly light: string;
+
+  /** CSS color used with ChatGPT's dark appearance. */
+  readonly dark: string;
+}
+
+/** An extension-owned SVG rendered through ChatGPT's native icon slot. */
+export interface ThreadMenuSvgIcon {
+  readonly kind: "svg";
+
+  /**
+   * One complete namespaced `<svg xmlns="http://www.w3.org/2000/svg">`
+   * element. It inherits the native menu foreground through `currentColor`;
+   * sizing and other SVG presentation remain owned by the supplied markup.
+   */
+  readonly source: string;
+}
+
+/**
+ * A native visual separator in a thread overflow menu.
+ *
+ * @group Menus
+ */
+export interface ThreadMenuSeparatorItem {
+  readonly kind: "separator";
+
+  /** Unique stable or extension-namespaced identifier. */
+  readonly id: string;
+
+  /** Contributor id, assigned by the platform; `"app"` denotes ChatGPT. */
   readonly origin?: "app" | string;
 }

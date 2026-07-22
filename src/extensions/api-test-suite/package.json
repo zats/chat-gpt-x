@@ -6,7 +6,11 @@
   "main": "api-test-suite.js",
   "capabilities": [
     "menus.profile",
+    "menus.thread",
+    "threads.current",
     "authentication",
-    "appearance.header"
+    "appearance.header",
+    "appearance.color-picker",
+    "appearance.color-scheme"
   ]
 }

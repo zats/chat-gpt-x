@@ -105,7 +105,7 @@ export function transformProfileMenuItems(items: readonly ProfileMenuItem[], cur
     : undefined;
 
   return items.map((item): ProfileMenuItem => {
-    if (item.id === ACCOUNT_ROW_ID && row && accountItems) return { ...row, label: currentLabel, items: accountItems };
+    if (item.id === ACCOUNT_ROW_ID && row?.kind === "action" && accountItems) return { ...row, label: currentLabel, items: accountItems };
     if (item.id === LOGOUT_ROW_ID && item.kind === "action" && typeof item.onClick === "function") {
       const nativeLogout = item.onClick;
       return { ...item, onClick: () => actions.logOut(nativeLogout) };

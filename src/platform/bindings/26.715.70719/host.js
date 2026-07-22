@@ -1,10 +1,9 @@
 /**
  * Renderer binding for ChatGPT 26.715.70719.
  *
- * The binding patches the app's shared JSX runtime and replaces only the
- * profile menu's child list. Items remain inside the app's existing Radix
- * menu root and are rendered with the app's exported Item, Separator, and
- * SubmenuItem components.
+ * The binding patches the app's shared JSX runtime and transforms native
+ * profile and thread menu item trees. Items remain inside the app's existing
+ * Radix roots and use the app's exported menu components.
  */
 (() => {
   "use strict";
@@ -21,6 +20,12 @@
   const PROFILE_ICON_MODULE =
     "./assets/app-initial~app-main~settings-command-menu-section-items~pull-request-route~new-thread-pane~fnoshreu-CHWJP-re.js";
   const PLUS_ICON_MODULE = "./assets/plus-BgCJgEEs-DSk_o46V.js";
+  const PALETTE_ICON_MODULE = "./assets/palette-lzFbWMQk-Cg3hGH0S.js";
+  const COLOR_PICKER_MODULE =
+    "./assets/app-initial~app-main~plugin-detail-page~settings-page~projects-index-page~appgen-library-pa~nsqr45u8-w2kLKHJV.js";
+  const REACT_DOM_MODULE =
+    "./assets/app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~gsbyx6su-BgGJHe-c.js";
+  const THREAD_MENU_MODULE = "./assets/thread-overflow-menu-C_zMj6Vd.js";
   const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-CTvO8J1r.js";
   const AUTH_CONTEXT_MODULE =
     "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~k87y25tw-DjPeV3vC.js";
@@ -35,17 +40,28 @@
     HEADER_BACKGROUND_PROPERTY,
     HEADER_FOREGROUND_PROPERTY,
   ]);
-  const HEADER_STYLE_ID = "cgptx-header-appearance";
-  const HEADER_STYLE_SOURCE = `
+  const BINDING_STYLE_ID = "cgptx-binding-style";
+  const BINDING_STYLE_SOURCE = `
 html[data-cgptx-header-background-color] header.app-header-tint {
   background-color: transparent !important;
 }
 html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(2),
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3) {
+html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3),
+html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(5) {
   background-color: var(--header-background-color) !important;
+}
+html[data-cgptx-header-background-color]:has(
+    aside[data-app-shell-focus-area="right-panel"][style*="opacity: 1"]
+  )
+  header.app-header-tint > div:nth-of-type(5) {
+  background-color: transparent !important;
 }
 html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3) {
   box-shadow: -8px 0 var(--header-background-color);
+}
+html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
+  [data-app-shell-tabs="true"] > .h-toolbar {
+  --color-token-main-surface-primary: var(--header-background-color);
 }
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
   [data-app-shell-tabs="true"] > .h-toolbar,
@@ -94,6 +110,12 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     var(--header-foreground-color) 70%,
     transparent
   ) !important;
+}
+html.electron-light [data-cgptx-thread-menu-color-icon] {
+  background-color: var(--cgptx-thread-menu-color-light);
+}
+html.electron-dark [data-cgptx-thread-menu-color-icon] {
+  background-color: var(--cgptx-thread-menu-color-dark);
 }
 `;
 
@@ -153,6 +175,13 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     );
   }
 
+  function isThreadMessageId(id) {
+    return (
+      typeof id === "string" &&
+      (id.startsWith("threadHeader.") || id.startsWith("sidebarElectron."))
+    );
+  }
+
   function fiberOf(node) {
     const key = Object.keys(node).find((candidate) =>
       candidate.startsWith("__reactFiber$"),
@@ -181,16 +210,23 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
   // ------------------------------------------------------------------
 
   const transformers = [];
+  const threadTransformers = [];
+  const currentThreadListeners = [];
   const authenticationListeners = [];
   const headerPropertyRegistrations = [];
+  const colorPickerQueue = [];
   const extensions = new Map();
   const safeHandlers = new WeakSet();
   const renderListeners = new Set();
   let renderVersion = 0;
   let builtInCache = Object.freeze([]);
   let builtInViews = new Map();
+  const threadModels = new Map();
+  let currentThread = undefined;
+  let currentThreadClearGeneration = 0;
   let native = null;
   let pendingExpandedId = null;
+  let pendingThreadExpanded = null;
   let nestedItemClassName = null;
   let refreshAuthentication = null;
   let openNativeProfile = null;
@@ -204,6 +240,18 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
   let authenticationAppServerRestartCount = 0;
   let headerThemeObserver = null;
   let observedHeaderTheme = null;
+  let activeColorPicker = null;
+  let nextColorPickerId = 1;
+  let colorPickerRenderError = null;
+  let lastPointerX = innerWidth / 2;
+
+  addEventListener(
+    "pointerdown",
+    (event) => {
+      lastPointerX = event.clientX;
+    },
+    true,
+  );
 
   function subscribe(listener) {
     renderListeners.add(listener);
@@ -223,6 +271,45 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
         warn(`authentication listener of ${record.extId} threw`, error);
       }
     }
+  }
+
+  function sameThreadContext(left, right) {
+    return (
+      left?.threadId === right?.threadId &&
+      left?.title === right?.title &&
+      left?.workingDirectory === right?.workingDirectory
+    );
+  }
+
+  function emitCurrentThreadChange() {
+    for (const record of [...currentThreadListeners]) {
+      try {
+        record.listener(currentThread);
+      } catch (error) {
+        warn(`current-thread listener of ${record.extId} threw`, error);
+      }
+    }
+  }
+
+  function setCurrentThread(context) {
+    currentThreadClearGeneration += 1;
+    if (sameThreadContext(currentThread, context)) return;
+    currentThread = context;
+    emitCurrentThreadChange();
+  }
+
+  function clearCurrentThreadAfterUnmount(threadId) {
+    const generation = ++currentThreadClearGeneration;
+    queueMicrotask(() => {
+      if (
+        generation !== currentThreadClearGeneration ||
+        currentThread?.threadId !== threadId
+      ) {
+        return;
+      }
+      currentThread = undefined;
+      emitCurrentThreadChange();
+    });
   }
 
   function normalizeHeaderProperties(properties) {
@@ -290,6 +377,89 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     throw new Error("ChatGPT header theme is unavailable");
   }
 
+  function normalizePickerColor(color) {
+    if (typeof color !== "string" || !/^#[0-9a-f]{6}$/i.test(color)) {
+      throw new TypeError(
+        "color picker colors must be six-digit hexadecimal colors",
+      );
+    }
+    return color.toUpperCase();
+  }
+
+  function activateNextColorPicker() {
+    if (activeColorPicker || colorPickerQueue.length === 0) return;
+    activeColorPicker = colorPickerQueue.shift();
+    activeColorPicker.status = "active";
+    emitChange();
+  }
+
+  function settleColorPicker(request, color) {
+    if (request.status === "settled") return;
+    if (request === activeColorPicker) activeColorPicker = null;
+    else {
+      const index = colorPickerQueue.indexOf(request);
+      if (index >= 0) colorPickerQueue.splice(index, 1);
+    }
+    request.status = "settled";
+    request.resolve(color);
+    emitChange();
+    activateNextColorPicker();
+  }
+
+  function previewColorPicker(request, color) {
+    if (request !== activeColorPicker || request.status !== "active") return;
+    const normalized = normalizePickerColor(color);
+    request.color = normalized;
+    try {
+      request.onChange(normalized);
+    } catch (error) {
+      warn(`color-picker listener of ${request.extId} threw`, error);
+    }
+  }
+
+  function openColorPicker(extId, options) {
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("openColorPicker requires options");
+    }
+    const initialColor = normalizePickerColor(options.initialColor);
+    if (typeof options.title !== "string" || options.title.trim().length === 0) {
+      throw new TypeError("color picker title must be a non-empty string");
+    }
+    if (typeof options.onChange !== "function") {
+      throw new TypeError("color picker onChange must be a function");
+    }
+
+    let resolve;
+    const result = new Promise((settle) => {
+      resolve = settle;
+    });
+    const request = {
+      id: nextColorPickerId,
+      extId,
+      title: options.title,
+      initialColor,
+      color: initialColor,
+      onChange: options.onChange,
+      result,
+      resolve,
+      status: "queued",
+      left: Math.min(Math.max(lastPointerX - 100, 8), innerWidth - 208),
+    };
+    nextColorPickerId += 1;
+    colorPickerQueue.push(request);
+    activateNextColorPicker();
+
+    let disposed = false;
+    return Object.freeze({
+      result,
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        settleColorPicker(request, undefined);
+      },
+    });
+  }
+
   function computeHeaderProperties() {
     const themed = computeHeaderThemeProperties();
     if (Object.keys(themed).length === 0) return Object.freeze({});
@@ -327,16 +497,16 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     });
   }
 
-  function installHeaderStyle() {
-    if (document.getElementById(HEADER_STYLE_ID)) return;
+  function installBindingStyle() {
+    if (document.getElementById(BINDING_STYLE_ID)) return;
     const style = document.createElement("style");
-    style.id = HEADER_STYLE_ID;
-    style.textContent = HEADER_STYLE_SOURCE;
+    style.id = BINDING_STYLE_ID;
+    style.textContent = BINDING_STYLE_SOURCE;
     document.head.append(style);
   }
 
   function applyHeaderProperties() {
-    installHeaderStyle();
+    installBindingStyle();
     synchronizeHeaderThemeObserver();
     const effective = computeHeaderProperties();
     const root = document.documentElement;
@@ -494,6 +664,178 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
       }
     }
     return undefined;
+  }
+
+  function normalizeThreadTransformOutput(model, previous, rawOutput, extId) {
+    const previousById = deepItemsById(previous);
+    const builtInsById = deepItemsById(model.builtInCache);
+    const moved = nestedIds(rawOutput);
+    const seen = new Set();
+
+    function normalizeList(rawItems, depth) {
+      const result = [];
+      for (const raw of rawItems) {
+        if (!raw || typeof raw !== "object") continue;
+        if (raw.kind !== "action" && raw.kind !== "separator") continue;
+        if (typeof raw.id !== "string" || raw.id.length === 0) continue;
+        if (depth === 0 && moved.has(raw.id) && builtInsById.has(raw.id)) {
+          continue;
+        }
+        if (seen.has(raw.id)) {
+          warn("dropping duplicate thread-menu id: " + raw.id);
+          continue;
+        }
+
+        const existing =
+          builtInsById.get(raw.id) ?? previousById.get(raw.id) ?? null;
+        if (!existing && !raw.id.startsWith(extId + ".")) {
+          warn("dropping thread-menu item with foreign-namespace id: " + raw.id);
+          continue;
+        }
+
+        seen.add(raw.id);
+        let item = existing
+          ? mergeDescriptor(existing, raw)
+          : { ...raw, origin: extId };
+        if (item.kind === "action") {
+          if (item.icon !== undefined) {
+            if (
+              !item.icon ||
+              typeof item.icon !== "object" ||
+              Array.isArray(item.icon)
+            ) {
+              throw new TypeError("thread-menu icon must be an object");
+            }
+            if (
+              item.icon.kind === "native" &&
+              typeof item.icon.name === "string" &&
+              item.icon.name.length > 0
+            ) {
+              item.icon = Object.freeze({
+                kind: "native",
+                name: item.icon.name,
+              });
+            } else if (
+              item.icon.kind === "color" &&
+              typeof item.icon.light === "string" &&
+              CSS.supports("color", item.icon.light) &&
+              typeof item.icon.dark === "string" &&
+              CSS.supports("color", item.icon.dark)
+            ) {
+              item.icon = Object.freeze({
+                kind: "color",
+                light: item.icon.light,
+                dark: item.icon.dark,
+              });
+            } else if (
+              item.icon.kind === "svg" &&
+              typeof item.icon.source === "string"
+            ) {
+              const document = new DOMParser().parseFromString(
+                item.icon.source,
+                "image/svg+xml",
+              );
+              const root = document.documentElement;
+              if (
+                root.localName !== "svg" ||
+                root.namespaceURI !== "http://www.w3.org/2000/svg" ||
+                document.querySelector("parsererror")
+              ) {
+                throw new TypeError(
+                  "thread-menu SVG icon must contain one complete SVG element",
+                );
+              }
+              item.icon = Object.freeze({
+                kind: "svg",
+                source: item.icon.source,
+              });
+            } else {
+              throw new TypeError(
+                "thread-menu icon must be native, color, or SVG",
+              );
+            }
+          }
+          if (depth >= 1 && Array.isArray(item.items)) {
+            warn("dropping unsupported thread-menu nesting from: " + item.id);
+            delete item.items;
+          } else if (Array.isArray(item.items)) {
+            item.items = normalizeList(item.items, depth + 1);
+          }
+          if (
+            typeof raw.onClick === "function" &&
+            raw.onClick !== existing?.onClick
+          ) {
+            item.onClick = safeHandler(raw.onClick, raw.id);
+          }
+        }
+        result.push(item);
+      }
+      return result;
+    }
+
+    return normalizeList(rawOutput, 0);
+  }
+
+  function computeEffectiveThreadItems(model) {
+    let items = model.builtInCache;
+    for (const { extId, transform } of threadTransformers) {
+      try {
+        const output = transform(items, model.context);
+        if (!Array.isArray(output)) {
+          warn(
+            "thread-menu transformer from " +
+              extId +
+              " returned a non-array; skipped",
+          );
+          continue;
+        }
+        items = freezeItems(
+          normalizeThreadTransformOutput(model, items, output, extId),
+        );
+      } catch (error) {
+        warn("thread-menu transformer from " + extId + " threw; skipped", error);
+      }
+    }
+    return items;
+  }
+
+  function sameThreadDescriptor(left, right) {
+    if (!left || !right || left.kind !== right.kind || left.id !== right.id) {
+      return false;
+    }
+    if (left.kind === "separator") return true;
+    const fields = [
+      "label",
+      "rightIcon",
+      "subText",
+      "keyboardShortcut",
+      "disabled",
+      "onClick",
+      "origin",
+    ];
+    if (fields.some((field) => left[field] !== right[field])) return false;
+    if (left.icon !== right.icon) {
+      if (
+        !left.icon ||
+        !right.icon ||
+        left.icon.kind !== right.icon.kind ||
+        (left.icon.kind === "native" && left.icon.name !== right.icon.name) ||
+        (left.icon.kind === "color" &&
+          (left.icon.light !== right.icon.light ||
+            left.icon.dark !== right.icon.dark)) ||
+        (left.icon.kind === "svg" && left.icon.source !== right.icon.source)
+      ) {
+        return false;
+      }
+    }
+    const leftItems = Array.isArray(left.items) ? left.items : [];
+    const rightItems = Array.isArray(right.items) ? right.items : [];
+    return (
+      leftItems.length === rightItems.length &&
+      leftItems.every((item, index) =>
+        sameThreadDescriptor(item, rightItems[index]),
+      )
+    );
   }
 
   // ------------------------------------------------------------------
@@ -971,11 +1313,160 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     }, attempt === 0 ? 100 : 250);
   }
 
+  function fiberPropAbove(node, property) {
+    let fiber = fiberOf(node);
+    for (let hops = 0; fiber && hops < 40; hops += 1) {
+      if (fiber.memoizedProps?.[property] !== undefined) {
+        return fiber.memoizedProps[property];
+      }
+      fiber = fiber.return;
+    }
+    return undefined;
+  }
+
+  function threadIdForTrigger(trigger) {
+    return (
+      trigger?.getAttribute?.("data-cgptx-thread-id") ??
+      fiberPropAbove(trigger, "data-cgptx-thread-id") ??
+      null
+    );
+  }
+
+  function threadMenuTrigger(threadId) {
+    return (
+      Array.from(document.querySelectorAll("button")).find(
+        (button) => threadIdForTrigger(button) === threadId,
+      ) ?? null
+    );
+  }
+
+  function visibleThreadMenuColumn(threadId) {
+    const columns = Array.from(document.querySelectorAll('[role="menu"]'));
+    return (
+      columns.find((column) => {
+        if (column.offsetHeight === 0) return false;
+        const labelledBy = column.getAttribute("aria-labelledby");
+        const trigger = labelledBy ? document.getElementById(labelledBy) : null;
+        if (threadIdForTrigger(trigger) === threadId) return true;
+        return Array.from(column.querySelectorAll('[role="menuitem"]')).some(
+          (row) =>
+            row.getAttribute("data-cgptx-thread-id") === threadId ||
+            fiberPropAbove(row, "data-cgptx-thread-id") === threadId,
+        );
+      }) ?? null
+    );
+  }
+
+  function threadRowById(column, id) {
+    return (
+      Array.from(column?.querySelectorAll?.('[role="menuitem"]') ?? []).find(
+        (row) =>
+          row.getAttribute("data-cgptx-id") === id ||
+          fiberPropAbove(row, "data-cgptx-id") === id,
+      ) ?? null
+    );
+  }
+
+  function requestThreadFlyout(row) {
+    for (const type of ["pointermove", "pointerenter"]) {
+      row.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          isPrimary: true,
+          pointerType: "mouse",
+        }),
+      );
+    }
+    row.click();
+  }
+
+  function dynamicThreadCacheSignature(cache) {
+    return JSON.stringify(
+      Array.from(cache.entries()).map(([index, entry]) => ({
+        index,
+        id: entry.descriptor.id,
+        label: entry.descriptor.label,
+        disabled: entry.descriptor.disabled,
+        keyboardShortcut: entry.descriptor.keyboardShortcut,
+      })),
+    );
+  }
+
+  function captureDynamicThreadItemsFromOpenMenus() {
+    if (!native) return false;
+    let changed = false;
+    for (const model of threadModels.values()) {
+      const column = visibleThreadMenuColumn(model.context.threadId);
+      if (!column || model.opaqueCount === 0) continue;
+      const known = deepItemsById(model.builtInCache);
+      const dynamic = [];
+      for (const row of Array.from(column.querySelectorAll('[role="menuitem"]'))) {
+        if (row.closest('[role="menu"]') !== column) continue;
+        const fiber = itemFiberOf(row);
+        if (!fiber) continue;
+        const props = fiber.memoizedProps ?? {};
+        const message = messageOf(props.children) ?? messageBelowFiber(fiberOf(row));
+        if (
+          !isThreadMessageId(message?.id) ||
+          (known.has(message.id) && !model.opaqueIds.has(message.id))
+        ) {
+          continue;
+        }
+        const nativeHandler =
+          typeof props.onClick === "function"
+            ? props.onClick
+            : typeof props.onSelect === "function"
+              ? props.onSelect
+              : undefined;
+        dynamic.push({
+          descriptor: {
+            kind: "action",
+            id: message.id,
+            label: labelOfRow(row, props),
+            subText:
+              typeof props.SubText === "string" ? props.SubText : undefined,
+            keyboardShortcut:
+              typeof props.keyboardShortcut === "string"
+                ? props.keyboardShortcut
+                : undefined,
+            disabled: props.disabled === true,
+            onClick:
+              nativeHandler === props.onSelect
+                ? publicSelectAction(nativeHandler)
+                : nativeHandler,
+            origin: "app",
+          },
+          props: { ...props },
+        });
+      }
+
+      const nextCache = new Map();
+      for (
+        let index = 0;
+        index < model.opaqueCount && index < dynamic.length;
+        index += 1
+      ) {
+        nextCache.set(index, dynamic[index]);
+      }
+      if (
+        dynamicThreadCacheSignature(nextCache) !==
+        dynamicThreadCacheSignature(model.opaqueCache)
+      ) {
+        changed = true;
+      }
+      model.opaqueCache = nextCache;
+    }
+    if (changed) emitChange();
+    return changed;
+  }
+
   // ------------------------------------------------------------------
   // Native React rendering
   // ------------------------------------------------------------------
 
   const warnedIcons = new Set();
+  const nativeMenuNoop = () => {};
 
   function resolveIcon(name) {
     if (!name) return undefined;
@@ -986,6 +1477,32 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
       warn("unknown app icon: " + name);
     }
     return undefined;
+  }
+
+  function resolveThreadIcon(icon) {
+    if (icon.kind === "native") return resolveIcon(icon.name);
+    if (icon.kind === "svg") {
+      return function ThreadMenuSvgIcon({ className }) {
+        return native.jsx("span", {
+          "aria-hidden": true,
+          "data-cgptx-thread-menu-svg-icon": "",
+          className: `${className ?? ""} inline-flex items-center justify-center`,
+          dangerouslySetInnerHTML: { __html: icon.source },
+        });
+      };
+    }
+    installBindingStyle();
+    return function ThreadMenuColorIcon() {
+      return native.jsx("span", {
+        "aria-hidden": true,
+        "data-cgptx-thread-menu-color-icon": "",
+        className: "block size-3 rounded-full",
+        style: {
+          "--cgptx-thread-menu-color-light": icon.light,
+          "--cgptx-thread-menu-color-dark": icon.dark,
+        },
+      });
+    };
   }
 
   function renderAction(item, parent = false, nested = false) {
@@ -1127,6 +1644,312 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     return native.jsx(tree.type, props, tree.key ?? undefined);
   }
 
+  function threadActionDescriptor(element, id, items) {
+    const props = element.props ?? {};
+    const nativeHandler =
+      typeof props.onClick === "function"
+        ? props.onClick
+        : typeof props.onSelect === "function"
+          ? props.onSelect
+          : undefined;
+    return {
+      kind: "action",
+      id,
+      label:
+        messageOf(props.children)?.defaultMessage ??
+        messageOf(props.label)?.defaultMessage ??
+        (typeof props.children === "string"
+          ? props.children
+          : typeof props.label === "string"
+            ? props.label
+            : id),
+      subText: typeof props.SubText === "string" ? props.SubText : undefined,
+      keyboardShortcut:
+        typeof props.keyboardShortcut === "string"
+          ? props.keyboardShortcut
+          : undefined,
+      disabled: props.disabled === true,
+      onClick:
+        nativeHandler === props.onSelect
+          ? publicSelectAction(nativeHandler)
+          : nativeHandler,
+      ...(items ? { items } : {}),
+      origin: "app",
+    };
+  }
+
+  function collectThreadSourceEntries(
+    value,
+    model,
+    entries,
+    views,
+    state,
+    depth = 0,
+  ) {
+    if (Array.isArray(value)) {
+      for (const child of value) {
+        collectThreadSourceEntries(
+          child,
+          model,
+          entries,
+          views,
+          state,
+          depth,
+        );
+      }
+      return;
+    }
+    if (!isElement(value)) return;
+    const props = value.props ?? {};
+
+    if (value.type === native.Item) {
+      const message = messageOf(props.children);
+      if (!isThreadMessageId(message?.id)) return;
+      const descriptor = threadActionDescriptor(value, message.id);
+      entries.push({ kind: "item", descriptor });
+      views.set(message.id, { kind: "action", props: { ...props } });
+      return;
+    }
+
+    if (value.type === native.Separator) {
+      const id = "threadHeader.separator-" + state.separatorIndex.toString();
+      state.separatorIndex += 1;
+      const descriptor = { kind: "separator", id, origin: "app" };
+      entries.push({ kind: "item", descriptor });
+      views.set(id, { kind: "separator", props: { ...props } });
+      return;
+    }
+
+    if (value.type === native.FlyoutSubmenuItem) {
+      const message = messageOf(props.label);
+      if (!isThreadMessageId(message?.id)) return;
+      const childEntries = [];
+      collectThreadSourceEntries(
+        props.children,
+        model,
+        childEntries,
+        views,
+        state,
+        depth + 1,
+      );
+      const descriptor = threadActionDescriptor(
+        value,
+        message.id,
+        childEntries
+          .filter((entry) => entry.kind === "item")
+          .map((entry) => entry.descriptor),
+      );
+      entries.push({ kind: "item", descriptor });
+      views.set(message.id, { kind: "flyout", props: { ...props } });
+      return;
+    }
+
+    if (value.type === native.React.Fragment) {
+      collectThreadSourceEntries(
+        props.children,
+        model,
+        entries,
+        views,
+        state,
+        depth,
+      );
+      return;
+    }
+
+    if (depth === 0) {
+      const opaqueIndex = state.opaqueCount;
+      state.opaqueCount += 1;
+      const cached = model.opaqueCache.get(opaqueIndex);
+      if (cached) {
+        entries.push({ kind: "item", descriptor: cached.descriptor });
+        views.set(cached.descriptor.id, {
+          kind: "action",
+          props: cached.props,
+          sourceElement: value,
+          opaque: true,
+        });
+        state.opaqueIds.add(cached.descriptor.id);
+      } else {
+        entries.push({ kind: "opaque", element: value });
+      }
+    }
+  }
+
+  function updateThreadModel(context, children) {
+    let model = threadModels.get(context.threadId);
+    if (!model) {
+      model = {
+        context,
+        builtInCache: Object.freeze([]),
+        builtInViews: new Map(),
+        opaqueCache: new Map(),
+        opaqueCount: 0,
+        opaqueIds: new Set(),
+        unboundOpaque: [],
+      };
+      threadModels.set(context.threadId, model);
+    }
+    model.context = context;
+    const entries = [];
+    const views = new Map();
+    const state = {
+      separatorIndex: 0,
+      opaqueCount: 0,
+      opaqueIds: new Set(),
+    };
+    collectThreadSourceEntries(children, model, entries, views, state);
+    model.builtInCache = freezeItems(
+      entries
+        .filter((entry) => entry.kind === "item")
+        .map((entry) => entry.descriptor),
+    );
+    model.builtInViews = views;
+    model.opaqueCount = state.opaqueCount;
+    model.opaqueIds = state.opaqueIds;
+    model.unboundOpaque = entries.flatMap((entry, index) => {
+      if (entry.kind !== "opaque") return [];
+      const next = entries.slice(index + 1).find((candidate) =>
+        candidate.kind === "item",
+      );
+      return [{ element: entry.element, beforeId: next?.descriptor.id }];
+    });
+    return model;
+  }
+
+  function renderThreadLeaf(model, item) {
+    const view = model.builtInViews.get(item.id);
+    const builtIn = deepItemsById(model.builtInCache).get(item.id);
+    if (
+      view?.opaque &&
+      view.sourceElement &&
+      sameThreadDescriptor(item, builtIn)
+    ) {
+      return view.sourceElement;
+    }
+
+    const props = view?.kind === "action" ? { ...view.props } : {};
+    props.children =
+      builtIn && item.label === builtIn.label
+        ? view.props.children
+        : item.label;
+    props.disabled = item.disabled === true;
+    props["data-cgptx-id"] = item.id;
+    props["data-cgptx-origin"] = item.origin ?? "";
+    props["data-cgptx-thread-id"] = model.context.threadId;
+
+    if (item.icon !== undefined) props.LeftIcon = resolveThreadIcon(item.icon);
+    else if (!view) delete props.LeftIcon;
+    if (item.rightIcon !== undefined) {
+      props.RightIcon = resolveIcon(item.rightIcon);
+      delete props.rightIcon;
+    } else if (!view) {
+      delete props.RightIcon;
+      delete props.rightIcon;
+    }
+    if (item.subText !== undefined) props.SubText = item.subText;
+    else if (!view) delete props.SubText;
+    if (item.keyboardShortcut !== undefined) {
+      props.keyboardShortcut = item.keyboardShortcut;
+    } else if (!view) {
+      delete props.keyboardShortcut;
+    }
+
+    const preservesNativeHandler = view && builtIn?.onClick === item.onClick;
+    if (!preservesNativeHandler) {
+      delete props.onClick;
+      delete props.onSelect;
+      if (typeof item.onClick === "function") props.onClick = item.onClick;
+      else if (!view && item.disabled !== true) props.onSelect = nativeMenuNoop;
+    }
+    return native.jsx(native.Item, props, item.id);
+  }
+
+  function renderThreadItem(model, item) {
+    if (item.kind === "separator") {
+      const view = model.builtInViews.get(item.id);
+      return native.jsx(
+        native.Separator,
+        view?.kind === "separator" ? view.props : {},
+        item.id,
+      );
+    }
+
+    const explicitItems = Array.isArray(item.items) ? item.items : [];
+    if (explicitItems.length > 0) {
+      const view = model.builtInViews.get(item.id);
+      const builtIn = deepItemsById(model.builtInCache).get(item.id);
+      const props = view?.kind === "flyout" ? { ...view.props } : {};
+      props.label =
+        builtIn && item.label === builtIn.label ? view.props.label : item.label;
+      props.disabled = item.disabled === true;
+      props["data-cgptx-id"] = item.id;
+      props["data-cgptx-origin"] = item.origin ?? "";
+      props["data-cgptx-thread-id"] = model.context.threadId;
+      if (item.icon !== undefined) props.LeftIcon = resolveThreadIcon(item.icon);
+      else if (!view) delete props.LeftIcon;
+      delete props.onSelect;
+      props.children = explicitItems.map((child) =>
+        renderThreadItem(model, child),
+      );
+      return native.jsx(native.FlyoutSubmenuItem, props, item.id);
+    }
+    return renderThreadLeaf(model, item);
+  }
+
+  function renderThreadMenuRoot(tree, context) {
+    const model = updateThreadModel(context, tree.props.children);
+    const effective = computeEffectiveThreadItems(model);
+    const rendered = effective.map((item) => ({
+      id: item.id,
+      element: renderThreadItem(model, item),
+    }));
+    for (const opaque of model.unboundOpaque) {
+      const index = rendered.findIndex((entry) => entry.id === opaque.beforeId);
+      rendered.splice(index < 0 ? rendered.length : index, 0, {
+        id: null,
+        element: opaque.element,
+      });
+    }
+    const trigger = tree.props.triggerButton;
+    const triggerButton = isElement(trigger)
+      ? native.jsx(
+          trigger.type,
+          {
+            ...trigger.props,
+            "data-cgptx-thread-id": context.threadId,
+          },
+          trigger.key ?? undefined,
+        )
+      : trigger;
+    return native.jsx(
+      tree.type,
+      {
+        ...tree.props,
+        triggerButton,
+        children: rendered.map((entry) => entry.element),
+      },
+      tree.key ?? undefined,
+    );
+  }
+
+  function renderThreadTree(value, context) {
+    if (Array.isArray(value)) {
+      return value.map((child) => renderThreadTree(child, context));
+    }
+    if (!isElement(value)) return value;
+    if (value.type === native.MenuRoot) {
+      return renderThreadMenuRoot(value, context);
+    }
+    if (value.props?.children === undefined) return value;
+    const children = renderThreadTree(value.props.children, context);
+    if (children === value.props.children) return value;
+    return native.jsx(
+      value.type,
+      { ...value.props, children },
+      value.key ?? undefined,
+    );
+  }
+
   function isProfileRootProps(props) {
     const child = props?.children;
     if (
@@ -1137,6 +1960,90 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
       return true;
     }
     return containsProfileMessage(child);
+  }
+
+  function ColorPickerSurface({ request }) {
+    const { React } = native;
+    const [color, setColor] = React.useState(request.initialColor);
+    const surface = React.useRef(null);
+    const changeColor = (nextColor) => {
+      const normalized = normalizePickerColor(nextColor);
+      setColor(normalized);
+      previewColorPicker(request, normalized);
+    };
+    React.useEffect(() => {
+      const finishOutside = (event) => {
+        if (!surface.current.contains(event.target)) {
+          settleColorPicker(request, request.color);
+        }
+      };
+      const finishFromKeyboard = (event) => {
+        if (event.key !== "Escape" && event.key !== "Enter") return;
+        event.preventDefault();
+        event.stopPropagation();
+        settleColorPicker(
+          request,
+          event.key === "Escape" ? undefined : request.color,
+        );
+      };
+      addEventListener("pointerdown", finishOutside, true);
+      addEventListener("keydown", finishFromKeyboard, true);
+      return () => {
+        removeEventListener("pointerdown", finishOutside, true);
+        removeEventListener("keydown", finishFromKeyboard, true);
+      };
+    }, [request]);
+    React.useLayoutEffect(() => {
+      surface.current.querySelector('[role="slider"]').focus();
+    }, []);
+    const headerBottom = document
+      .querySelector("header.app-header-tint")
+      .getBoundingClientRect().bottom;
+    return native.jsx("div", {
+      ref: surface,
+      role: "dialog",
+      "aria-label": request.title,
+      "data-cgptx-native-color-picker": "",
+      style: {
+        position: "fixed",
+        zIndex: 10000,
+        top: `${headerBottom + 8}px`,
+        left: `${request.left}px`,
+        width: "200px",
+        height: "200px",
+      },
+      children: native.jsx(native.ColorPicker, {
+        className: "h-full w-full",
+        color,
+        onChange: changeColor,
+      }),
+    });
+  }
+
+  function ColorPickerHost() {
+    native.React.useSyncExternalStore(
+      subscribe,
+      () => renderVersion,
+      () => renderVersion,
+    );
+    const request = activeColorPicker;
+    return request
+      ? native.jsx(ColorPickerSurface, { request }, request.id)
+      : null;
+  }
+
+  function mountColorPickerHost() {
+    const container = document.createElement("div");
+    container.setAttribute("data-cgptx-color-picker-host", "");
+    document.body.append(container);
+    native.ReactDOM.createRoot(container, {
+      onUncaughtError(error) {
+        colorPickerRenderError = String(error?.stack ?? error);
+        warn("native color-picker host failed", error);
+      },
+    }).render(
+      native.jsx(ColorPickerHost, {}),
+    );
   }
 
   function installJsxHook() {
@@ -1163,6 +2070,26 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     function useNativeProfileNavigation() {
       const navigate = native.useNavigate();
       openNativeProfile = () => navigate("/settings/profile");
+    }
+
+    function ThreadMenuBoundary({ child }) {
+      React.useSyncExternalStore(
+        subscribe,
+        () => renderVersion,
+        () => renderVersion,
+      );
+      const context = Object.freeze({
+        threadId: child.props.conversationId,
+        title: typeof child.props.title === "string" ? child.props.title : "",
+        ...(typeof child.props.cwd === "string" && child.props.cwd.length > 0
+          ? { workingDirectory: child.props.cwd }
+          : {}),
+      });
+      React.useLayoutEffect(() => {
+        setCurrentThread(context);
+        return () => clearCurrentThreadAfterUnmount(context.threadId);
+      }, [context.threadId, context.title, context.workingDirectory]);
+      return renderThreadTree(child.type(child.props), context);
     }
 
     function ProfileComponentBoundary({ child }) {
@@ -1202,6 +2129,17 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     function wrap(original) {
       return function cgptxJsx(type, props, key) {
         if (
+          type === native.ThreadMenu &&
+          typeof props?.conversationId === "string" &&
+          props.conversationId.length > 0
+        ) {
+          return originalJsx(
+            ThreadMenuBoundary,
+            { child: original(type, props, key) },
+            key,
+          );
+        }
+        if (
           type === MenuRoot &&
           isProfileRootProps(props) &&
           props.children?.type !== ProfileComponentBoundary &&
@@ -1237,6 +2175,10 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
       iconModule,
       profileIconModule,
       plusIconModule,
+      paletteIconModule,
+      colorPickerModule,
+      reactDomModule,
+      threadMenuModule,
       authModule,
       authContextModule,
       browserModule,
@@ -1247,6 +2189,10 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
       import(ICON_MODULE),
       import(PROFILE_ICON_MODULE),
       import(PLUS_ICON_MODULE),
+      import(PALETTE_ICON_MODULE),
+      import(COLOR_PICKER_MODULE),
+      import(REACT_DOM_MODULE),
+      import(THREAD_MENU_MODULE),
       import(AUTH_MODULE),
       import(AUTH_CONTEXT_MODULE),
       import(BROWSER_MODULE),
@@ -1258,6 +2204,9 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     iconModule.s();
     profileIconModule.i();
     plusIconModule.t();
+    paletteIconModule.n();
+    colorPickerModule.i();
+    threadMenuModule.n();
     const jsxRuntime = coreModule.zt();
     const PlusIcon = ({ className = "", ...props }) =>
       jsxRuntime.jsx(plusIconModule.n, {
@@ -1267,12 +2216,16 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
       });
     native = {
       React: coreModule.dn(),
+      ReactDOM: reactDomModule.t(),
       jsxRuntime,
       jsx: jsxRuntime.jsx,
       Item: menuModule.i,
       Separator: menuModule.o,
       SubmenuItem: menuModule.n,
+      FlyoutSubmenuItem: menuModule.r.FlyoutSubmenuItem,
       MenuRoot: menuModule.t,
+      ThreadMenu: threadMenuModule.t,
+      ColorPicker: colorPickerModule.r,
       startChatGptSignIn: authModule.o,
       decorateAuthUrl: authModule.t,
       useUpdateAuthNonce: authContextModule.g,
@@ -1286,16 +2239,19 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
         ["chevron-right", iconModule.o],
         ["person", profileIconModule.r],
         ["plus", PlusIcon],
+        ["palette", paletteIconModule.t],
       ]),
     };
     installJsxHook();
+    mountColorPickerHost();
 
     const observer = new MutationObserver(() => {
       queueMicrotask(() => {
         const column = visibleMenuColumn();
-        if (!column) return;
-        if (builtInCache.length === 0) captureBuiltInsFromOpenMenu();
-        if (pendingExpandedId) {
+        if (column && builtInCache.length === 0) {
+          captureBuiltInsFromOpenMenu();
+        }
+        if (column && pendingExpandedId) {
           const row = column.querySelector(
             '[data-cgptx-id="' +
               CSS.escape(pendingExpandedId) +
@@ -1304,6 +2260,20 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
           if (row) {
             pendingExpandedId = null;
             row.click();
+          }
+        }
+        captureDynamicThreadItemsFromOpenMenus();
+        if (pendingThreadExpanded) {
+          const threadColumn = visibleThreadMenuColumn(
+            pendingThreadExpanded.threadId,
+          );
+          const row = threadRowById(
+            threadColumn,
+            pendingThreadExpanded.id,
+          );
+          if (row) {
+            pendingThreadExpanded = null;
+            requestThreadFlyout(row);
           }
         }
       });
@@ -1381,6 +2351,63 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     });
   }
 
+  function makeThreadMenuApi(extId) {
+    return Object.freeze({
+      transformItems(transform) {
+        if (typeof transform !== "function") {
+          throw new TypeError("thread transformItems requires a function");
+        }
+        const entry = { extId, transform };
+        threadTransformers.push(entry);
+        emitChange();
+        let disposed = false;
+        return Object.freeze({
+          dispose() {
+            if (disposed) return;
+            disposed = true;
+            const index = threadTransformers.indexOf(entry);
+            if (index >= 0) threadTransformers.splice(index, 1);
+            emitChange();
+          },
+        });
+      },
+
+      getItems(threadId) {
+        const model = threadModels.get(threadId);
+        return model ? computeEffectiveThreadItems(model) : Object.freeze([]);
+      },
+
+      activateItem(threadId, id) {
+        const model = threadModels.get(threadId);
+        if (!model) return false;
+        const item = findItemDeep(computeEffectiveThreadItems(model), id);
+        if (!item || item.kind !== "action" || item.disabled === true) {
+          return false;
+        }
+        if (Array.isArray(item.items) && item.items.length > 0) {
+          const column = visibleThreadMenuColumn(threadId);
+          const row = threadRowById(column, id);
+          if (row) {
+            requestThreadFlyout(row);
+            return true;
+          }
+          const trigger = threadMenuTrigger(threadId);
+          if (!trigger) return false;
+          pendingThreadExpanded = { threadId, id };
+          pressTrigger(trigger);
+          return true;
+        }
+        if (typeof item.onClick !== "function") return false;
+        try {
+          item.onClick();
+        } catch (error) {
+          warn("thread-menu onClick of " + id + " threw", error);
+        }
+        return true;
+      },
+    });
+  }
+
   function makeAuthenticationApi(extId) {
     return Object.freeze({
       async getCurrent() {
@@ -1428,6 +2455,36 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     });
   }
 
+  function makeThreadsApi(extId) {
+    return Object.freeze({
+      getCurrent() {
+        return currentThread;
+      },
+
+      subscribe(listener) {
+        if (typeof listener !== "function") {
+          throw new TypeError("current-thread listener must be a function");
+        }
+        const record = { extId, listener };
+        currentThreadListeners.push(record);
+        try {
+          listener(currentThread);
+        } catch (error) {
+          warn(`current-thread listener of ${extId} threw`, error);
+        }
+        let disposed = false;
+        return Object.freeze({
+          dispose() {
+            if (disposed) return;
+            disposed = true;
+            const index = currentThreadListeners.indexOf(record);
+            if (index >= 0) currentThreadListeners.splice(index, 1);
+          },
+        });
+      },
+    });
+  }
+
   function makeHeaderAppearanceApi(extId) {
     return Object.freeze({
       registerProperties(properties) {
@@ -1461,15 +2518,27 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     });
   }
 
+  function makeAppearanceApi(extId) {
+    return Object.freeze({
+      header: makeHeaderAppearanceApi(extId),
+      getColorScheme() {
+        return getHeaderTheme();
+      },
+      openColorPicker(options) {
+        return openColorPicker(extId, options);
+      },
+    });
+  }
+
   function makeApi(extId) {
     return Object.freeze({
       menus: Object.freeze({
         profile: makeProfileMenuApi(extId),
+        thread: makeThreadMenuApi(extId),
       }),
+      threads: makeThreadsApi(extId),
       authentication: makeAuthenticationApi(extId),
-      appearance: Object.freeze({
-        header: makeHeaderAppearanceApi(extId),
-      }),
+      appearance: makeAppearanceApi(extId),
     });
   }
 
@@ -1494,6 +2563,13 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
       visibleMenuColumn,
       warmModel,
       getCache: () => builtInCache,
+      getThreadModels: () => threadModels,
+      computeEffectiveThreadItems: (threadId) => {
+        const model = threadModels.get(threadId);
+        return model ? computeEffectiveThreadItems(model) : Object.freeze([]);
+      },
+      visibleThreadMenuColumn,
+      captureDynamicThreadItemsFromOpenMenus,
       nativeReady: () => native !== null,
       authenticationReady: () => typeof refreshAuthentication === "function",
       authenticationRefreshCount: () => authenticationRefreshCount,
@@ -1507,6 +2583,19 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
       nativeSignInStartCount: () => nativeSignInStartCount,
       inspectAuthentication,
       computeHeaderProperties,
+      getColorScheme: getHeaderTheme,
+      openColorPicker: (options) =>
+        openColorPicker("api-ui-test", options),
+      activeColorPicker: () =>
+        activeColorPicker
+          ? Object.freeze({
+              id: activeColorPicker.id,
+              color: activeColorPicker.color,
+              extId: activeColorPicker.extId,
+              queued: colorPickerQueue.length,
+            })
+          : null,
+      colorPickerRenderError: () => colorPickerRenderError,
     }),
   });
 

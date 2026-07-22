@@ -273,6 +273,11 @@ test("a successful authentication change refreshes the current and stored accoun
         getItems() { return []; },
         activateItem() { return false; },
       },
+      thread: {
+        transformItems() { return { dispose() {} }; },
+        getItems() { return []; },
+        activateItem() { return false; },
+      },
     },
   } satisfies PlatformApi;
 
