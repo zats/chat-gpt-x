@@ -29,6 +29,73 @@
   const QUERY_MODULE =
     "./assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~ngwudnyz-DEp-3H1N.js";
   const AUTHENTICATION_RESTART_TIMEOUT_MS = 20_000;
+  const HEADER_BACKGROUND_PROPERTY = "--header-background-color";
+  const HEADER_FOREGROUND_PROPERTY = "--header-foreground-color";
+  const HEADER_PROPERTIES = Object.freeze([
+    HEADER_BACKGROUND_PROPERTY,
+    HEADER_FOREGROUND_PROPERTY,
+  ]);
+  const HEADER_STYLE_ID = "cgptx-header-appearance";
+  const HEADER_STYLE_SOURCE = `
+html[data-cgptx-header-background-color] header.app-header-tint {
+  background-color: transparent !important;
+}
+html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(2),
+html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3) {
+  background-color: var(--header-background-color) !important;
+}
+html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3) {
+  box-shadow: -8px 0 var(--header-background-color);
+}
+html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
+  [data-app-shell-tabs="true"] > .h-toolbar,
+html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
+  [data-app-shell-tabs="true"] > .h-toolbar [class~="bg-token-main-surface-primary"] {
+  background-color: var(--header-background-color) !important;
+}
+html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
+  [data-app-shell-tab-controller="right"] > [role="button"] {
+  --app-shell-tab-background: color-mix(
+    in srgb,
+    var(--header-foreground-color, var(--color-token-foreground)) 12%,
+    var(--header-background-color)
+  ) !important;
+}
+html[data-cgptx-header-foreground-color] header.app-header-tint {
+  --color-token-foreground: var(--header-foreground-color);
+  --color-token-text-primary: var(--header-foreground-color);
+  --color-token-text-secondary: color-mix(
+    in srgb,
+    var(--header-foreground-color) 76%,
+    transparent
+  );
+  --color-token-text-tertiary: color-mix(
+    in srgb,
+    var(--header-foreground-color) 72%,
+    transparent
+  );
+}
+html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-panel"]
+  [data-app-shell-tabs="true"] > .h-toolbar [role="tab"] {
+  color: var(--header-foreground-color) !important;
+}
+html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-panel"]
+  [data-app-shell-tabs="true"] > .h-toolbar [role="tab"][aria-selected="false"] {
+  color: color-mix(
+    in srgb,
+    var(--header-foreground-color) 76%,
+    transparent
+  ) !important;
+}
+html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-panel"]
+  [data-app-shell-tabs="true"] > .h-toolbar button:not([role="tab"]) {
+  color: color-mix(
+    in srgb,
+    var(--header-foreground-color) 70%,
+    transparent
+  ) !important;
+}
+`;
 
   function log(...args) {
     console.log(LOG_PREFIX, ...args);
@@ -115,6 +182,7 @@
 
   const transformers = [];
   const authenticationListeners = [];
+  const headerPropertyRegistrations = [];
   const extensions = new Map();
   const safeHandlers = new WeakSet();
   const renderListeners = new Set();
@@ -134,6 +202,8 @@
   let authenticationRefreshCount = 0;
   let authenticationAccountInfoResetCount = 0;
   let authenticationAppServerRestartCount = 0;
+  let headerThemeObserver = null;
+  let observedHeaderTheme = null;
 
   function subscribe(listener) {
     renderListeners.add(listener);
@@ -151,6 +221,137 @@
         record.listener();
       } catch (error) {
         warn(`authentication listener of ${record.extId} threw`, error);
+      }
+    }
+  }
+
+  function normalizeHeaderProperties(properties) {
+    if (
+      !properties ||
+      typeof properties !== "object" ||
+      Array.isArray(properties)
+    ) {
+      throw new TypeError("header properties must be an object");
+    }
+    const normalized = {};
+    for (const [property, value] of Object.entries(properties)) {
+      if (!HEADER_PROPERTIES.includes(property)) {
+        throw new TypeError("unknown header property: " + property);
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new TypeError(property + " must provide light and dark colors");
+      }
+      const keys = Object.keys(value);
+      if (
+        keys.length !== 2 ||
+        !Object.hasOwn(value, "light") ||
+        !Object.hasOwn(value, "dark")
+      ) {
+        throw new TypeError(property + " must provide only light and dark colors");
+      }
+      for (const theme of ["light", "dark"]) {
+        if (
+          typeof value[theme] !== "string" ||
+          !CSS.supports("color", value[theme])
+        ) {
+          throw new TypeError(
+            property + "." + theme + " must be a valid CSS color",
+          );
+        }
+      }
+      normalized[property] = Object.freeze({
+        light: value.light,
+        dark: value.dark,
+      });
+    }
+    return Object.freeze(normalized);
+  }
+
+  function computeHeaderThemeProperties() {
+    const values = new Map();
+    for (const registration of headerPropertyRegistrations) {
+      for (const property of HEADER_PROPERTIES) {
+        if (Object.hasOwn(registration.properties, property)) {
+          values.set(property, registration.properties[property]);
+        }
+      }
+    }
+    const themed = {};
+    for (const property of HEADER_PROPERTIES) {
+      if (values.has(property)) themed[property] = values.get(property);
+    }
+    return Object.freeze(themed);
+  }
+
+  function getHeaderTheme() {
+    const root = document.documentElement;
+    if (root.classList.contains("electron-dark")) return "dark";
+    if (root.classList.contains("electron-light")) return "light";
+    throw new Error("ChatGPT header theme is unavailable");
+  }
+
+  function computeHeaderProperties() {
+    const themed = computeHeaderThemeProperties();
+    if (Object.keys(themed).length === 0) return Object.freeze({});
+    const theme = getHeaderTheme();
+    const effective = {};
+    for (const property of HEADER_PROPERTIES) {
+      if (Object.hasOwn(themed, property)) {
+        effective[property] = themed[property][theme];
+      }
+    }
+    return Object.freeze(effective);
+  }
+
+  function synchronizeHeaderThemeObserver() {
+    const hasProperties = headerPropertyRegistrations.some(
+      (registration) => Object.keys(registration.properties).length > 0,
+    );
+    if (!hasProperties) {
+      headerThemeObserver?.disconnect();
+      headerThemeObserver = null;
+      observedHeaderTheme = null;
+      return;
+    }
+    if (headerThemeObserver) return;
+    observedHeaderTheme = getHeaderTheme();
+    headerThemeObserver = new MutationObserver(() => {
+      const theme = getHeaderTheme();
+      if (theme === observedHeaderTheme) return;
+      observedHeaderTheme = theme;
+      applyHeaderProperties();
+    });
+    headerThemeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+  }
+
+  function installHeaderStyle() {
+    if (document.getElementById(HEADER_STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = HEADER_STYLE_ID;
+    style.textContent = HEADER_STYLE_SOURCE;
+    document.head.append(style);
+  }
+
+  function applyHeaderProperties() {
+    installHeaderStyle();
+    synchronizeHeaderThemeObserver();
+    const effective = computeHeaderProperties();
+    const root = document.documentElement;
+    for (const property of HEADER_PROPERTIES) {
+      const value = effective[property];
+      const attribute =
+        property === HEADER_BACKGROUND_PROPERTY
+          ? "data-cgptx-header-background-color"
+          : "data-cgptx-header-foreground-color";
+      if (value === undefined) {
+        root.style.removeProperty(property);
+        root.removeAttribute(attribute);
+      } else {
+        root.style.setProperty(property, value);
+        root.setAttribute(attribute, "");
       }
     }
   }
@@ -1227,12 +1428,48 @@
     });
   }
 
+  function makeHeaderAppearanceApi(extId) {
+    return Object.freeze({
+      registerProperties(properties) {
+        const registration = {
+          extId,
+          properties: normalizeHeaderProperties(properties),
+        };
+        headerPropertyRegistrations.push(registration);
+        applyHeaderProperties();
+        let disposed = false;
+        return Object.freeze({
+          update(nextProperties) {
+            if (disposed) return;
+            registration.properties =
+              normalizeHeaderProperties(nextProperties);
+            applyHeaderProperties();
+          },
+          dispose() {
+            if (disposed) return;
+            disposed = true;
+            const index = headerPropertyRegistrations.indexOf(registration);
+            if (index >= 0) headerPropertyRegistrations.splice(index, 1);
+            applyHeaderProperties();
+          },
+        });
+      },
+
+      getProperties() {
+        return computeHeaderProperties();
+      },
+    });
+  }
+
   function makeApi(extId) {
     return Object.freeze({
       menus: Object.freeze({
         profile: makeProfileMenuApi(extId),
       }),
       authentication: makeAuthenticationApi(extId),
+      appearance: Object.freeze({
+        header: makeHeaderAppearanceApi(extId),
+      }),
     });
   }
 
@@ -1269,6 +1506,7 @@
       nativeAccount: () => nativeAppServerRegistry?.getDefault().getAccount(),
       nativeSignInStartCount: () => nativeSignInStartCount,
       inspectAuthentication,
+      computeHeaderProperties,
     }),
   });
 

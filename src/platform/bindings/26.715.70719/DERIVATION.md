@@ -44,10 +44,25 @@ The version-independent runtime preload exposes a narrow request bridge. The mai
 
 `getCurrent` and `inspect` derive identity from the opaque credentials without exposing their schema to extensions. The public account label prefers email, then account name, then user id. `startSignIn` starts the native login flow and processes successful completion through the stock post-login sequence. `replaceCurrent` commits credentials, waits for native app-server reinitialization, and refreshes renderer authentication state. Successful sign-in and replacement notify registered public `onDidChange` listeners in registration order with error isolation.
 
+## appearance.header
+
+The native full-width header is `header.app-header-tint`. Its second direct layout region owns the left header and its third owns the thread header. The right panel is `aside[data-app-shell-focus-area="right-panel"]`; its tab strip is the direct `.h-toolbar` child of `[data-app-shell-tabs="true"]`.
+
+The full-width header retains its native isolation and stacking. When `--header-background-color` is active, the binding leaves that header transparent and paints its second and third direct regions. An eight-point shadow fills their native gap. The right-panel tab toolbar and its nested `bg-token-main-surface-primary` surfaces use the same property. This keeps the right-side header buttons and side-panel tabs above their original hit-test surfaces.
+
+`--header-foreground-color` overrides the native foreground tokens inside the full header and directly colors the right-panel tab and action controls. The active tab background is derived with `color-mix`. Selectors stop at the tab toolbar, so the browser/content toolbar below it retains ChatGPT's own foreground colors.
+
+The renderer binding owns the stylesheet and exposes ordered, updateable registrations. Later registrations win independently per property. Each property requires `light` and `dark` colors. An empty registration or update leaves ChatGPT's native values and property ownership unchanged.
+
+ChatGPT's preload exposes `getSystemThemeVariant` and `subscribeToSystemThemeVariant`. The renderer's theme resolver in `app-initial~artifact-tab-content.electron~app-main~page~pull-request-code-review~new-thread~b942ryfo-B5RKHLXM.js` combines that signal with the app's `system | light | dark` preference, then toggles `electron-light` and `electron-dark` on the document root and reapplies its native color tokens. The binding observes those same root classes and selects the matching registered values, so System mode follows device appearance changes while explicit ChatGPT themes remain authoritative.
+
+Registration, theme change, update, disposal, and direct changes to an active custom property repaint through CSS without remounting app UI.
+
 ## Validation
 
-- Stable public API suite: 20/20.
-- Version-specific native UI suite with workspace and alternate-account fixtures: 30/30.
+- Stable public API suite: 23/23.
+- Version-specific native UI suite with alternate-account fixtures: 36/36.
+- Computer Use: green background and white foreground were visible on both the thread header and browser side-panel tab header; all tab, add, expand, bottom-panel, and side-panel controls remained visible.
 - Multiple-accounts and shared-storage unit tests: 17/17.
 - Live multiple-accounts UI: the native account row rendered with one chevron; its children used the same native nested Item presentation as Usage remaining and appeared as `Profile`, saved accounts, then `Add account`.
 - Native Profile icon: the workspace-account fixture rendered the extension's nested Profile row with the exact Settings → Profile icon even though ChatGPT omitted its own profile-dropdown row.

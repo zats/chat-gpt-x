@@ -96,6 +96,19 @@ async function validateUi(
     node?.getAttribute('data-cgptx-id') ?? node?.getAttribute('data-cgptx');
   const idOfBlock = (block) =>
     idOf(block) ?? idOf(block.querySelector(':scope > [data-cgptx-id]'));
+  const activateButton = (button) => {
+    for (const type of ['pointerdown', 'pointerup', 'click']) {
+      button?.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          isPrimary: true,
+          button: 0,
+          pointerType: 'mouse',
+        }),
+      );
+    }
+  };
   const openProfile = async () => {
     const trigger = Array.from(document.querySelectorAll('button')).find((button) =>
       button.querySelector('img.rounded-full'),
@@ -115,6 +128,241 @@ async function validateUi(
     await sleep(350);
     return globalThis.__CGPTX_HOST__?._debug.visibleMenuColumn();
   };
+
+  let headerAppearance;
+  globalThis.__CGPTX_HOST__.registerExtension(`header-appearance-ui-fixture-${Date.now()}`, {
+    activate(api) {
+      headerAppearance = api.appearance.header;
+    },
+  });
+  const root = document.documentElement;
+  const originalHeaderTheme = root.classList.contains('electron-dark')
+    ? 'dark'
+    : root.classList.contains('electron-light')
+      ? 'light'
+      : null;
+  if (!originalHeaderTheme) throw new Error('ChatGPT theme class missing');
+  const headerColors = {
+    light: {
+      background: 'rgb(220, 252, 231)',
+      foreground: 'rgb(5, 46, 22)',
+    },
+    dark: {
+      background: 'rgb(0, 80, 45)',
+      foreground: 'rgb(255, 255, 255)',
+    },
+  };
+  const appHeader = document.querySelector('header.app-header-tint');
+  if (!appHeader) throw new Error('Thread header missing');
+  const toggleSidePanel = Array.from(
+    appHeader?.querySelectorAll('button[aria-label="Toggle side panel"]') ?? [],
+  ).find((button) => button.getBoundingClientRect().x > innerWidth / 2);
+  if (!toggleSidePanel) throw new Error('Side-panel toggle missing');
+  const sidePanelWasOpen = Boolean(
+    document.querySelector('aside[data-app-shell-focus-area="right-panel"]'),
+  );
+  if (!sidePanelWasOpen) {
+    activateButton(toggleSidePanel);
+    await sleep(300);
+  }
+  let sidePanel = document.querySelector(
+    'aside[data-app-shell-focus-area="right-panel"]',
+  );
+  let tabToolbar = sidePanel?.querySelector(
+    '[data-app-shell-tabs="true"] > .h-toolbar',
+  );
+  if (!tabToolbar?.querySelector('[role="tab"][aria-selected="true"]')) {
+    const browserAction = Array.from(document.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim().startsWith('Browser'),
+    );
+    if (!browserAction) throw new Error('Browser side-panel action missing');
+    activateButton(browserAction);
+    await sleep(500);
+    sidePanel = document.querySelector(
+      'aside[data-app-shell-focus-area="right-panel"]',
+    );
+    tabToolbar = sidePanel?.querySelector(
+      '[data-app-shell-tabs="true"] > .h-toolbar',
+    );
+  }
+  if (!tabToolbar) throw new Error('Side-panel tab header missing');
+  const threadHeaderRegion = appHeader?.querySelector(
+    ':scope > div:nth-of-type(3)',
+  );
+  const contentToolbarButtons = Array.from(
+    tabToolbar?.nextElementSibling?.querySelectorAll('button') ?? [],
+  ).slice(0, 8);
+  const contentToolbarColorsBefore = contentToolbarButtons.map(
+    (button) => getComputedStyle(button).color,
+  );
+  const emptyAppearanceRegistration = headerAppearance.registerProperties({});
+  check(
+    Object.keys(headerAppearance.getProperties()).length === 0 &&
+      root.style.getPropertyValue('--header-background-color') === '' &&
+      root.style.getPropertyValue('--header-foreground-color') === '' &&
+      !root.hasAttribute('data-cgptx-header-background-color') &&
+      !root.hasAttribute('data-cgptx-header-foreground-color'),
+    'empty registration preserves ChatGPT native header appearance',
+  );
+  emptyAppearanceRegistration.dispose();
+  const appearanceRegistration = headerAppearance.registerProperties({
+    '--header-background-color': {
+      light: headerColors.light.background,
+      dark: headerColors.dark.background,
+    },
+    '--header-foreground-color': {
+      light: headerColors.light.foreground,
+      dark: headerColors.dark.foreground,
+    },
+  });
+  await sleep(50);
+  const initialHeaderColors = headerColors[originalHeaderTheme];
+
+  const sideHeaderButtons = [
+    ...Array.from(tabToolbar?.querySelectorAll('button') ?? []),
+    ...Array.from(appHeader?.querySelectorAll('button') ?? []).filter(
+      (button) => button.getBoundingClientRect().x > innerWidth / 2,
+    ),
+  ].filter((button) => {
+    const rect = button.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+  check(
+    root.style.getPropertyValue('--header-background-color') ===
+      initialHeaderColors.background &&
+      root.style.getPropertyValue('--header-foreground-color') ===
+        initialHeaderColors.foreground,
+    'header appearance exposes the current theme values as stable CSS custom properties',
+  );
+  check(
+    getComputedStyle(threadHeaderRegion).backgroundColor ===
+      initialHeaderColors.background &&
+      getComputedStyle(tabToolbar).backgroundColor ===
+        initialHeaderColors.background,
+    'header background property colors thread and side-panel tab headers',
+  );
+  check(
+    sideHeaderButtons.length >= 4 &&
+      sideHeaderButtons.every((button) => {
+        const rect = button.getBoundingClientRect();
+        return (
+          getComputedStyle(button).visibility === 'visible' &&
+          getComputedStyle(button).opacity !== '0' &&
+          document.elementFromPoint(
+            rect.x + rect.width / 2,
+            rect.y + rect.height / 2,
+          )?.closest('button') === button
+        );
+      }),
+    'side-panel tabs and header controls remain visible and hit-testable',
+    {
+      controls: sideHeaderButtons.map(
+        (button) =>
+          button.textContent?.trim() ||
+          button.title ||
+          button.getAttribute('aria-label'),
+      ),
+    },
+  );
+  check(
+    contentToolbarButtons.length > 0 &&
+      JSON.stringify(
+      contentToolbarButtons.map((button) => getComputedStyle(button).color),
+      ) === JSON.stringify(contentToolbarColorsBefore),
+    'content-panel toolbar foreground remains unchanged',
+    { contentToolbarColorsBefore },
+  );
+
+  appearanceRegistration.update({
+    '--header-background-color': {
+      light: 'rgb(219, 234, 254)',
+      dark: 'rgb(23, 37, 84)',
+    },
+    '--header-foreground-color': {
+      light: 'rgb(30, 64, 175)',
+      dark: 'rgb(255, 255, 0)',
+    },
+  });
+  await sleep(50);
+  const updatedHeaderColors = {
+    light: {
+      background: 'rgb(219, 234, 254)',
+      foreground: 'rgb(30, 64, 175)',
+    },
+    dark: {
+      background: 'rgb(23, 37, 84)',
+      foreground: 'rgb(255, 255, 0)',
+    },
+  };
+  const currentUpdatedHeaderColors = updatedHeaderColors[originalHeaderTheme];
+  const selectedSideTab = tabToolbar?.querySelector(
+    '[role="tab"][aria-selected="true"]',
+  );
+  check(
+    getComputedStyle(threadHeaderRegion).backgroundColor ===
+      currentUpdatedHeaderColors.background &&
+      getComputedStyle(tabToolbar).backgroundColor ===
+        currentUpdatedHeaderColors.background &&
+      getComputedStyle(selectedSideTab).color ===
+        currentUpdatedHeaderColors.foreground,
+    'registration updates repaint both headers immediately',
+  );
+
+  const alternateHeaderTheme = originalHeaderTheme === 'dark' ? 'light' : 'dark';
+  root.classList.toggle('electron-dark', alternateHeaderTheme === 'dark');
+  root.classList.toggle('electron-light', alternateHeaderTheme === 'light');
+  await sleep(50);
+  const alternateHeaderColors = updatedHeaderColors[alternateHeaderTheme];
+  check(
+    root.style.getPropertyValue('--header-background-color') ===
+      alternateHeaderColors.background &&
+      root.style.getPropertyValue('--header-foreground-color') ===
+        alternateHeaderColors.foreground &&
+      getComputedStyle(threadHeaderRegion).backgroundColor ===
+        alternateHeaderColors.background &&
+      getComputedStyle(tabToolbar).backgroundColor ===
+        alternateHeaderColors.background &&
+      getComputedStyle(selectedSideTab).color ===
+        alternateHeaderColors.foreground &&
+      JSON.stringify(headerAppearance.getProperties()) ===
+        JSON.stringify({
+          '--header-background-color': alternateHeaderColors.background,
+          '--header-foreground-color': alternateHeaderColors.foreground,
+        }),
+    'effective ChatGPT theme changes select and repaint the matching values',
+  );
+  root.classList.toggle('electron-dark', originalHeaderTheme === 'dark');
+  root.classList.toggle('electron-light', originalHeaderTheme === 'light');
+  await sleep(50);
+  check(
+    root.style.getPropertyValue('--header-background-color') ===
+      currentUpdatedHeaderColors.background &&
+      root.style.getPropertyValue('--header-foreground-color') ===
+        currentUpdatedHeaderColors.foreground,
+    'restoring ChatGPT theme restores the matching registered values',
+  );
+
+  root.style.setProperty('--header-background-color', 'rgb(80, 0, 80)');
+  await sleep(50);
+  check(
+    getComputedStyle(threadHeaderRegion).backgroundColor === 'rgb(80, 0, 80)' &&
+      getComputedStyle(tabToolbar).backgroundColor === 'rgb(80, 0, 80)',
+    'direct custom-property changes repaint both headers immediately',
+  );
+
+  appearanceRegistration.dispose();
+  await sleep(50);
+  check(
+    root.style.getPropertyValue('--header-background-color') === '' &&
+      root.style.getPropertyValue('--header-foreground-color') === '' &&
+      !root.hasAttribute('data-cgptx-header-background-color') &&
+      !root.hasAttribute('data-cgptx-header-foreground-color'),
+    'disposing header appearance restores native property ownership',
+  );
+  if (!sidePanelWasOpen) {
+    activateButton(toggleSidePanel);
+    await sleep(300);
+  }
 
   let column = await openProfile();
   if (!column) throw new Error('Profile menu did not open');

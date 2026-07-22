@@ -22,6 +22,7 @@
 
 import type {
   Disposable,
+  HeaderCssPropertiesRegistration,
   PlatformApi,
   ProfileMenuItem,
 } from "../../platform/types";
@@ -90,6 +91,17 @@ function register(
   const disposable = api.menus.profile.transformItems(transform);
   activeTestDisposables?.push(disposable);
   return disposable;
+}
+
+function registerHeaderProperties(
+  properties: Parameters<
+    PlatformApi["appearance"]["header"]["registerProperties"]
+  >[0],
+): HeaderCssPropertiesRegistration {
+  const registration =
+    api.appearance.header.registerProperties(properties);
+  activeTestDisposables?.push(registration);
+  return registration;
 }
 
 let activeTestDisposables: Disposable[] | undefined;
@@ -478,6 +490,140 @@ test("profile-menu: validates nested item namespaces and duplicates", () => {
   assert(children.length === 1, "invalid nested items are dropped");
   assert(children[0]?.id === ID_CHILD, "valid nested item remains");
   registration.dispose();
+});
+
+// --------------------------------------------------------------------------
+// Tests: appearance API
+// --------------------------------------------------------------------------
+
+test("appearance.header: properties update immediately and dispose restores defaults", () => {
+  const registration = registerHeaderProperties({
+    "--header-background-color": {
+      light: "rgb(220, 252, 231)",
+      dark: "rgb(0, 80, 45)",
+    },
+    "--header-foreground-color": {
+      light: "rgb(5, 46, 22)",
+      dark: "white",
+    },
+  });
+  const firstProperties = api.appearance.header.getProperties();
+  assert(
+    [
+      JSON.stringify({
+        "--header-background-color": "rgb(220, 252, 231)",
+        "--header-foreground-color": "rgb(5, 46, 22)",
+      }),
+      JSON.stringify({
+        "--header-background-color": "rgb(0, 80, 45)",
+        "--header-foreground-color": "white",
+      }),
+    ].includes(JSON.stringify(firstProperties)),
+    "registered header properties match one complete appearance",
+  );
+
+  registration.update({
+    "--header-background-color": {
+      light: "rgb(219, 234, 254)",
+      dark: "rgb(23, 37, 84)",
+    },
+  });
+  assert(
+    ["rgb(219, 234, 254)", "rgb(23, 37, 84)"].includes(
+      api.appearance.header.getProperties()["--header-background-color"] ?? "",
+    ) &&
+      Object.keys(api.appearance.header.getProperties()).length === 1,
+    "update replaces the registration and applies immediately",
+  );
+
+  registration.update({});
+  assert(
+    Object.keys(api.appearance.header.getProperties()).length === 0,
+    "an empty registration preserves ChatGPT's native appearance",
+  );
+
+  registration.dispose();
+  assert(
+    Object.keys(api.appearance.header.getProperties()).length === 0,
+    "dispose restores native header properties",
+  );
+  registration.dispose();
+});
+
+test("appearance.header: registrations compose per property in registration order", () => {
+  const first = registerHeaderProperties({
+    "--header-background-color": { light: "red", dark: "blue" },
+    "--header-foreground-color": { light: "black", dark: "white" },
+  });
+  const second = registerHeaderProperties({
+    "--header-foreground-color": { light: "orange", dark: "yellow" },
+  });
+  const initial = api.appearance.header.getProperties();
+  assert(
+    (initial["--header-background-color"] === "red" &&
+      initial["--header-foreground-color"] === "orange") ||
+      (initial["--header-background-color"] === "blue" &&
+        initial["--header-foreground-color"] === "yellow"),
+    "later registrations override only properties they supply",
+  );
+
+  first.update({
+    "--header-background-color": { light: "pink", dark: "purple" },
+    "--header-foreground-color": { light: "green", dark: "lime" },
+  });
+  const updated = api.appearance.header.getProperties();
+  assert(
+    (updated["--header-background-color"] === "pink" &&
+      updated["--header-foreground-color"] === "orange") ||
+      (updated["--header-background-color"] === "purple" &&
+        updated["--header-foreground-color"] === "yellow"),
+    "updates retain their registration precedence",
+  );
+
+  second.dispose();
+  const revealed = api.appearance.header.getProperties();
+  assert(
+    (revealed["--header-background-color"] === "pink" &&
+      revealed["--header-foreground-color"] === "green") ||
+      (revealed["--header-background-color"] === "purple" &&
+        revealed["--header-foreground-color"] === "lime"),
+    "disposing the winner reveals the earlier registration",
+  );
+});
+
+test("appearance.header: rejects unknown properties and invalid colors", () => {
+  let unknownRejected = false;
+  try {
+    api.appearance.header.registerProperties({
+      "--unknown-header-property": { light: "red", dark: "blue" },
+    } as never);
+  } catch {
+    unknownRejected = true;
+  }
+  assert(unknownRejected, "unknown properties are rejected");
+
+  let colorRejected = false;
+  try {
+    api.appearance.header.registerProperties({
+      "--header-background-color": {
+        light: "definitely-not-a-color",
+        dark: "black",
+      },
+    });
+  } catch {
+    colorRejected = true;
+  }
+  assert(colorRejected, "invalid CSS colors are rejected");
+
+  let incompletePairRejected = false;
+  try {
+    api.appearance.header.registerProperties({
+      "--header-background-color": { light: "white" },
+    } as never);
+  } catch {
+    incompletePairRejected = true;
+  }
+  assert(incompletePairRejected, "incomplete appearance pairs are rejected");
 });
 
 // --------------------------------------------------------------------------

@@ -6,6 +6,7 @@
   "main": "api-test-suite.js",
   "capabilities": [
     "menus.profile",
-    "authentication"
+    "authentication",
+    "appearance.header"
   ]
 }

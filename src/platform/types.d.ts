@@ -12,7 +12,7 @@
  *   shapes, or minified identifiers.
  * - Full TSDoc required: intent, behavior, parameter semantics,
  *   multi-consumer semantics, `@example`, and exactly one `@group`:
- *   Lifecycle | Menus | Authentication | Conversation | Commands | Windows | Events.
+ *   Lifecycle | Menus | Authentication | Appearance | Conversation | Commands | Windows | Events.
  * - Designed for N concurrent extensions: transformers for state-shaping
  *   APIs (full state in, new state out, chained in load order), registration
  *   for notifications (invoked in load order, isolated). Extensions never
@@ -77,6 +77,133 @@ export interface PlatformApi {
 
   /** The ChatGPT app's authentication lifecycle. */
   readonly authentication: AuthenticationApi;
+
+  /** Native ChatGPT appearance customization. */
+  readonly appearance: AppearanceApi;
+}
+
+// ---------------------------------------------------------------------------
+// Appearance
+// ---------------------------------------------------------------------------
+
+/**
+ * CSS custom properties recognized by the ChatGPT header binding.
+ *
+ * @group Appearance
+ */
+export type HeaderCssProperty =
+  | "--header-background-color"
+  | "--header-foreground-color";
+
+/**
+ * Light and dark values for one native header CSS custom property.
+ *
+ * Both values must be valid CSS colors. ChatGPTX selects the value matching
+ * ChatGPT's effective appearance and updates it when that appearance changes.
+ *
+ * @group Appearance
+ */
+export interface HeaderThemeColor {
+  readonly light: string;
+  readonly dark: string;
+}
+
+/**
+ * A partial set of native header CSS custom-property theme values.
+ *
+ * An omitted property leaves that property to earlier registrations or
+ * ChatGPT's native appearance. An empty set preserves the complete native
+ * appearance and can later be replaced through the registration's `update`.
+ *
+ * @group Appearance
+ */
+export type HeaderCssProperties = Readonly<
+  Partial<Record<HeaderCssProperty, HeaderThemeColor>>
+>;
+
+/**
+ * The effective registered header colors for ChatGPT's current appearance.
+ *
+ * @group Appearance
+ */
+export type ResolvedHeaderCssProperties = Readonly<
+  Partial<Record<HeaderCssProperty, string>>
+>;
+
+/**
+ * A live header appearance contribution.
+ *
+ * `update` replaces this registration's complete property set without
+ * changing its precedence. `dispose` removes it and is idempotent.
+ *
+ * @group Appearance
+ */
+export interface HeaderCssPropertiesRegistration extends Disposable {
+  /** Replace this registration's properties and update the native headers immediately. */
+  update(properties: HeaderCssProperties): void;
+}
+
+/**
+ * APIs for native ChatGPT appearance customization.
+ *
+ * @group Appearance
+ */
+export interface AppearanceApi {
+  /** The thread header and side-panel tab header. */
+  readonly header: HeaderAppearanceApi;
+}
+
+/**
+ * Controls the thread header and side-panel tab header through stable CSS
+ * custom properties while preserving ChatGPT's native controls and layout.
+ *
+ * Both headers react immediately whenever an effective property changes.
+ * Background styling keeps the thread header, side-panel tabs, and header
+ * controls in their native stacking order. Foreground styling applies to the
+ * native title, tab labels, and header buttons; content-panel controls below
+ * the tab header are unaffected.
+ *
+ * Multi-consumer: registrations compose in registration order. For each
+ * property, the last active registration that supplies it wins. Updating a
+ * registration keeps its original precedence; disposing it reveals the next
+ * applicable value or ChatGPT's native appearance.
+ *
+ * @group Appearance
+ */
+export interface HeaderAppearanceApi {
+  /**
+   * Register an updateable header appearance contribution.
+   *
+   * @param properties light and dark CSS color values keyed by the stable
+   * custom properties `--header-background-color` and
+   * `--header-foreground-color`; pass an empty object to preserve ChatGPT's
+   * native appearance until a later `update`
+   * @returns a live registration that can be updated or disposed
+   *
+   * @example
+   * const header = api.appearance.header.registerProperties({
+   *   "--header-background-color": {
+   *     light: "#dcfce7",
+   *     dark: "#064e3b",
+   *   },
+   *   "--header-foreground-color": {
+   *     light: "#052e16",
+   *     dark: "white",
+   *   },
+   * });
+   * header.update({}); // Restore ChatGPT's native appearance.
+   */
+  registerProperties(
+    properties: HeaderCssProperties,
+  ): HeaderCssPropertiesRegistration;
+
+  /**
+   * Return the current effective registered properties.
+   *
+   * The returned snapshot excludes ChatGPT's native fallback colors and is
+   * empty when no registration contributes either property.
+   */
+  getProperties(): ResolvedHeaderCssProperties;
 }
 
 // ---------------------------------------------------------------------------
