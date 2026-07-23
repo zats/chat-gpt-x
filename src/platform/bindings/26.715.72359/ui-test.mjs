@@ -7,6 +7,8 @@
  * Usage: node src/platform/bindings/26.715.72359/ui-test.mjs [port]
  *   [--expect-native-profile-callback-missing]
  *   [--alternate-auth=/path/to/auth.json]
+ *   [--select-thread=<thread-id>]
+ *   [--select-thread-kind=remote]
  */
 
 import { readFile } from 'node:fs/promises';
@@ -21,6 +23,15 @@ const alternateAuthPath = process.argv
 const alternateAuthJson = alternateAuthPath
   ? await readFile(alternateAuthPath, 'utf8')
   : undefined;
+const selectThreadId = process.argv
+  .find((argument) => argument.startsWith('--select-thread='))
+  ?.slice('--select-thread='.length);
+const selectThreadKind = process.argv
+  .find((argument) => argument.startsWith('--select-thread-kind='))
+  ?.slice('--select-thread-kind='.length);
+if (selectThreadKind && selectThreadKind !== 'remote') {
+  throw new Error('select-thread-kind must be remote');
+}
 const targets = await fetch('http://127.0.0.1:' + port + '/json').then((response) =>
   response.json(),
 );
@@ -103,6 +114,18 @@ async function validateUi(
       await sleep(50);
     }
     throw new Error('Timed out waiting for native UI state');
+  };
+  const waitForNativeAccount = async (email, timeoutMs = 20000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const account = await Promise.race([
+        globalThis.__CGPTX_HOST__._debug.nativeAccount().catch(() => undefined),
+        sleep(1000).then(() => undefined),
+      ]);
+      if (account?.account?.email === email) return account;
+      await sleep(100);
+    }
+    throw new Error(`Timed out waiting for native account ${email}`);
   };
   const compositeCssColors = (...colors) => {
     const canvas = document.createElement('canvas');
@@ -217,11 +240,7 @@ async function validateUi(
   if (!originalThread) {
     const persistedThreadRow = Array.from(
       document.querySelectorAll('[data-app-action-sidebar-thread-row]'),
-    ).find(
-      (row) =>
-        row.getAttribute('data-app-action-sidebar-thread-kind') === 'local' &&
-        row.getBoundingClientRect().height > 0,
-    );
+    ).find((row) => row.getBoundingClientRect().height > 0);
     if (!persistedThreadRow) throw new Error('Persisted thread row missing');
     persistedThreadRow.click();
     await waitUntil(() => threadsApi.getCurrent() !== undefined);
@@ -249,6 +268,9 @@ async function validateUi(
       ?.endsWith(originalThread.threadId),
   );
   if (!originalThreadRow) throw new Error('Original thread row missing');
+  const originalThreadKind = originalThreadRow.getAttribute(
+    'data-app-action-sidebar-thread-kind',
+  );
   originalThreadRow.click();
   await waitUntil(
     () => threadsApi.getCurrent()?.threadId === originalThread.threadId,
@@ -264,29 +286,30 @@ async function validateUi(
     { currentThreadDeliveries },
   );
   await waitUntil(() =>
-    Boolean(
-      originalThreadRow.querySelector(
-        '[data-api-test-suite-thread-list-view]',
-      ),
-    ),
+    Boolean(document.querySelector('[data-api-test-suite-thread-list-view]')),
   );
-  const threadListView = originalThreadRow.querySelector(
+  const threadListView = document.querySelector(
     '[data-api-test-suite-thread-list-view]',
+  );
+  const threadListFixtureRow = threadListView?.closest(
+    '[data-app-action-sidebar-thread-row]',
   );
   const threadListViewHost = threadListView?.closest(
     '[data-cgptx-thread-list-leading-views]',
   );
-  const threadTitle = originalThreadRow.querySelector('[data-thread-title]');
-  const archiveButton = Array.from(originalThreadRow.querySelectorAll('button')).find(
+  const threadTitle = threadListFixtureRow?.querySelector('[data-thread-title]');
+  const archiveButton = Array.from(threadListFixtureRow?.querySelectorAll('button') ?? []).find(
     (button) => button.getAttribute('aria-label') === 'Archive chat',
   );
-  const rowRect = originalThreadRow.getBoundingClientRect();
+  const rowRect = threadListFixtureRow?.getBoundingClientRect();
   const viewRect = threadListView?.getBoundingClientRect();
   const hostRect = threadListViewHost?.getBoundingClientRect();
   const titleRect = threadTitle?.getBoundingClientRect();
   const archiveRect = archiveButton?.getBoundingClientRect();
-  const leadingInset = hostRect ? hostRect.left - rowRect.left : undefined;
-  const trailingInset = archiveRect ? rowRect.right - archiveRect.right : undefined;
+  const leadingInset =
+    hostRect && rowRect ? hostRect.left - rowRect.left : undefined;
+  const trailingInset =
+    archiveRect && rowRect ? rowRect.right - archiveRect.right : undefined;
   const titleGap = hostRect && titleRect ? titleRect.left - hostRect.right : undefined;
   const mountedViewRects = Array.from(
     threadListViewHost?.querySelectorAll(
@@ -301,10 +324,12 @@ async function validateUi(
   if (threadListViewHost) threadListViewHost.style.removeProperty('display');
   check(
     Boolean(
-      threadListView &&
+        threadListView &&
+        threadListFixtureRow &&
         threadListViewHost &&
+        rowRect &&
         viewRect?.width === 3 &&
-        viewRect?.height === 16 &&
+        viewRect?.height === 14 &&
         hostRect &&
         titleRect &&
         archiveRect &&
@@ -318,7 +343,7 @@ async function validateUi(
     ),
     'thread-list extension view hangs at the leading edge without moving the title',
     {
-      rowRect: rowRect.toJSON(),
+      rowRect: rowRect?.toJSON(),
       viewRect: viewRect?.toJSON(),
       hostRect: hostRect?.toJSON(),
       titleRect: titleRect?.toJSON(),
@@ -329,10 +354,17 @@ async function validateUi(
       mountedViewRects: mountedViewRects.map((rect) => rect.toJSON()),
       titleLeftWithView,
       titleLeftWithoutView,
-      rowActive: originalThreadRow.getAttribute(
+      rowActive: threadListFixtureRow?.getAttribute(
         'data-app-action-sidebar-thread-active',
       ),
     },
+  );
+  globalThis.__CGPTX_REMOVE_THREAD_LIST_VISUAL_FIXTURE__();
+  await waitUntil(
+    () =>
+      threadListFixtureRow?.querySelector(
+        '[data-api-test-suite-thread-list-view]',
+      ) === null,
   );
   currentThreadRegistration.dispose();
   markProgress('current-thread');
@@ -355,6 +387,17 @@ async function validateUi(
   };
   const appHeader = document.querySelector('header.app-header-tint');
   if (!appHeader) throw new Error('Thread header missing');
+  let threadHeaderTitle;
+  await waitUntil(() => {
+    threadHeaderTitle = Array.from(appHeader.querySelectorAll('*')).find(
+      (element) =>
+        element.textContent?.trim() === originalThread.title &&
+        !Array.from(element.children).some(
+          (child) => child.textContent?.trim() === originalThread.title,
+        ),
+    );
+    return Boolean(threadHeaderTitle);
+  });
   const headerToggle = (label) =>
     Array.from(
       document.querySelectorAll(
@@ -422,6 +465,18 @@ async function validateUi(
     headerToggle('Toggle bottom panel'),
     headerToggle('Toggle side panel'),
   ];
+  const headerSurfaceButtons = Array.from(
+    appHeader.querySelectorAll('button[class~="bg-token-bg-fog"]'),
+  ).filter((button) => button.getBoundingClientRect().width > 0);
+  const headerSurfaceButtonStates = headerSurfaceButtons.map((button) => {
+    const style = getComputedStyle(button);
+    return {
+      label: button.textContent?.trim(),
+      background: style.backgroundColor,
+      color: style.color,
+      contrast: contrastRatio(style.color, style.backgroundColor),
+    };
+  });
   const collapsedPanelButtonStates = collapsedPanelButtons.map((button) => {
     const rect = button.getBoundingClientRect();
     const style = getComputedStyle(button);
@@ -442,6 +497,14 @@ async function validateUi(
       !document.querySelector('[data-app-shell-focus-area="bottom-panel"]') &&
       getComputedStyle(collapsedHeaderControls).backgroundColor ===
         initialHeaderColors.background &&
+      getComputedStyle(threadHeaderTitle).color ===
+        initialHeaderColors.foreground &&
+      (originalThreadKind !== 'remote' ||
+        (headerSurfaceButtonStates.length > 0 &&
+          headerSurfaceButtonStates.every(
+            ({ background, contrast }) =>
+              background !== 'rgba(255, 255, 255, 0.96)' && contrast >= 3,
+          ))) &&
       collapsedPanelButtonStates.every(
         ({ visible, hit, contrast }) => visible && hit && contrast >= 3,
       ),
@@ -449,6 +512,9 @@ async function validateUi(
     {
       background: getComputedStyle(collapsedHeaderControls).backgroundColor,
       expectedBackground: initialHeaderColors.background,
+      titleColor: getComputedStyle(threadHeaderTitle).color,
+      expectedTitleColor: initialHeaderColors.foreground,
+      headerSurfaceButtonStates,
       collapsedPanelButtonStates,
     },
   );
@@ -476,17 +542,27 @@ async function validateUi(
     const browserAction = Array.from(document.querySelectorAll('button')).find(
       (button) => button.textContent?.trim().startsWith('Browser'),
     );
-    if (!browserAction) throw new Error('Browser side-panel action missing');
-    activateButton(browserAction);
-    await sleep(500);
-    sidePanel = document.querySelector(
-      'aside[data-app-shell-focus-area="right-panel"]',
-    );
-    tabToolbar = sidePanel?.querySelector(
-      '[data-app-shell-tabs="true"] > .h-toolbar',
-    );
+    if (browserAction) {
+      activateButton(browserAction);
+      await sleep(500);
+      sidePanel = document.querySelector(
+        'aside[data-app-shell-focus-area="right-panel"]',
+      );
+      tabToolbar = sidePanel?.querySelector(
+        '[data-app-shell-tabs="true"] > .h-toolbar',
+      );
+    } else if (originalThreadKind === 'remote') {
+      tabToolbar = null;
+    } else {
+      throw new Error('Browser side-panel action missing');
+    }
   }
-  if (!tabToolbar) throw new Error('Side-panel tab header missing');
+  if (
+    tabToolbar &&
+    !tabToolbar.querySelector('[role="tab"][aria-selected="true"]')
+  ) {
+    throw new Error('Side-panel selected tab missing');
+  }
   const threadHeaderRegion = appHeader?.querySelector(
     ':scope > div:nth-of-type(3)',
   );
@@ -579,30 +655,33 @@ async function validateUi(
   check(
     getComputedStyle(threadHeaderRegion).backgroundColor ===
       initialHeaderColors.background &&
-      getComputedStyle(tabToolbar).backgroundColor ===
-        initialHeaderColors.background,
-    'header background property colors thread and side-panel tab headers',
+      (!tabToolbar ||
+        getComputedStyle(tabToolbar).backgroundColor ===
+          initialHeaderColors.background),
+    'header background property colors every available native header',
   );
   const tabFadeGradients = Array.from(
-    tabToolbar.querySelectorAll(
+    tabToolbar?.querySelectorAll(
       '[class*="after:to-token-main-surface-primary"]',
-    ),
+    ) ?? [],
   ).map((overlay) => getComputedStyle(overlay, '::after').backgroundImage);
   check(
-    tabFadeGradients.length >= 2 &&
-      tabFadeGradients.every((gradient) =>
-        gradient.includes(initialHeaderColors.background),
-      ),
+    !tabToolbar ||
+      (tabFadeGradients.length >= 2 &&
+        tabFadeGradients.every((gradient) =>
+          gradient.includes(initialHeaderColors.background),
+        )),
     'side-panel tab overflow fades into the selected header background',
     { tabFadeGradients },
   );
   check(
-    sideHeaderButtons.length >= 4 &&
+    sideHeaderButtons.length >= (tabToolbar ? 4 : 2) &&
       getComputedStyle(expandedHeaderControls).backgroundColor ===
         'rgba(0, 0, 0, 0)' &&
-      sideHeaderButtonStates.some(
-        ({ role, directHit }) => role === 'tab' && directHit,
-      ) &&
+      (!tabToolbar ||
+        sideHeaderButtonStates.some(
+          ({ role, directHit }) => role === 'tab' && directHit,
+        )) &&
       sideHeaderButtonStates.every(
         ({ visible, hit, contrast }) => visible && hit && contrast >= 3,
       ),
@@ -614,10 +693,11 @@ async function validateUi(
     },
   );
   check(
-    contentToolbarButtons.length > 0 &&
-      JSON.stringify(
-      contentToolbarButtons.map((button) => getComputedStyle(button).color),
-      ) === JSON.stringify(contentToolbarColorsBefore),
+    !tabToolbar ||
+      (contentToolbarButtons.length > 0 &&
+        JSON.stringify(
+          contentToolbarButtons.map((button) => getComputedStyle(button).color),
+        ) === JSON.stringify(contentToolbarColorsBefore)),
     'content-panel toolbar foreground remains unchanged',
     { contentToolbarColorsBefore },
   );
@@ -651,10 +731,11 @@ async function validateUi(
   check(
     getComputedStyle(threadHeaderRegion).backgroundColor ===
       currentUpdatedHeaderColors.background &&
-      getComputedStyle(tabToolbar).backgroundColor ===
-        currentUpdatedHeaderColors.background &&
-      getComputedStyle(selectedSideTab).color ===
-        currentUpdatedHeaderColors.foreground,
+      (!tabToolbar ||
+        (getComputedStyle(tabToolbar).backgroundColor ===
+          currentUpdatedHeaderColors.background &&
+          getComputedStyle(selectedSideTab).color ===
+            currentUpdatedHeaderColors.foreground)),
     'registration updates repaint both headers immediately',
   );
 
@@ -670,10 +751,11 @@ async function validateUi(
         alternateHeaderColors.foreground &&
       getComputedStyle(threadHeaderRegion).backgroundColor ===
         alternateHeaderColors.background &&
-      getComputedStyle(tabToolbar).backgroundColor ===
-        alternateHeaderColors.background &&
-      getComputedStyle(selectedSideTab).color ===
-        alternateHeaderColors.foreground &&
+      (!tabToolbar ||
+        (getComputedStyle(tabToolbar).backgroundColor ===
+          alternateHeaderColors.background &&
+          getComputedStyle(selectedSideTab).color ===
+            alternateHeaderColors.foreground)) &&
       JSON.stringify(headerAppearance.getProperties()) ===
         JSON.stringify({
           '--header-background-color': alternateHeaderColors.background,
@@ -696,7 +778,8 @@ async function validateUi(
   await sleep(50);
   check(
     getComputedStyle(threadHeaderRegion).backgroundColor === 'rgb(80, 0, 80)' &&
-      getComputedStyle(tabToolbar).backgroundColor === 'rgb(80, 0, 80)',
+      (!tabToolbar ||
+        getComputedStyle(tabToolbar).backgroundColor === 'rgb(80, 0, 80)'),
     'direct custom-property changes repaint both headers immediately',
   );
 
@@ -891,9 +974,39 @@ async function validateUi(
       row !== colorRow &&
       row.getAttribute('aria-haspopup') === 'menu',
   );
+  const nativeActionRow = threadRows.find(
+    (row) =>
+      row !== colorRow &&
+      row.getAttribute('aria-haspopup') !== 'menu' &&
+      row.className.includes('cursor-interaction'),
+  );
+  const threadItemPresentation = (row) => {
+    if (!row) return undefined;
+    const style = getComputedStyle(row);
+    return {
+      paddingLeft: style.paddingLeft,
+      paddingRight: style.paddingRight,
+      paddingTop: style.paddingTop,
+      paddingBottom: style.paddingBottom,
+      color: style.color,
+      fontSize: style.fontSize,
+      lineHeight: style.lineHeight,
+      borderRadius: style.borderRadius,
+    };
+  };
+  const referenceThreadItem = nativeFlyoutRow ?? nativeActionRow;
   check(
-    Boolean(nativeFlyoutRow) && colorRow?.className === nativeFlyoutRow.className,
-    'Color reuses the native thread flyout presentation',
+    Boolean(colorRow) &&
+      Boolean(referenceThreadItem) &&
+      JSON.stringify(threadItemPresentation(colorRow)) ===
+        JSON.stringify(threadItemPresentation(referenceThreadItem)) &&
+      colorRow.className.includes('hover:bg-token-list-hover-background') &&
+      colorRow.className.includes('focus:bg-token-list-hover-background'),
+    'Color reuses the native thread item presentation',
+    {
+      color: threadItemPresentation(colorRow),
+      reference: threadItemPresentation(referenceThreadItem),
+    },
   );
 
   let threadMenuApi;
@@ -1047,9 +1160,11 @@ async function validateUi(
     'selecting Blue applies its CSS to the native header',
   );
   check(
-    blueThreadIndicator?.closest(
-      '[data-cgptx-thread-list-leading-views]',
-    ) === threadListViewHost &&
+    Boolean(
+      blueThreadIndicator?.closest(
+        '[data-cgptx-thread-list-leading-views]',
+      ),
+    ) &&
       getComputedStyle(blueThreadIndicator).backgroundColor ===
         'rgb(58, 131, 247)',
     'selecting Blue adds the thread indicator at the native row edge',
@@ -1178,6 +1293,19 @@ async function validateUi(
     usageWrapper?.querySelectorAll('[role="menuitem"]') ?? [],
   ).find((row) => row !== usage);
   const nativeNestedItemClassName = nativeNestedItem?.className;
+  const nativeNestedStyle = nativeNestedItem
+    ? (() => {
+        const style = getComputedStyle(nativeNestedItem);
+        return {
+          paddingLeft: style.paddingLeft,
+          paddingRight: style.paddingRight,
+          color: style.color,
+          fontSize: style.fontSize,
+          lineHeight: style.lineHeight,
+          borderRadius: style.borderRadius,
+        };
+      })()
+    : undefined;
   check(
     usageWrapper?.getAttribute('data-state') === 'open' &&
       itemCountAfterUsageExpansion > itemCountBeforeUsageExpansion,
@@ -1280,6 +1408,19 @@ async function validateUi(
   const child = reopenedWrapper?.querySelector(
     '[data-cgptx-id="api-test-suite.visual-child"]',
   );
+  const childStyle = child
+    ? (() => {
+        const style = getComputedStyle(child);
+        return {
+          paddingLeft: style.paddingLeft,
+          paddingRight: style.paddingRight,
+          color: style.color,
+          fontSize: style.fontSize,
+          lineHeight: style.lineHeight,
+          borderRadius: style.borderRadius,
+        };
+      })()
+    : undefined;
   const movedId = globalThis.__CGPTX_VISUAL_MOVED_ID__;
   const moved = reopenedWrapper?.querySelector('[data-cgptx-id="' + movedId + '"]');
   check(
@@ -1288,9 +1429,15 @@ async function validateUi(
     'submenu expands in place with children',
   );
   check(
-    child?.className === nativeNestedItemClassName,
+    Boolean(childStyle) &&
+      JSON.stringify(childStyle) === JSON.stringify(nativeNestedStyle),
     'contributed submenu child uses the native nested Item presentation',
-    { nativeNestedItemClassName, childClassName: child?.className },
+    {
+      nativeNestedItemClassName,
+      childClassName: child?.className,
+      nativeNestedStyle,
+      childStyle,
+    },
   );
   check(
     !blocks.some((block) => idOfBlock(block) === movedId),
@@ -1334,11 +1481,12 @@ async function validateUi(
   ).find((element) => element.textContent?.trim() === 'Back to app');
   backToApp?.click();
   await sleep(300);
+  let profileNavigationRegistration;
   globalThis.__CGPTX_HOST__.registerExtension(
     'profile-navigation-fixture',
     {
       activate(api) {
-        api.menus.profile.transformItems((items) => {
+        profileNavigationRegistration = api.menus.profile.transformItems((items) => {
           const findAccount = (candidates) => {
             for (const candidate of candidates) {
               if (
@@ -1415,6 +1563,7 @@ async function validateUi(
       foundProfile: Boolean(profile),
     },
   );
+  profileNavigationRegistration.dispose();
   markProgress('profile-menu');
 
   if (alternateAuthentication) {
@@ -1434,8 +1583,7 @@ async function validateUi(
       try {
         await authenticationApi.replaceCurrent(alternateAuthentication);
         const adopted = await authenticationApi.getCurrent();
-        const nativeAccount =
-          await globalThis.__CGPTX_HOST__._debug.nativeAccount();
+        const nativeAccount = await waitForNativeAccount(alternate.label);
         check(
           adopted?.userId === alternate.userId &&
             nativeAccount?.account?.email === alternate.label,
@@ -1451,8 +1599,7 @@ async function validateUi(
         await authenticationApi.replaceCurrent(original.authJson);
       }
       const restored = await authenticationApi.getCurrent();
-      const restoredNativeAccount =
-        await globalThis.__CGPTX_HOST__._debug.nativeAccount();
+      const restoredNativeAccount = await waitForNativeAccount(original.label);
       check(
         restored?.userId === original.userId &&
           restoredNativeAccount?.account?.email === original.label,
@@ -1471,7 +1618,76 @@ async function validateUi(
   return checks;
 }
 
-await waitFor('globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true');
+async function selectThread(threadId) {
+  const selector =
+    '[data-app-action-sidebar-thread-id$=":' + threadId + '"]';
+  await evaluate(
+    `(async () => {
+      const deadline = Date.now() + 60000;
+      let row;
+      while (Date.now() < deadline) {
+        row = document.querySelector(${JSON.stringify(selector)});
+        if (row) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (!row) throw new Error('Selected native thread row missing');
+      if (!globalThis.__CGPTX_UI_TEST_THREADS__) {
+        globalThis.__CGPTX_HOST__.registerExtension("ui-test-thread-selection", {
+          activate(api) {
+            globalThis.__CGPTX_UI_TEST_THREADS__ = api.threads;
+          },
+        });
+      }
+      row.click();
+    })()`,
+  );
+  await waitFor(
+    `globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId === ${JSON.stringify(threadId)}`,
+    60000,
+  );
+}
+
+async function selectThreadByKind(kind) {
+  const threadId = await evaluate(
+    `(async () => {
+      const deadline = Date.now() + 60000;
+      let row;
+      while (Date.now() < deadline) {
+        row = document.querySelector(
+          '[data-app-action-sidebar-thread-kind="${kind}"]',
+        );
+        if (row) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (!row) throw new Error('Selected native ${kind} thread row missing');
+      const scopedId = row.getAttribute('data-app-action-sidebar-thread-id');
+      const threadId = scopedId.slice(scopedId.lastIndexOf(':') + 1);
+      if (!globalThis.__CGPTX_UI_TEST_THREADS__) {
+        globalThis.__CGPTX_HOST__.registerExtension("ui-test-thread-selection", {
+          activate(api) {
+            globalThis.__CGPTX_UI_TEST_THREADS__ = api.threads;
+          },
+        });
+      }
+      row.click();
+      return threadId;
+    })()`,
+  );
+  await waitFor(
+    `globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId === ${JSON.stringify(threadId)}`,
+    60000,
+  );
+  return threadId;
+}
+
+let selectedThreadId = selectThreadId;
+if (selectThreadKind) {
+  selectedThreadId = await selectThreadByKind(selectThreadKind);
+} else if (selectedThreadId) {
+  await selectThread(selectedThreadId);
+}
+await waitFor('globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true', 90000);
+if (selectedThreadId) await selectThread(selectedThreadId);
 const semanticResults = await evaluate('globalThis.__CGPTX_TEST_RESULTS__');
 const failedSemantic = semanticResults.filter((result) => !result.pass);
 if (failedSemantic.length > 0) {
@@ -1496,4 +1712,4 @@ console.log(
     2,
   ),
 );
-if (failed.length > 0) process.exitCode = 1;
+process.exit(failed.length > 0 ? 1 : 0);

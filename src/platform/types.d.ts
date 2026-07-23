@@ -90,12 +90,12 @@ export interface PlatformApi {
 // ---------------------------------------------------------------------------
 
 /**
- * The persisted thread currently displayed by ChatGPT.
+ * The persisted local or cloud thread currently displayed by ChatGPT.
  *
  * @group Threads
  */
 export interface ThreadContext {
-  /** ChatGPT's stable identifier for the persisted thread. */
+  /** ChatGPT's stable identifier for the local or cloud thread. */
   readonly threadId: string;
 
   /** The thread title currently displayed by ChatGPT. */
@@ -724,14 +724,14 @@ export interface ProfileMenuSeparatorItem {
 
 /**
  * APIs for the overflow menu opened from the ellipsis button in a persisted
- * thread's header. Pending threads without a ChatGPT thread id are outside
- * this surface.
+ * local or cloud thread's header. Pending threads without a ChatGPT thread id
+ * are outside this surface.
  *
  * @group Menus
  */
 export interface ThreadMenuApi {
   /**
-   * Transform every persisted thread overflow menu.
+   * Transform every persisted local or cloud thread overflow menu.
    *
    * `transform` runs synchronously whenever ChatGPT renders a thread menu.
    * It receives that menu's complete current item list and a snapshot of the

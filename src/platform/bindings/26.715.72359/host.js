@@ -25,11 +25,7 @@
     "./assets/app-initial~app-main~plugin-detail-page~settings-page~projects-index-page~appgen-library-pa~nsqr45u8-C3he6mAT.js";
   const REACT_DOM_MODULE =
     "./assets/app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~gsbyx6su-Cok-LK6_.js";
-  const REACT_DOM_CORE_MODULE =
-    "./assets/app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~elr7dp2m-f2m0c2c7.js";
   const THREAD_MENU_MODULE = "./assets/thread-overflow-menu-CaSSV4dF.js";
-  const THREAD_ROW_MODULE =
-    "./assets/app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~chatgpt-~j34jmud9-DNuPQHcp.js";
   const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-BRvvtvzu.js";
   const AUTH_CONTEXT_MODULE =
     "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~k87y25tw-31XubniU.js";
@@ -84,6 +80,7 @@ html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-
 html[data-cgptx-header-foreground-color] header.app-header-tint {
   --color-token-foreground: var(--header-foreground-color);
   --color-token-text-primary: var(--header-foreground-color);
+  color: var(--header-foreground-color);
   --color-token-text-secondary: color-mix(
     in srgb,
     var(--header-foreground-color) 76%,
@@ -94,6 +91,20 @@ html[data-cgptx-header-foreground-color] header.app-header-tint {
     var(--header-foreground-color) 72%,
     transparent
   );
+}
+html[data-cgptx-header-background-color][data-cgptx-header-foreground-color]
+  header.app-header-tint button[class~="bg-token-bg-fog"] {
+  background-color: color-mix(
+    in srgb,
+    var(--header-background-color) 75%,
+    black
+  ) !important;
+  border-color: color-mix(
+    in srgb,
+    var(--header-foreground-color) 28%,
+    transparent
+  ) !important;
+  color: var(--header-foreground-color) !important;
 }
 html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-panel"]
   [data-app-shell-tabs="true"] > .h-toolbar [role="tab"] {
@@ -115,7 +126,7 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     transparent
   ) !important;
 }
-[data-cgptx-thread-list-owner]
+[data-app-action-sidebar-thread-row]
   [data-thread-title-trigger]:has(> [data-cgptx-thread-list-leading-views]) {
   position: relative;
 }
@@ -227,6 +238,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const extensions = new Map();
   const safeHandlers = new WeakSet();
   const renderListeners = new Set();
+  const mountedThreadListRows = new WeakMap();
   let renderVersion = 0;
   let builtInCache = Object.freeze([]);
   let builtInViews = new Map();
@@ -270,6 +282,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function emitChange() {
     renderVersion += 1;
     for (const listener of [...renderListeners]) listener();
+    if (native) queueMicrotask(refreshThreadListRows);
   }
 
   function emitAuthenticationChange() {
@@ -840,6 +853,89 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       if (cached.item) items.push(cached.item);
     }
     return Object.freeze(items);
+  }
+
+  function sameThreadListItems(left, right) {
+    return (
+      left.length === right.length &&
+      left.every((item, index) => item === right[index])
+    );
+  }
+
+  function threadListContextFromRow(row) {
+    const scopedId = row.getAttribute("data-app-action-sidebar-thread-id");
+    const separator = scopedId?.lastIndexOf(":") ?? -1;
+    if (separator < 1 || separator === scopedId.length - 1) return null;
+    return Object.freeze({
+      threadId: scopedId.slice(separator + 1),
+      title: row.getAttribute("data-app-action-sidebar-thread-title") ?? "",
+    });
+  }
+
+  function removeMountedThreadListRow(row) {
+    const record = mountedThreadListRows.get(row);
+    if (!record) return;
+    record.host.remove();
+    mountedThreadListRows.delete(row);
+  }
+
+  function renderThreadListRow(row) {
+    const context = threadListContextFromRow(row);
+    const target = row.querySelector("[data-thread-title-trigger]");
+    if (!context || !target) {
+      removeMountedThreadListRow(row);
+      return;
+    }
+    const items = computeThreadListItems(context);
+    const current = mountedThreadListRows.get(row);
+    if (
+      current &&
+      current.target === target &&
+      sameThreadContext(current.context, context) &&
+      sameThreadListItems(current.items, items)
+    ) {
+      return;
+    }
+    removeMountedThreadListRow(row);
+    if (items.length === 0) return;
+
+    const host = document.createElement("span");
+    host.className =
+      "flex h-4 items-center gap-0.5 overflow-visible";
+    host.setAttribute("data-cgptx-thread-list-leading-views", "");
+    host.style.cssText =
+      "position:absolute;right:calc(100% + 3px);top:50%;" +
+      "transform:translateY(-50%);flex-direction:row-reverse;" +
+      "pointer-events:none;z-index:1";
+    for (const item of items) {
+      let element;
+      try {
+        element = item.view();
+      } catch (error) {
+        warn("thread-list item view threw; skipped", error);
+        continue;
+      }
+      if (!(element instanceof HTMLElement)) {
+        warn("thread-list item view did not return an HTMLElement; skipped");
+        continue;
+      }
+      const itemHost = document.createElement("span");
+      itemHost.className = "contents";
+      itemHost.setAttribute("data-cgptx-thread-list-item-view", "");
+      itemHost.append(element);
+      host.append(itemHost);
+    }
+    if (host.childElementCount === 0) return;
+    target.append(host);
+    mountedThreadListRows.set(row, { context, host, items, target });
+  }
+
+  function refreshThreadListRows() {
+    for (const row of document.querySelectorAll(
+      "[data-app-action-sidebar-thread-row]",
+    )) {
+      renderThreadListRow(row);
+    }
   }
 
   function sameThreadDescriptor(left, right) {
@@ -2115,116 +2211,43 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       openNativeProfile = () => navigate("/settings/profile");
     }
 
-    function ThreadListItemViewHost({ view }) {
-      const ref = React.useRef(null);
-      React.useLayoutEffect(() => {
-        let element;
-        try {
-          element = view();
-        } catch (error) {
-          warn("thread-list item view threw; skipped", error);
-          return undefined;
-        }
-        if (!(element instanceof HTMLElement)) {
-          warn("thread-list item view did not return an HTMLElement; skipped");
-          return undefined;
-        }
-        const container = ref.current;
-        container.replaceChildren(element);
-        return () => container.replaceChildren();
-      }, [view]);
-      return native.jsx("span", {
-        ref,
-        className: "contents",
-        "data-cgptx-thread-list-item-view": "",
-      });
-    }
-
-    function ThreadListLeadingViews({ items }) {
-      const children = items.map((item, index) =>
-        native.jsx(
-          ThreadListItemViewHost,
-          { view: item.view },
-          `cgptx-thread-list-item-${index}`,
-        ),
+    function threadContextForMenuProps(props) {
+      const threadId = props.conversationId;
+      const row = Array.from(
+        document.querySelectorAll("[data-app-action-sidebar-thread-row]"),
+      ).find((candidate) =>
+        candidate
+          .getAttribute("data-app-action-sidebar-thread-id")
+          ?.endsWith(`:${threadId}`),
       );
-      return native.jsx("span", {
-        style: {
-          position: "absolute",
-          right: "calc(100% + 3px)",
-          top: "50%",
-          transform: "translateY(-50%)",
-          flexDirection: "row-reverse",
-          pointerEvents: "none",
-          zIndex: 1,
-        },
-        className: "flex h-4 items-center gap-0.5 overflow-visible",
-        "data-cgptx-thread-list-leading-views": "",
-        children,
-      });
-    }
-
-    let threadListRowOwnerSequence = 0;
-
-    function ThreadListRowBoundary({ child }) {
-      React.useSyncExternalStore(
-        subscribe,
-        () => renderVersion,
-        () => renderVersion,
-      );
-      const ownerRef = React.useRef();
-      if (ownerRef.current == null) {
-        threadListRowOwnerSequence += 1;
-        ownerRef.current = `cgptx-thread-list-row-${threadListRowOwnerSequence}`;
-      }
-      const owner = ownerRef.current;
-      const tree = child.type({
-        ...child.props,
-        dataAttributes: {
-          ...child.props.dataAttributes,
-          "data-cgptx-thread-list-owner": owner,
-        },
-      });
-      const [target, setTarget] = React.useState(null);
-      React.useLayoutEffect(() => {
-        const row = document.querySelector(
-          `[data-cgptx-thread-list-owner="${CSS.escape(owner)}"]`,
-        );
-        const titleTrigger = row?.querySelector("[data-thread-title-trigger]");
-        setTarget((current) =>
-          current === titleTrigger ? current : titleTrigger,
-        );
-      }, [owner, tree]);
-      const summary = child.props.threadSummary;
-      const renderedTitle = tree?.props?.title;
       const title =
-        typeof summary?.title === "string"
-          ? summary.title
-          : typeof renderedTitle === "string"
-            ? renderedTitle
-            : "";
-      const workingDirectory =
-        typeof child.props.displayCwd === "string"
-          ? child.props.displayCwd
-          : typeof summary?.cwd === "string"
-            ? summary.cwd
-            : undefined;
-      const context = Object.freeze({
-        threadId: child.props.conversationId,
+        typeof props.title === "string"
+          ? props.title
+          : row?.getAttribute("data-app-action-sidebar-thread-title") ?? "";
+      return Object.freeze({
+        threadId,
         title,
-        ...(workingDirectory ? { workingDirectory } : {}),
+        ...(typeof props.cwd === "string" && props.cwd.length > 0
+          ? { workingDirectory: props.cwd }
+          : {}),
       });
-      const items = computeThreadListItems(context);
-      const overlay =
-        target && items.length > 0
-          ? native.createPortal(
-              native.jsx(ThreadListLeadingViews, { items }),
-              target,
-            )
-          : null;
-      return native.jsx(React.Fragment, {
-        children: [tree, overlay],
-      });
+    }
+
+    function isRemoteThreadMenu(type, props) {
+      if (
+        type === native.ThreadMenu ||
+        typeof type !== "function" ||
+        typeof props?.conversationId !== "string" ||
+        props.conversationId.length === 0
+      ) {
+        return false;
+      }
+      const source = Function.prototype.toString.call(type);
+      return (
+        source.includes("toggle-thread-pin") &&
+        source.includes("copy-session-id") &&
+        source.includes("copy-deeplink")
+      );
     }
 
     function ThreadMenuBoundary({ child }) {
@@ -2233,13 +2256,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         () => renderVersion,
         () => renderVersion,
       );
-      const context = Object.freeze({
-        threadId: child.props.conversationId,
-        title: typeof child.props.title === "string" ? child.props.title : "",
-        ...(typeof child.props.cwd === "string" && child.props.cwd.length > 0
-          ? { workingDirectory: child.props.cwd }
-          : {}),
-      });
+      const context = threadContextForMenuProps(child.props);
       React.useLayoutEffect(() => {
         setCurrentThread(context);
         return () => clearCurrentThreadAfterUnmount(context.threadId);
@@ -2284,18 +2301,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     function wrap(original) {
       return function cgptxJsx(type, props, key) {
         if (
-          type === native.ThreadListRow &&
-          typeof props?.conversationId === "string" &&
-          props.conversationId.length > 0
-        ) {
-          return originalJsx(
-            ThreadListRowBoundary,
-            { child: original(type, props, key) },
-            key,
-          );
-        }
-        if (
-          type === native.ThreadMenu &&
+          (type === native.ThreadMenu || isRemoteThreadMenu(type, props)) &&
           typeof props?.conversationId === "string" &&
           props.conversationId.length > 0
         ) {
@@ -2344,9 +2350,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       paletteIconModule,
       colorPickerModule,
       reactDomModule,
-      reactDomCoreModule,
       threadMenuModule,
-      threadRowModule,
       authModule,
       authContextModule,
       browserModule,
@@ -2360,9 +2364,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       import(PALETTE_ICON_MODULE),
       import(COLOR_PICKER_MODULE),
       import(REACT_DOM_MODULE),
-      import(REACT_DOM_CORE_MODULE),
       import(THREAD_MENU_MODULE),
-      import(THREAD_ROW_MODULE),
       import(AUTH_MODULE),
       import(AUTH_CONTEXT_MODULE),
       import(BROWSER_MODULE),
@@ -2377,7 +2379,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     paletteIconModule.n();
     colorPickerModule.i();
     threadMenuModule.n();
-    threadRowModule.o();
     const jsxRuntime = coreModule.zt();
     const PlusIcon = ({ className = "", ...props }) =>
       jsxRuntime.jsx(plusIconModule.n, {
@@ -2388,7 +2389,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     native = {
       React: coreModule.dn(),
       ReactDOM: reactDomModule.t(),
-      createPortal: reactDomCoreModule.b().createPortal,
       jsxRuntime,
       jsx: jsxRuntime.jsx,
       Item: menuModule.i,
@@ -2397,7 +2397,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       FlyoutSubmenuItem: menuModule.r.FlyoutSubmenuItem,
       MenuRoot: menuModule.t,
       ThreadMenu: threadMenuModule.t,
-      ThreadListRow: threadRowModule.a,
       ColorPicker: colorPickerModule.r,
       startChatGptSignIn: authModule.o,
       decorateAuthUrl: authModule.t,
@@ -2449,12 +2448,14 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
             requestThreadFlyout(row);
           }
         }
+        refreshThreadListRows();
       });
     });
     observer.observe(document.documentElement, {
       childList: true,
       subtree: true,
     });
+    refreshThreadListRows();
     warmModel();
   }
 
