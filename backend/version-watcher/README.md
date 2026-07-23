@@ -1,6 +1,6 @@
 # Codex Version Watch Cloudflare Worker
 
-This Worker checks the Codex Sparkle feed every five minutes and opens one issue for each app version that does not have bindings.
+This Worker checks the Codex Sparkle feed every five minutes, opens one issue for each app version that does not have bindings, and dispatches its binding workflow.
 
 ## What It Does
 
@@ -8,6 +8,7 @@ This Worker checks the Codex Sparkle feed every five minutes and opens one issue
 2. Stops when `src/platform/bindings/<version>/` already exists.
 3. Stops when an issue named `ChatGPT <version> available` already exists.
 4. Opens an issue for a new version.
+5. Dispatches `Rebind ChatGPT` with the version, enclosure URL, and issue number.
 
 The binding folder and issue are the durable deduplication records.
 
@@ -15,7 +16,7 @@ The binding folder and issue are the durable deduplication records.
 
 Create a fine-grained GitHub token for `zats/chat-gpt-x` with:
 
-- Contents: read
+- Contents: read/write
 - Issues: read/write
 
 Then configure Cloudflare:

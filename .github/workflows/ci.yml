@@ -26,8 +26,12 @@ jobs:
       - name: Check scripts
         run: |
           bash -n scripts/download-pinned-chatgpt.sh
+          bash -n scripts/download-chatgpt-version.sh
           bash -n scripts/run-local-ci.sh
+          bash -n scripts/validate-rebind-changes.sh
+          bash -n .agents/skills/manage-platform-api/scripts/extract-app.sh
           node --check scripts/auth-handoff.mjs
+          node --check scripts/check-auth-exposure.mjs
           node --check scripts/capture-authentication-candidates.mjs
           node --check scripts/validate-pinned-chatgpt.mjs
           node --check scripts/wait-for-chatgpt-ready.mjs

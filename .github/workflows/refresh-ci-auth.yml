@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows:
       - CI
+      - Rebind ChatGPT
     types:
       - completed
 
@@ -14,8 +15,20 @@ jobs:
   refresh:
     if: >-
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == github.event.repository.default_branch
+      github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+      (
+        (
+          github.event.workflow_run.name == 'CI' &&
+          github.event.workflow_run.event == 'push'
+        ) ||
+        (
+          github.event.workflow_run.name == 'Rebind ChatGPT' &&
+          (
+            github.event.workflow_run.event == 'workflow_dispatch' ||
+            github.event.workflow_run.event == 'repository_dispatch'
+          )
+        )
+      )
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -23,7 +36,6 @@ jobs:
     environment: ci-auth-refresh
     concurrency:
       group: ci-auth-refresh
-      queue: max
     steps:
       - uses: actions/checkout@v4
       - name: Find authentication handoff
@@ -59,6 +71,7 @@ jobs:
           HANDOFF_PRIVATE_KEY: ${{ secrets.CHATGPTX_AUTH_HANDOFF_PRIVATE_KEY }}
           PRIMARY_AUTH_JSON: ${{ secrets.CHATGPTX_PRIMARY_AUTH_JSON }}
           SECONDARY_AUTH_JSON: ${{ secrets.CHATGPTX_SECONDARY_AUTH_JSON }}
+          AGENT_AUTH_JSON: ${{ secrets.CODEX_AGENT_AUTH_JSON }}
         run: |
           [[ -n "$HANDOFF_PRIVATE_KEY" ]] || {
             echo "CHATGPTX_AUTH_HANDOFF_PRIVATE_KEY is required" >&2
@@ -77,11 +90,22 @@ jobs:
           printf '%s' "$PRIMARY_AUTH_JSON" > "$current_root/primary.json"
           printf '%s' "$SECONDARY_AUTH_JSON" > "$current_root/secondary.json"
           chmod 600 "$key_path" "$current_root/primary.json" "$current_root/secondary.json"
+          labels=(primary secondary)
+          if [[ -f "$RUNNER_TEMP/chatgptx-auth-handoff/agent.json" ]]; then
+            [[ -n "$AGENT_AUTH_JSON" ]] || {
+              echo "CODEX_AGENT_AUTH_JSON mirror is required" >&2
+              exit 1
+            }
+            printf '%s' "$AGENT_AUTH_JSON" > "$current_root/agent.json"
+            chmod 600 "$current_root/agent.json"
+            labels+=(agent)
+          fi
           node scripts/auth-handoff.mjs \
             decrypt \
             "$key_path" \
             "$RUNNER_TEMP/chatgptx-auth-handoff" \
-            "$candidate_root"
+            "$candidate_root" \
+            "${labels[@]}"
       - name: Update newer authentication secrets
         if: steps.handoff.outputs.artifact-id != ''
         env:
@@ -104,6 +128,8 @@ jobs:
             local secret_name="$2"
             local current_path="$3"
             local candidate_path="$4"
+            local update_repository="$5"
+            local target_environment="$6"
             local current_timestamp
             local candidate_timestamp
             local timestamp_order
@@ -160,9 +186,17 @@ jobs:
             fi
 
             echo "$label tokens differ and candidate $candidate_timestamp is newer than current $current_timestamp; updating secret"
-            gh secret set "$secret_name" \
-              --repo "$GITHUB_REPOSITORY" \
-              < "$candidate_path"
+            if [[ "$update_repository" == "1" ]]; then
+              gh secret set "$secret_name" \
+                --repo "$GITHUB_REPOSITORY" \
+                < "$candidate_path"
+            fi
+            if [[ -n "$target_environment" ]]; then
+              gh secret set "$secret_name" \
+                --env "$target_environment" \
+                --repo "$GITHUB_REPOSITORY" \
+                < "$candidate_path"
+            fi
             gh secret set "$secret_name" \
               --env ci-auth-refresh \
               --repo "$GITHUB_REPOSITORY" \
@@ -174,12 +208,25 @@ jobs:
             primary \
             CHATGPTX_PRIMARY_AUTH_JSON \
             "$RUNNER_TEMP/chatgptx-current-auth/primary.json" \
-            "$RUNNER_TEMP/chatgptx-candidate-auth/primary.json"
+            "$RUNNER_TEMP/chatgptx-candidate-auth/primary.json" \
+            1 \
+            ""
           update_if_newer \
             secondary \
             CHATGPTX_SECONDARY_AUTH_JSON \
             "$RUNNER_TEMP/chatgptx-current-auth/secondary.json" \
-            "$RUNNER_TEMP/chatgptx-candidate-auth/secondary.json"
+            "$RUNNER_TEMP/chatgptx-candidate-auth/secondary.json" \
+            1 \
+            ""
+          if [[ -f "$RUNNER_TEMP/chatgptx-candidate-auth/agent.json" ]]; then
+            update_if_newer \
+              agent \
+              CODEX_AGENT_AUTH_JSON \
+              "$RUNNER_TEMP/chatgptx-current-auth/agent.json" \
+              "$RUNNER_TEMP/chatgptx-candidate-auth/agent.json" \
+              0 \
+              codex-agent
+          fi
       - name: Delete processed authentication handoff
         if: success() && steps.handoff.outputs.artifact-id != ''
         env:

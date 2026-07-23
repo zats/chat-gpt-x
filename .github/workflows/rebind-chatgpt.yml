@@ -1,0 +1,444 @@
+name: Rebind ChatGPT
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: ChatGPT app version
+        required: true
+        type: string
+      download_url:
+        description: Exact Sparkle enclosure URL
+        required: true
+        type: string
+      issue_number:
+        description: Version-watcher issue number
+        required: true
+        type: string
+  repository_dispatch:
+    types:
+      - chatgpt-version-detected
+
+concurrency:
+  group: rebind-chatgpt-${{ inputs.version || github.event.client_payload.version }}
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: macos-26
+    timeout-minutes: 360
+    environment: codex-agent
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.request.outputs.version }}
+      download-url: ${{ steps.request.outputs.download-url }}
+      issue-number: ${{ steps.request.outputs.issue-number }}
+      patch-artifact: ${{ steps.patch.outputs.artifact-name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Validate request
+        id: request
+        env:
+          REQUEST_VERSION: ${{ inputs.version || github.event.client_payload.version }}
+          REQUEST_DOWNLOAD_URL: ${{ inputs.download_url || github.event.client_payload.download_url }}
+          REQUEST_ISSUE_NUMBER: ${{ inputs.issue_number || github.event.client_payload.issue_number }}
+        run: |
+          [[ "$REQUEST_VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]] || {
+            echo "invalid version" >&2
+            exit 1
+          }
+          expected_url="https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-$REQUEST_VERSION.zip"
+          [[ "$REQUEST_DOWNLOAD_URL" == "$expected_url" ]] || {
+            echo "invalid download URL" >&2
+            exit 1
+          }
+          [[ "$REQUEST_ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+            echo "invalid issue number" >&2
+            exit 1
+          }
+          {
+            echo "version=$REQUEST_VERSION"
+            echo "download-url=$REQUEST_DOWNLOAD_URL"
+            echo "issue-number=$REQUEST_ISSUE_NUMBER"
+            echo "base-sha=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install build dependencies
+        run: brew install ripgrep xcodegen
+
+      - name: Download requested ChatGPT app
+        id: chatgpt
+        env:
+          APP_VERSION: ${{ steps.request.outputs.version }}
+          DOWNLOAD_URL: ${{ steps.request.outputs.download-url }}
+        run: |
+          app_path="$(
+            scripts/download-chatgpt-version.sh \
+              "$APP_VERSION" \
+              "$DOWNLOAD_URL" \
+              "$RUNNER_TEMP/chatgpt-app"
+          )"
+          echo "path=$app_path" >> "$GITHUB_OUTPUT"
+
+      - name: Install bundled Codex CLI
+        env:
+          CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
+        run: |
+          cli_path="$CHATGPT_APP_PATH/Contents/Resources/codex"
+          [[ -x "$cli_path" ]] || {
+            echo "downloaded ChatGPT app has no bundled Codex CLI" >&2
+            exit 1
+          }
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 755 "$cli_path" "$RUNNER_TEMP/bin/codex"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/codex" --version
+
+      - name: Materialize authentication
+        id: authentication
+        env:
+          AGENT_AUTH_JSON: ${{ secrets.CODEX_AGENT_AUTH_JSON }}
+          PRIMARY_AUTH_JSON: ${{ secrets.CHATGPTX_PRIMARY_AUTH_JSON }}
+          SECONDARY_AUTH_JSON: ${{ secrets.CHATGPTX_SECONDARY_AUTH_JSON }}
+        run: |
+          [[ -n "$AGENT_AUTH_JSON" ]] || {
+            echo "CODEX_AGENT_AUTH_JSON is required" >&2
+            exit 1
+          }
+          [[ -n "$PRIMARY_AUTH_JSON" && -n "$SECONDARY_AUTH_JSON" ]] || {
+            echo "burner authentication secrets are required" >&2
+            exit 1
+          }
+          agent_home="$RUNNER_TEMP/codex-agent-home"
+          auth_root="$RUNNER_TEMP/chatgptx-auth"
+          candidate_root="$RUNNER_TEMP/chatgptx-refreshed-auth"
+          diagnostics_root="$RUNNER_TEMP/chatgptx-rebind-diagnostics"
+          mkdir -p "$agent_home" "$auth_root" "$candidate_root" "$diagnostics_root"
+          chmod 700 "$agent_home" "$auth_root" "$candidate_root"
+          printf '%s' "$AGENT_AUTH_JSON" > "$agent_home/auth.json"
+          printf '%s' "$PRIMARY_AUTH_JSON" > "$auth_root/primary.json"
+          printf '%s' "$SECONDARY_AUTH_JSON" > "$auth_root/secondary.json"
+          cp "$auth_root/primary.json" "$candidate_root/primary.json"
+          cp "$auth_root/secondary.json" "$candidate_root/secondary.json"
+          chmod 600 \
+            "$agent_home/auth.json" \
+            "$auth_root/primary.json" \
+            "$auth_root/secondary.json" \
+            "$candidate_root/primary.json" \
+            "$candidate_root/secondary.json"
+          jq -e '.tokens | type == "object" and has("access_token") and has("refresh_token")' \
+            "$agent_home/auth.json" >/dev/null
+          cp scripts/auth-handoff.mjs "$RUNNER_TEMP/trusted-auth-handoff.mjs"
+          : > "$diagnostics_root/agent.jsonl"
+          : > "$diagnostics_root/agent-final.txt"
+          : > "$diagnostics_root/post-test.log"
+          : > "$diagnostics_root/binding.patch"
+          {
+            echo "agent-home=$agent_home"
+            echo "auth-root=$auth_root"
+            echo "candidate-root=$candidate_root"
+            echo "diagnostics-root=$diagnostics_root"
+          } >> "$GITHUB_OUTPUT"
+          CODEX_HOME="$agent_home" codex login status
+
+      - name: Run Codex rebind agent
+        id: agent
+        env:
+          APP_VERSION: ${{ steps.request.outputs.version }}
+          DOWNLOAD_URL: ${{ steps.request.outputs.download-url }}
+          ISSUE_NUMBER: ${{ steps.request.outputs.issue-number }}
+          CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
+          AGENT_CODEX_HOME: ${{ steps.authentication.outputs.agent-home }}
+          AUTH_ROOT: ${{ steps.authentication.outputs.auth-root }}
+          DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
+        run: |
+          prompt_path="$RUNNER_TEMP/rebind-prompt.md"
+          cat > "$prompt_path" <<PROMPT
+          Use \$rebind-chatgpt-version and complete the new binding for ChatGPT $APP_VERSION.
+
+          Exact stock app: $CHATGPT_APP_PATH
+          Exact Sparkle URL: $DOWNLOAD_URL
+          Version-watcher issue: #$ISSUE_NUMBER
+
+          Follow the skill's entire completion gate. Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, src/extensions/api-test-suite, and every existing binding directory unchanged. Create only src/platform/bindings/$APP_VERSION and update src/platform/bindings/manifest.json after the live suites pass.
+
+          The authenticated test accounts are available only as opaque files:
+          - $AUTH_ROOT/primary.json
+          - $AUTH_ROOT/secondary.json
+
+          Never inspect, print, summarize, copy into the repository, or expose authentication contents. Pass the paths directly to tests. For the final deterministic test use:
+
+          CHATGPT_APP_PATH="$CHATGPT_APP_PATH" scripts/run-local-ci.sh "$AUTH_ROOT/primary.json" "$AUTH_ROOT/secondary.json"
+
+          Work until the binding passes the stable public API suite, current native UI suite, shipped-extension composition, manifest validation, and the skill's remaining gates. Do not commit, push, open a pull request, modify workflow files, or weaken tests. If genuinely blocked, leave the useful binding changes in the worktree and report the exact failure.
+          PROMPT
+
+          set +e
+          CODEX_HOME="$AGENT_CODEX_HOME" codex exec \
+            --ignore-user-config \
+            --strict-config \
+            --model gpt-5.6-sol \
+            --config 'model_reasoning_effort="xhigh"' \
+            --config 'service_tier="fast"' \
+            --dangerously-bypass-approvals-and-sandbox \
+            --color never \
+            --json \
+            --output-last-message "$DIAGNOSTICS_ROOT/agent-final.txt" \
+            --cd "$GITHUB_WORKSPACE" \
+            - < "$prompt_path" > "$DIAGNOSTICS_ROOT/agent.jsonl" 2>&1
+          agent_exit_code=$?
+          set -e
+          echo "exit-code=$agent_exit_code" >> "$GITHUB_OUTPUT"
+
+      - name: Validate agent change scope
+        id: scope
+        if: steps.agent.outputs.exit-code == '0'
+        env:
+          APP_VERSION: ${{ steps.request.outputs.version }}
+          DOWNLOAD_URL: ${{ steps.request.outputs.download-url }}
+          BASE_SHA: ${{ steps.request.outputs.base-sha }}
+        run: scripts/validate-rebind-changes.sh "$APP_VERSION" "$DOWNLOAD_URL" "$BASE_SHA"
+
+      - name: Create scoped binding patch
+        id: patch
+        if: steps.scope.outcome == 'success'
+        env:
+          APP_VERSION: ${{ steps.request.outputs.version }}
+          BASE_SHA: ${{ steps.request.outputs.base-sha }}
+          DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
+        run: |
+          git diff --check "$BASE_SHA"
+          git add -N "src/platform/bindings/$APP_VERSION"
+          git diff --binary "$BASE_SHA" -- \
+            "src/platform/bindings/$APP_VERSION" \
+            src/platform/bindings/manifest.json \
+            > "$DIAGNOSTICS_ROOT/binding.patch"
+          [[ -s "$DIAGNOSTICS_ROOT/binding.patch" ]] || {
+            echo "scoped binding patch is empty" >&2
+            exit 1
+          }
+          artifact_name="chatgpt-binding-$APP_VERSION-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"
+
+      - name: Run deterministic post-agent suite
+        id: tests
+        if: steps.patch.outcome == 'success'
+        env:
+          CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
+          CHATGPTX_AUTH_OUTPUT_DIR: ${{ steps.authentication.outputs.candidate-root }}
+          PRIMARY_AUTH: ${{ steps.authentication.outputs.auth-root }}/primary.json
+          SECONDARY_AUTH: ${{ steps.authentication.outputs.auth-root }}/secondary.json
+          DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
+        run: |
+          set +e
+          scripts/run-local-ci.sh "$PRIMARY_AUTH" "$SECONDARY_AUTH" \
+            > "$DIAGNOSTICS_ROOT/post-test.log" 2>&1
+          test_exit_code=$?
+          set -e
+          echo "exit-code=$test_exit_code" >> "$GITHUB_OUTPUT"
+
+      - name: Check diagnostics for authentication exposure
+        id: exposure
+        if: always() && steps.authentication.outcome == 'success'
+        env:
+          AGENT_HOME: ${{ steps.authentication.outputs.agent-home }}
+          AUTH_ROOT: ${{ steps.authentication.outputs.auth-root }}
+          CANDIDATE_ROOT: ${{ steps.authentication.outputs.candidate-root }}
+          DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
+        run: |
+          auth_paths=(
+            "$AGENT_HOME/auth.json"
+            "$AUTH_ROOT/primary.json"
+            "$AUTH_ROOT/secondary.json"
+            "$CANDIDATE_ROOT/primary.json"
+            "$CANDIDATE_ROOT/secondary.json"
+          )
+          node scripts/check-auth-exposure.mjs \
+            "${auth_paths[@]}" \
+            -- \
+            "$DIAGNOSTICS_ROOT/agent.jsonl" \
+            "$DIAGNOSTICS_ROOT/agent-final.txt" \
+            "$DIAGNOSTICS_ROOT/post-test.log" \
+            "$DIAGNOSTICS_ROOT/binding.patch"
+
+      - name: Upload tested binding patch
+        if: >-
+          steps.patch.outcome == 'success' &&
+          steps.tests.outputs.exit-code == '0' &&
+          steps.exposure.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.patch.outputs.artifact-name }}
+          path: ${{ steps.authentication.outputs.diagnostics-root }}/binding.patch
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Encrypt authentication handoff
+        if: always() && steps.authentication.outcome == 'success'
+        id: authentication-handoff
+        env:
+          AGENT_HOME: ${{ steps.authentication.outputs.agent-home }}
+          CANDIDATE_ROOT: ${{ steps.authentication.outputs.candidate-root }}
+        run: |
+          cp "$AGENT_HOME/auth.json" "$CANDIDATE_ROOT/agent.json"
+          chmod 600 "$CANDIDATE_ROOT/agent.json"
+          encrypted_root="$RUNNER_TEMP/chatgptx-auth-handoff"
+          node "$RUNNER_TEMP/trusted-auth-handoff.mjs" \
+            encrypt \
+            .github/ci-auth-refresh-public.pem \
+            "$CANDIDATE_ROOT" \
+            "$encrypted_root" \
+            primary \
+            secondary \
+            agent
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload encrypted authentication handoff
+        if: always() && steps.authentication-handoff.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-auth-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/chatgptx-auth-handoff
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Report agent result
+        if: always() && steps.exposure.outcome == 'success'
+        env:
+          AGENT_EXIT_CODE: ${{ steps.agent.outputs.exit-code }}
+          TEST_EXIT_CODE: ${{ steps.tests.outputs.exit-code }}
+          DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
+        run: |
+          if [[ "$AGENT_EXIT_CODE" != "0" ]]; then
+            echo "Codex exited with status $AGENT_EXIT_CODE"
+            rg -n -i '"type":"error"|error:|failed|failure|exception|fatal' \
+              "$DIAGNOSTICS_ROOT/agent.jsonl" || true
+          fi
+          if [[ -s "$DIAGNOSTICS_ROOT/agent-final.txt" ]]; then
+            cat "$DIAGNOSTICS_ROOT/agent-final.txt"
+          fi
+          if [[ "$TEST_EXIT_CODE" == "0" ]]; then
+            cat "$DIAGNOSTICS_ROOT/post-test.log"
+          elif [[ -s "$DIAGNOSTICS_ROOT/post-test.log" ]]; then
+            echo "Deterministic post-agent suite failed"
+            rg -n -i 'error:|failed|failure|exception|fatal' \
+              "$DIAGNOSTICS_ROOT/post-test.log" || true
+          fi
+
+      - name: Upload failure diagnostics
+        if: >-
+          always() &&
+          steps.exposure.outcome == 'success' &&
+          (
+            steps.agent.outputs.exit-code != '0' ||
+            steps.scope.outcome == 'failure' ||
+            (
+              steps.tests.outcome == 'success' &&
+              steps.tests.outputs.exit-code != '0'
+            ) ||
+            steps.patch.outcome == 'failure'
+          )
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebind-failure-${{ steps.request.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.authentication.outputs.diagnostics-root }}/agent.jsonl
+            ${{ steps.authentication.outputs.diagnostics-root }}/agent-final.txt
+            ${{ steps.authentication.outputs.diagnostics-root }}/post-test.log
+            ${{ steps.authentication.outputs.diagnostics-root }}/binding.patch
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove sensitive files
+        if: always()
+        run: >-
+          rm -rf
+          "$RUNNER_TEMP/codex-agent-home"
+          "$RUNNER_TEMP/chatgptx-auth"
+          "$RUNNER_TEMP/chatgptx-refreshed-auth"
+          "$RUNNER_TEMP/chatgptx-auth-handoff"
+          "$RUNNER_TEMP/trusted-auth-handoff.mjs"
+          "$RUNNER_TEMP/chatgpt-app"
+
+      - name: Require successful binding
+        if: always()
+        env:
+          AGENT_EXIT_CODE: ${{ steps.agent.outputs.exit-code }}
+          SCOPE_OUTCOME: ${{ steps.scope.outcome }}
+          TEST_EXIT_CODE: ${{ steps.tests.outputs.exit-code }}
+          PATCH_OUTCOME: ${{ steps.patch.outcome }}
+          EXPOSURE_OUTCOME: ${{ steps.exposure.outcome }}
+        run: |
+          [[ "$AGENT_EXIT_CODE" == "0" ]]
+          [[ "$SCOPE_OUTCOME" == "success" ]]
+          [[ "$TEST_EXIT_CODE" == "0" ]]
+          [[ "$PATCH_OUTCOME" == "success" ]]
+          [[ "$EXPOSURE_OUTCOME" == "success" ]]
+
+  open-pull-request:
+    needs: generate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.generate.outputs.patch-artifact }}
+          path: ${{ runner.temp }}/binding-patch
+
+      - name: Commit binding
+        env:
+          APP_VERSION: ${{ needs.generate.outputs.version }}
+        run: |
+          git apply --index "$RUNNER_TEMP/binding-patch/binding.patch"
+          git diff --cached --check
+          branch_name="codex/bindings-chatgpt-$APP_VERSION"
+          git switch -c "$branch_name"
+          git config user.name "chat-gpt-x[bot]"
+          git config user.email "chat-gpt-x[bot]@users.noreply.github.com"
+          git commit -m "Create bindings for ChatGPT $APP_VERSION"
+          git push --force origin "HEAD:refs/heads/$branch_name"
+
+      - name: Open pull request
+        env:
+          APP_VERSION: ${{ needs.generate.outputs.version }}
+          ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch_name="codex/bindings-chatgpt-$APP_VERSION"
+          title="Create bindings for ChatGPT $APP_VERSION"
+          body="Generated and validated by the ChatGPT rebinding workflow.
+
+          Closes #$ISSUE_NUMBER"
+          existing_pr="$(
+            gh pr list \
+              --head "$branch_name" \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+          if [[ -n "$existing_pr" ]]; then
+            gh pr edit "$existing_pr" --title "$title" --body "$body"
+          else
+            gh pr create \
+              --base main \
+              --head "$branch_name" \
+              --title "$title" \
+              --body "$body"
+          fi

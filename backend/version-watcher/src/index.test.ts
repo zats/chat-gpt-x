@@ -74,26 +74,37 @@ describe("version detection", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("creates one issue for an unbound and unreported version", async () => {
+  it("creates one issue and dispatches its binding workflow", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(response(feed))
       .mockResolvedValueOnce(response({}, 404))
       .mockResolvedValueOnce(response({ items: [] }))
-      .mockResolvedValueOnce(response({ number: 21 }, 201));
+      .mockResolvedValueOnce(response({ number: 21 }, 201))
+      .mockResolvedValueOnce(response(null, 204));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(checkCodexVersion(env)).resolves.toMatchObject({
       version,
-      outcome: "issue-created",
+      outcome: "workflow-dispatched",
       issueNumber: 21,
     });
 
-    const issueRequest = fetchMock.mock.calls.at(-1);
+    const issueRequest = fetchMock.mock.calls.at(-2);
     expect(issueRequest?.[0]).toContain("/issues");
     expect(JSON.parse(issueRequest?.[1]?.body as string)).toMatchObject({
       title: `ChatGPT ${version} available`,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    const dispatchRequest = fetchMock.mock.calls.at(-1);
+    expect(dispatchRequest?.[0]).toContain("/dispatches");
+    expect(JSON.parse(dispatchRequest?.[1]?.body as string)).toEqual({
+      event_type: "chatgpt-version-detected",
+      client_payload: {
+        version,
+        download_url: downloadUrl,
+        issue_number: 21,
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 });

@@ -19,8 +19,10 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
-const [operation, keyPath, inputRoot, outputRoot] = process.argv.slice(2);
-const labels = ["primary", "secondary"];
+const [operation, keyPath, inputRoot, outputRoot, ...requestedLabels] =
+  process.argv.slice(2);
+const labels =
+  requestedLabels.length > 0 ? requestedLabels : ["primary", "secondary"];
 const context = Buffer.from("chatgptx-ci-auth-handoff-v1");
 
 if (
@@ -30,8 +32,11 @@ if (
   !outputRoot
 ) {
   throw new Error(
-    "usage: auth-handoff.mjs <encrypt|decrypt> <key.pem> <input-root> <output-root>",
+    "usage: auth-handoff.mjs <encrypt|decrypt> <key.pem> <input-root> <output-root> [label ...]",
   );
+}
+if (labels.some((label) => !/^[a-z][a-z0-9-]*$/.test(label))) {
+  throw new Error("handoff labels must be lowercase identifiers");
 }
 
 function encode(value) {

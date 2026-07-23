@@ -58,7 +58,7 @@ MET=true
 [[ -n "$EXPECT_VERSION" && "$EXPECT_VERSION" != "$APP_VERSION" ]] && MET=false
 
 EXTRACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/chatgpt-app-${APP_VERSION}.XXXXXX")"
-if ! npx --yes @electron/asar extract "$ASAR" "$EXTRACT_DIR" >&2; then
+if ! npx --yes @electron/asar@4.2.1 extract "$ASAR" "$EXTRACT_DIR" >&2; then
   rm -rf "$EXTRACT_DIR"
   echo "asar extraction failed" >&2
   exit 3

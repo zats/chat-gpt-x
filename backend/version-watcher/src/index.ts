@@ -7,7 +7,7 @@ interface Env {
 
 interface CheckResult {
   version: string;
-  outcome: "binding-exists" | "issue-exists" | "issue-created";
+  outcome: "binding-exists" | "issue-exists" | "workflow-dispatched";
   issueNumber?: number;
 }
 
@@ -70,10 +70,11 @@ export async function checkCodexVersion(env: Env): Promise<CheckResult> {
   }
 
   const issueNumber = await createIssue(env, title, issueBody(latest));
+  await dispatchRebind(env, latest, issueNumber);
 
   return {
     version: latest.version,
-    outcome: "issue-created",
+    outcome: "workflow-dispatched",
     issueNumber,
   };
 }
@@ -173,6 +174,33 @@ async function createIssue(
     },
   );
   return issue.number;
+}
+
+async function dispatchRebind(
+  env: Env,
+  latest: LatestCodexVersion,
+  issueNumber: number,
+): Promise<void> {
+  const response = await githubFetch(
+    env,
+    `/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/dispatches`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        event_type: "chatgpt-version-detected",
+        client_payload: {
+          version: latest.version,
+          download_url: latest.downloadUrl,
+          issue_number: issueNumber,
+        },
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Workflow dispatch failed: ${response.status} ${await response.text()}`,
+    );
+  }
 }
 
 async function githubJson<T>(
