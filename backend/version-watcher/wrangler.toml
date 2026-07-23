@@ -1,0 +1,11 @@
+name = "codex-version-check-prode"
+main = "src/index.ts"
+compatibility_date = "2026-07-04"
+
+[vars]
+GITHUB_OWNER = "zats"
+GITHUB_REPO = "chat-gpt-x"
+GITHUB_BRANCH = "main"
+
+[triggers]
+crons = ["*/5 * * * *"]

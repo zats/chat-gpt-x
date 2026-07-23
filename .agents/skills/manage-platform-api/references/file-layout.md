@@ -9,6 +9,7 @@ src/
     runtime/
       codex-paths.cjs           # canonical Codex home and runtime path resolver
     bindings/
+      manifest.json             # current version and stock download URL used by CI
       <app-version>/            # e.g. 26.715.31925 — bindings bridging that build's internals to types.d.ts
         DERIVATION.md           # how each binding was found: anchors, locations, failure signatures
         ...                     # binding implementation files
@@ -22,7 +23,7 @@ src/
 
 `src/extensions/build.sh [<extension-id> ...]` is the only extension build and installation entry point. With no ids it builds all extensions. Each manifest must declare `"main": "contents/main.js"`; the script compiles `<extension-id>.ts` as browser-targeted CommonJS and installs the bundle and manifest in the canonical runtime layout below. The shared `resolveCodexHome()` utility defines Codex home from `CODEX_HOME`, defaulting to `$HOME/.codex`.
 
-The bindings directory name is the app's version (`CFBundleShortVersionString`) — that string is the version key.
+The bindings directory name is the app's version (`CFBundleShortVersionString`) — that string is the version key. `bindings/manifest.json` must point to the newest versioned directory and its exact Sparkle enclosure URL.
 
 ## Runtime state (on the user's machine)
 

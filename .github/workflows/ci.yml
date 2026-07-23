@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate pinned ChatGPT version
+        run: node scripts/validate-pinned-chatgpt.mjs
+      - name: Check scripts
+        run: |
+          bash -n scripts/download-pinned-chatgpt.sh
+          bash -n scripts/run-local-ci.sh
+          node --check scripts/validate-pinned-chatgpt.mjs
+          node --check scripts/wait-for-chatgpt-ready.mjs
+
+  end-to-end:
+    needs: static
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install build dependencies
+        run: brew install ripgrep xcodegen
+      - name: Cache ChatGPT download
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/chatgpt-download-cache
+          key: chatgpt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/platform/bindings/manifest.json') }}
+      - name: Download pinned ChatGPT app
+        id: chatgpt
+        env:
+          CHATGPTX_DOWNLOAD_CACHE_DIR: ${{ runner.temp }}/chatgpt-download-cache
+        run: |
+          app_path="$(scripts/download-pinned-chatgpt.sh "$RUNNER_TEMP/chatgpt-app")"
+          echo "path=$app_path" >> "$GITHUB_OUTPUT"
+      - name: Materialize burner authentication
+        id: authentication
+        env:
+          PRIMARY_AUTH_JSON: ${{ secrets.CHATGPTX_PRIMARY_AUTH_JSON }}
+          SECONDARY_AUTH_JSON: ${{ secrets.CHATGPTX_SECONDARY_AUTH_JSON }}
+        run: |
+          [[ -n "$PRIMARY_AUTH_JSON" ]] || {
+            echo "CHATGPTX_PRIMARY_AUTH_JSON is required" >&2
+            exit 1
+          }
+          [[ -n "$SECONDARY_AUTH_JSON" ]] || {
+            echo "CHATGPTX_SECONDARY_AUTH_JSON is required" >&2
+            exit 1
+          }
+          auth_root="$RUNNER_TEMP/chatgptx-auth"
+          mkdir -p "$auth_root"
+          chmod 700 "$auth_root"
+          printf '%s' "$PRIMARY_AUTH_JSON" > "$auth_root/primary.json"
+          printf '%s' "$SECONDARY_AUTH_JSON" > "$auth_root/secondary.json"
+          chmod 600 "$auth_root/primary.json" "$auth_root/secondary.json"
+          echo "primary=$auth_root/primary.json" >> "$GITHUB_OUTPUT"
+          echo "secondary=$auth_root/secondary.json" >> "$GITHUB_OUTPUT"
+      - name: Run isolated end-to-end suite
+        env:
+          CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
+        run: >-
+          scripts/run-local-ci.sh
+          "${{ steps.authentication.outputs.primary }}"
+          "${{ steps.authentication.outputs.secondary }}"
+      - name: Remove sensitive and extracted files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/chatgptx-auth" "$RUNNER_TEMP/chatgpt-app"

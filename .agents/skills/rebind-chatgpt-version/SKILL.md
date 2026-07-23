@@ -38,7 +38,7 @@ If the current build makes the API impossible to implement, report that fact ins
 4. Run the extraction script from `manage-platform-api` with `--expect-version <new-version>`. Work only in the returned temp directory.
 5. Stop if the version or hash changes during the task.
 
-Record the version and hash immediately. They become the directory name and manifest identity.
+Record the version, hash, and exact Sparkle enclosure URL immediately. They become the directory name, versioned manifest identity, and current CI pin.
 
 ### 2. Bootstrap from the prior binding
 
@@ -100,6 +100,7 @@ Validate in this order:
 4. Run the API test extension together with representative shipped extensions to catch composition failures.
 5. Disable the test extension, then verify the normal shipped-extension flow.
 6. When producing a launcher artifact, build Release, verify its signature, compare the packaged binding files with source, and repeat the critical interaction through the packaged bridge.
+7. After the binding passes, update `src/platform/bindings/manifest.json` to the new version and exact Sparkle enclosure URL, then run `node scripts/validate-pinned-chatgpt.mjs`.
 
 Treat a result file as current only when the bridge log from the test PID and timestamp records that exact result. Missing, partial, stale, or unauthenticated results fail the run. Never weaken an assertion to obtain green tests.
 
@@ -122,6 +123,7 @@ Keep version-specific facts in this derivation. Do not copy them into this skill
 Finish only when all conditions hold:
 
 - The new directory and manifest match the installed version and app.asar.
+- The current bindings manifest points to the new version and exact download URL, and its validator passes.
 - Every referenced current-build module exists and its export was verified.
 - The public API, stable suite, and all prior binding directories are unchanged.
 - The unchanged public suite passes against the live app.

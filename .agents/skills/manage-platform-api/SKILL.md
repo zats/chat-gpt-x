@@ -61,7 +61,7 @@ The suite fails closed: it must be impossible for it to pass without a working b
 
 ### 4. Locate and extract the pinned app version
 
-The pinned app version is the bindings directory name under `src/platform/bindings/` (newest directory if several). Verify that exact version is installed on this machine and extract it to a temp dir:
+The pinned app version and stock download URL live in `src/platform/bindings/manifest.json`; its version must match the newest versioned binding directory. Verify that exact version is installed on this machine and extract it to a temp dir:
 
 ```bash
 scripts/extract-app.sh --expect-version <version>
@@ -87,4 +87,4 @@ Write/update `src/platform/bindings/<version>/DERIVATION.md`: for each API, whic
 
 ## Rebinding to a new app version
 
-When the app updates: same process, new `src/platform/bindings/<new-version>/` directory and manifest. Feed the rebinding agent the previous version's DERIVATION.md as heuristics (things may have changed — verify, don't assume), then confirm with the unchanged deterministic test suite. The public API must not change during rebinding; if the new build makes the API impossible, escalate to the user instead of silently changing semantics.
+When the app updates: same process, new `src/platform/bindings/<new-version>/` directory and versioned manifest. Feed the rebinding agent the previous version's DERIVATION.md as heuristics (things may have changed — verify, don't assume), then confirm with the unchanged deterministic test suite. After validation, update `src/platform/bindings/manifest.json` with the new version and exact Sparkle enclosure URL; `scripts/validate-pinned-chatgpt.mjs` must pass. The public API must not change during rebinding; if the new build makes the API impossible, escalate to the user instead of silently changing semantics.

@@ -11,7 +11,7 @@ Properties that define the project:
 - **Non-invasive.** The ChatGPT app bundle is never modified, patched, or re-signed. Injection happens through the environment at launch (`NODE_OPTIONS=--require` into the Electron main process — verified against the installed app), so the app stays stock, keeps its signature, and auto-updates normally.
 - **Stable boundary.** Extensions access capabilities exposed by ChatGPT only through `src/platform/types.d.ts`. The app's internals are minified and re-scrambled on every build; the public API is not. Version-independent functionality supplied by ChatGPTX itself lives in shared TypeScript utilities under `src/platform/utilities/`, outside the ChatGPT API and its versioned bindings. Extension authors never see or depend on app internals. "Stable" means stable *across app updates* — not backward-compatible: the API itself evolves by direct in-place change, one way, with no deprecation shims or legacy paths.
 - **Native by construction.** Extensions must be indistinguishable from first-party UI — in look AND in behavior. APIs expose and reuse the app's own components (styling, keyboard navigation, focus, states, accessibility come for free); replicating an existing control is a documented last resort.
-- **Versioned bindings.** `src/platform/bindings/<app-version>/` bridges one specific ChatGPT build to the stable API. The runtime selects it by app version; its manifest pins the build's `app.asar` SHA-256. When the app updates, bindings are regenerated for the new build while the public API stays unchanged.
+- **Versioned bindings.** `src/platform/bindings/<app-version>/` bridges one specific ChatGPT build to the stable API. The runtime selects it by app version; its manifest pins the build's `app.asar` SHA-256. `src/platform/bindings/manifest.json` identifies the current version and stock download URL used by CI. It must point to the newest binding. When the app updates, the new binding and current manifest change together while the public API stays unchanged.
 - **Deterministic correctness.** The `api-test-suite` extension mechanically exercises every public API path inside the real app. A binding is "working" exactly when that suite passes — not before.
 
 ## Repository layout
@@ -22,11 +22,17 @@ src/
     types.d.ts                  # stable API for capabilities exposed by ChatGPT
     utilities/                  # shared version-independent TypeScript utilities for extensions
     bindings/
+      manifest.json             # current app version and stock download URL used by CI
       <app-version>/            # per-build bridge to the API + manifest.json + DERIVATION.md
   extensions/
     api-test-suite/             # mechanical e2e test extension (defines "working")
     <extension-id>/             # source: <extension-id>.ts + package.json
     build.sh                    # canonical extension build and installation entry point
+backend/
+  version-watcher/              # Cloudflare Worker that detects unbound Sparkle versions
+scripts/
+  run-local-ci.sh               # isolated authenticated end-to-end suite
+.github/workflows/ci.yml        # pinned-version checks on every main commit and PR
 .agents/skills/
   manage-platform-api/          # process skill for any public-API change (required reading)
 ```
@@ -54,4 +60,4 @@ Rules: CDP is for development-time inspection and hot-probing only — productio
 
 ## Current state
 
-The current binding is `src/platform/bindings/26.715.70719/`. It implements `menus.profile` plus the native authentication lifecycle used by `multiple-accounts`, and passes the public API suite (20/20) and version-specific native UI suite (24/24). Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + main-process bridge (injection, extension loader, scoped utility services, result reporting).
+The current binding is `src/platform/bindings/26.715.72359/`. It passes the public API suite (39/39) and version-specific native UI suite (62/62) for local and cloud threads. The isolated CI harness also verifies burner-account switching, restoration, and the Release launcher artifact. Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + main-process bridge (injection, extension loader, scoped utility services, result reporting).
