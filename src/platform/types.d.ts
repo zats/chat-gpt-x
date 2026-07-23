@@ -445,7 +445,7 @@ export interface CurrentAuthentication extends AuthenticationIdentity {
  */
 export interface AuthenticationApi {
   /**
-   * Read the current account and the exact credentials stored in `~/.codex/auth.json`.
+   * Read the current account and the exact credentials stored in `auth.json` under the resolved Codex home.
    *
    * Returns `undefined` when no valid current authentication exists. The returned object is a snapshot; changing it has no effect.
    *
@@ -472,7 +472,7 @@ export interface AuthenticationApi {
   startSignIn(): Promise<void>;
 
   /**
-   * Replace `~/.codex/auth.json` with previously captured credentials and make the app adopt them through its native post-authentication reload flow.
+   * Replace `auth.json` under the resolved Codex home with previously captured credentials and make the app adopt them through its native post-authentication reload flow.
    *
    * The JSON is validated before the current file is changed, and the replacement is atomic. Resolves after ChatGPT's native app server has reinitialized with the replacement and its authentication refresh has been requested.
    *

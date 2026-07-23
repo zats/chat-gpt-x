@@ -65,7 +65,7 @@ This build also renders remote scheduled-task rows with `data-app-action-sidebar
 
 `startSignIn` uses the app's `login-with-chatgpt` URL creation and open-in-browser dispatch. Successful sign-in runs the stock `account-info` removal and auth-nonce refresh under native providers.
 
-Credential replacement atomically updates the isolated `auth.json`, dispatches the app's `codex-app-server-restart` message for host `local`, waits for `codex-app-server-initialized`, then runs the same query/auth refresh sequence. Public listeners preserve registration order and error isolation.
+Credential replacement atomically updates `auth.json` under the resolved Codex home, dispatches the app's `codex-app-server-restart` message for host `local`, waits for `codex-app-server-initialized`, then runs the same query/auth refresh sequence. Public listeners preserve registration order and error isolation.
 
 ## appearance
 

@@ -12,11 +12,11 @@
  *    stay inert (bindings are stale)
  *  - inject the binding host into app windows (webContents.executeJavaScript
  *    is privileged and bypasses the page CSP)
- *  - load enabled extensions from ~/.codex/extensions/settings.json
+ *  - load enabled extensions from the resolved Codex home
  *    (in settings order = load order) and activate them through the host
- *  - report api-test-suite results to ~/.codex/extensions/log/test-results.json
+ *  - report api-test-suite results beneath the resolved Codex home
  *
- * Logs JSON lines to ~/.codex/extensions/log/bridge-<pid>.log
+ * Logs JSON lines beneath the resolved Codex home.
  */
 "use strict";
 
@@ -30,17 +30,20 @@ if (process.type === "browser") {
 
 function init() {
   const fs = require("node:fs");
-  const os = require("node:os");
   const path = require("node:path");
+  const {
+    resolveCodexHome,
+    resolveExtensionsDirectory,
+  } = require("../runtime/codex-paths.cjs");
 
   const PLATFORM_ROOT = path.join(__dirname, "..");
-  const STATE_DIR = path.join(os.homedir(), ".codex", "extensions");
+  const CODEX_HOME = resolveCodexHome();
+  const STATE_DIR = resolveExtensionsDirectory();
   const LOG_DIR = path.join(STATE_DIR, "log");
   const LOG_FILE = path.join(LOG_DIR, `bridge-${process.pid}.log`);
   const SETTINGS_FILE = path.join(STATE_DIR, "settings.json");
   const RESULTS_FILE = path.join(LOG_DIR, "test-results.json");
   const PRELOAD_FILE = path.join(__dirname, "preload.cjs");
-  const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
   const AUTH_FILE = path.join(CODEX_HOME, "auth.json");
 
   function log(event, data) {

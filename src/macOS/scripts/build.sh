@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MACOS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$MACOS_DIR/../.." && pwd)"
-CONFIGURATION="${CHATGPTX_BUILD_CONFIGURATION:-Debug}"
+CONFIGURATION="${CHATGPTX_BUILD_CONFIGURATION:-Release}"
 OUTPUT_DIR="${CHATGPTX_BUILD_DIR:-$REPO_ROOT/.builds}"
 
 command -v xcodegen >/dev/null || {

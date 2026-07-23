@@ -31,13 +31,7 @@ src/
   manage-platform-api/          # process skill for any public-API change (required reading)
 ```
 
-`src/extensions/build.sh [<extension-id> ...]` builds every extension, or only
-the listed extensions, and installs each bundle at
-`~/.codex/extensions/<extension-id>/contents/main.js`. Manifests must declare
-that exact `main` path. The script preserves extension-owned state; persistent
-extension settings belong at `~/.codex/extensions/<extension-id>/settings.json`.
-The global `~/.codex/extensions/settings.json` controls enablement and load
-order. Set `CHATGPTX_EXTENSIONS_DIR` only for isolated builds and tests.
+`src/extensions/build.sh [<extension-id> ...]` builds every extension, or only the listed extensions, and installs each bundle at `<Codex home>/extensions/<extension-id>/contents/main.js`. Manifests must declare that exact `main` path. The script preserves extension-owned state; persistent extension settings belong at `<Codex home>/extensions/<extension-id>/settings.json`. The global `<Codex home>/extensions/settings.json` controls enablement and load order. `resolveCodexHome()` defines Codex home from `CODEX_HOME`, defaulting to `$HOME/.codex`; all runtime paths use that shared resolver.
 
 ## Invariants for any change
 

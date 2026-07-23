@@ -3,8 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_ROOT="${CHATGPTX_EXTENSIONS_DIR:-$HOME/.codex/extensions}"
-GLOBAL_SETTINGS_FILE="$INSTALL_ROOT/settings.json"
+CODEX_PATHS="$SCRIPT_DIR/../platform/runtime/codex-paths.cjs"
 CANONICAL_MAIN="contents/main.js"
 
 command -v bun >/dev/null || {
@@ -15,6 +14,9 @@ command -v jq >/dev/null || {
   echo "jq is required: brew install jq" >&2
   exit 1
 }
+
+INSTALL_ROOT="$(bun "$CODEX_PATHS" extensions)"
+GLOBAL_SETTINGS_FILE="$INSTALL_ROOT/settings.json"
 
 BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/chatgptx-extensions.XXXXXX")"
 cleanup() {

@@ -19,6 +19,9 @@ targets:
       - path: ../platform/bridge
         type: folder
         buildPhase: resources
+      - path: ../platform/runtime
+        type: folder
+        buildPhase: resources
       - path: ../platform/bindings
         type: folder
         buildPhase: resources

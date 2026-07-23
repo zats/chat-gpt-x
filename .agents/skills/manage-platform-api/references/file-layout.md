@@ -6,6 +6,8 @@
 src/
   platform/
     types.d.ts                  # THE stable public API. Extensions compile against this only, documented with TSDoc.
+    runtime/
+      codex-paths.cjs           # canonical Codex home and runtime path resolver
     bindings/
       <app-version>/            # e.g. 26.715.31925 — bindings bridging that build's internals to types.d.ts
         DERIVATION.md           # how each binding was found: anchors, locations, failure signatures
@@ -18,14 +20,14 @@ src/
     api-test-suite/             # the mechanical e2e test extension — exercises every public API path
 ```
 
-`src/extensions/build.sh [<extension-id> ...]` is the only extension build and installation entry point. With no ids it builds all extensions. Each manifest must declare `"main": "contents/main.js"`; the script compiles `<extension-id>.ts` as browser-targeted CommonJS and installs the bundle and manifest in the canonical runtime layout below. `CHATGPTX_EXTENSIONS_DIR` overrides the root only for isolated builds and tests.
+`src/extensions/build.sh [<extension-id> ...]` is the only extension build and installation entry point. With no ids it builds all extensions. Each manifest must declare `"main": "contents/main.js"`; the script compiles `<extension-id>.ts` as browser-targeted CommonJS and installs the bundle and manifest in the canonical runtime layout below. The shared `resolveCodexHome()` utility defines Codex home from `CODEX_HOME`, defaulting to `$HOME/.codex`.
 
 The bindings directory name is the app's version (`CFBundleShortVersionString`) — that string is the version key.
 
 ## Runtime state (on the user's machine)
 
 ```
-~/.codex/extensions/
+<Codex home>/extensions/
   settings.json                 # global extension enablement, load order, and canonical bundle paths
   <extension-id>/
     package.json                # installed manifest
