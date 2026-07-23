@@ -114,7 +114,7 @@ async function validateUi(
       await sleep(50);
     }
     throw new Error(
-      `Timed out waiting for native UI state during ${globalThis.__CGPTX_UI_TEST_PROGRESS__}: ${condition}`,
+      `Timed out waiting for native UI state during ${globalThis.__CGPTX_UI_TEST_PROGRESS__}: ${condition.toString().replace(/\s+/g, ' ')}`,
     );
   };
   const waitForNativeAccount = async (email, timeoutMs = 20000) => {
