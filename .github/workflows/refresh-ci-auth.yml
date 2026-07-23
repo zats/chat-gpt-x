@@ -1,0 +1,196 @@
+name: Refresh CI authentication
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    if: >-
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    environment: ci-auth-refresh
+    concurrency:
+      group: ci-auth-refresh
+      queue: max
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find authentication handoff
+        id: handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          artifact_name="ci-auth-refresh-$SOURCE_RUN_ID-$SOURCE_RUN_ATTEMPT"
+          artifact_id="$(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts" \
+              --jq ".artifacts[] | select(.name == \"$artifact_name\") | .id"
+          )"
+          if [[ -z "$artifact_id" ]]; then
+            echo "No authentication handoff was produced"
+            exit 0
+          fi
+          echo "artifact-id=$artifact_id" >> "$GITHUB_OUTPUT"
+          echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"
+      - name: Download encrypted authentication handoff
+        if: steps.handoff.outputs.artifact-id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.handoff.outputs.artifact-name }}
+          path: ${{ runner.temp }}/chatgptx-auth-handoff
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Decrypt authentication handoff
+        if: steps.handoff.outputs.artifact-id != ''
+        env:
+          HANDOFF_PRIVATE_KEY: ${{ secrets.CHATGPTX_AUTH_HANDOFF_PRIVATE_KEY }}
+          PRIMARY_AUTH_JSON: ${{ secrets.CHATGPTX_PRIMARY_AUTH_JSON }}
+          SECONDARY_AUTH_JSON: ${{ secrets.CHATGPTX_SECONDARY_AUTH_JSON }}
+        run: |
+          [[ -n "$HANDOFF_PRIVATE_KEY" ]] || {
+            echo "CHATGPTX_AUTH_HANDOFF_PRIVATE_KEY is required" >&2
+            exit 1
+          }
+          [[ -n "$PRIMARY_AUTH_JSON" && -n "$SECONDARY_AUTH_JSON" ]] || {
+            echo "CI authentication secrets are required" >&2
+            exit 1
+          }
+          key_path="$RUNNER_TEMP/chatgptx-auth-handoff-private.pem"
+          current_root="$RUNNER_TEMP/chatgptx-current-auth"
+          candidate_root="$RUNNER_TEMP/chatgptx-candidate-auth"
+          mkdir -p "$current_root"
+          chmod 700 "$current_root"
+          printf '%s' "$HANDOFF_PRIVATE_KEY" > "$key_path"
+          printf '%s' "$PRIMARY_AUTH_JSON" > "$current_root/primary.json"
+          printf '%s' "$SECONDARY_AUTH_JSON" > "$current_root/secondary.json"
+          chmod 600 "$key_path" "$current_root/primary.json" "$current_root/secondary.json"
+          node scripts/auth-handoff.mjs \
+            decrypt \
+            "$key_path" \
+            "$RUNNER_TEMP/chatgptx-auth-handoff" \
+            "$candidate_root"
+      - name: Update newer authentication secrets
+        if: steps.handoff.outputs.artifact-id != ''
+        env:
+          GH_TOKEN: ${{ secrets.CHATGPTX_SECRET_UPDATE_TOKEN }}
+        run: |
+          [[ -n "$GH_TOKEN" ]] || {
+            echo "CHATGPTX_SECRET_UPDATE_TOKEN is required" >&2
+            exit 1
+          }
+          mirror_names="$(
+            gh secret list \
+              --env ci-auth-refresh \
+              --repo "$GITHUB_REPOSITORY" \
+              --json name \
+              --jq '.[].name'
+          )"
+
+          update_if_newer() {
+            local label="$1"
+            local secret_name="$2"
+            local current_path="$3"
+            local candidate_path="$4"
+            local current_timestamp
+            local candidate_timestamp
+            local timestamp_order
+            local mirror_present=0
+
+            if grep -Fxq "$secret_name" <<< "$mirror_names"; then
+              mirror_present=1
+            fi
+
+            jq -e '.tokens | type == "object"' "$current_path" >/dev/null
+            jq -e '.tokens | type == "object"' "$candidate_path" >/dev/null
+            current_timestamp="$(jq -er '.last_refresh' "$current_path")"
+            candidate_timestamp="$(jq -er '.last_refresh' "$candidate_path")"
+            timestamp_order="$(node -e '
+              function nanoseconds(value) {
+                const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
+                if (!match) throw new Error("invalid last_refresh timestamp");
+                const milliseconds = Date.parse(match[1] + "Z");
+                if (!Number.isFinite(milliseconds)) throw new Error("invalid last_refresh timestamp");
+                const fraction = (match[2] ?? "").padEnd(9, "0");
+                return BigInt(milliseconds) * 1000000n + BigInt(fraction);
+              }
+              process.stdout.write(
+                nanoseconds(process.argv[2]) > nanoseconds(process.argv[1])
+                  ? "newer"
+                  : "not-newer",
+              );
+            ' "$current_timestamp" "$candidate_timestamp")"
+
+            if cmp -s \
+              <(jq -cS '.tokens' "$current_path") \
+              <(jq -cS '.tokens' "$candidate_path"); then
+              echo "$label tokens match the current secret; no update needed"
+              if [[ "$mirror_present" == "0" ]]; then
+                gh secret set "$secret_name" \
+                  --env ci-auth-refresh \
+                  --repo "$GITHUB_REPOSITORY" \
+                  < "$current_path"
+                echo "$label authentication mirror initialized"
+              fi
+              return
+            fi
+
+            if [[ "$timestamp_order" != "newer" ]]; then
+              echo "$label tokens differ, but candidate $candidate_timestamp is not newer than current $current_timestamp; keeping current secret"
+              if [[ "$mirror_present" == "0" ]]; then
+                gh secret set "$secret_name" \
+                  --env ci-auth-refresh \
+                  --repo "$GITHUB_REPOSITORY" \
+                  < "$current_path"
+                echo "$label authentication mirror initialized"
+              fi
+              return
+            fi
+
+            echo "$label tokens differ and candidate $candidate_timestamp is newer than current $current_timestamp; updating secret"
+            gh secret set "$secret_name" \
+              --repo "$GITHUB_REPOSITORY" \
+              < "$candidate_path"
+            gh secret set "$secret_name" \
+              --env ci-auth-refresh \
+              --repo "$GITHUB_REPOSITORY" \
+              < "$candidate_path"
+            echo "$label authentication secret updated"
+          }
+
+          update_if_newer \
+            primary \
+            CHATGPTX_PRIMARY_AUTH_JSON \
+            "$RUNNER_TEMP/chatgptx-current-auth/primary.json" \
+            "$RUNNER_TEMP/chatgptx-candidate-auth/primary.json"
+          update_if_newer \
+            secondary \
+            CHATGPTX_SECONDARY_AUTH_JSON \
+            "$RUNNER_TEMP/chatgptx-current-auth/secondary.json" \
+            "$RUNNER_TEMP/chatgptx-candidate-auth/secondary.json"
+      - name: Delete processed authentication handoff
+        if: success() && steps.handoff.outputs.artifact-id != ''
+        env:
+          ARTIFACT_ID: ${{ steps.handoff.outputs.artifact-id }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
+      - name: Remove authentication files
+        if: always()
+        run: >-
+          rm -rf
+          "$RUNNER_TEMP/chatgptx-auth-handoff"
+          "$RUNNER_TEMP/chatgptx-auth-handoff-private.pem"
+          "$RUNNER_TEMP/chatgptx-current-auth"
+          "$RUNNER_TEMP/chatgptx-candidate-auth"

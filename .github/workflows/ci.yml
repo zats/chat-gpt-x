@@ -27,6 +27,8 @@ jobs:
         run: |
           bash -n scripts/download-pinned-chatgpt.sh
           bash -n scripts/run-local-ci.sh
+          node --check scripts/auth-handoff.mjs
+          node --check scripts/capture-authentication-candidates.mjs
           node --check scripts/validate-pinned-chatgpt.mjs
           node --check scripts/wait-for-chatgpt-ready.mjs
 
@@ -76,10 +78,40 @@ jobs:
       - name: Run isolated end-to-end suite
         env:
           CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
+          CHATGPTX_AUTH_OUTPUT_DIR: ${{ runner.temp }}/chatgptx-refreshed-auth
         run: >-
           scripts/run-local-ci.sh
           "${{ steps.authentication.outputs.primary }}"
           "${{ steps.authentication.outputs.secondary }}"
+      - name: Encrypt authentication handoff
+        if: always() && github.event_name == 'push' && steps.authentication.outcome == 'success'
+        id: authentication-handoff
+        run: |
+          candidate_root="$RUNNER_TEMP/chatgptx-refreshed-auth"
+          if [[ ! -f "$candidate_root/primary.json" || ! -f "$candidate_root/secondary.json" ]]; then
+            echo "No authentication candidates were captured"
+            exit 0
+          fi
+          encrypted_root="$RUNNER_TEMP/chatgptx-auth-handoff"
+          node scripts/auth-handoff.mjs \
+            encrypt \
+            .github/ci-auth-refresh-public.pem \
+            "$candidate_root" \
+            "$encrypted_root"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+      - name: Upload encrypted authentication handoff
+        if: always() && steps.authentication-handoff.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-auth-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/chatgptx-auth-handoff
+          if-no-files-found: error
+          retention-days: 1
       - name: Remove sensitive and extracted files
         if: always()
-        run: rm -rf "$RUNNER_TEMP/chatgptx-auth" "$RUNNER_TEMP/chatgpt-app"
+        run: >-
+          rm -rf
+          "$RUNNER_TEMP/chatgptx-auth"
+          "$RUNNER_TEMP/chatgptx-refreshed-auth"
+          "$RUNNER_TEMP/chatgptx-auth-handoff"
+          "$RUNNER_TEMP/chatgpt-app"

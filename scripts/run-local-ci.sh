@@ -101,23 +101,44 @@ LOG_ROOT="$WORK_ROOT/logs"
 RELEASE_ROOT="$WORK_ROOT/release"
 APP_PID=""
 
+capture_authentication() {
+  [[ -n "${CHATGPTX_AUTH_OUTPUT_DIR:-}" ]] || return 0
+  [[ -f "$PRIMARY_AUTH" && -f "$SECONDARY_AUTH" && -f "$CODEX_ROOT/auth.json" ]] || return 0
+  node "$REPO_ROOT/scripts/capture-authentication-candidates.mjs" \
+    "$PRIMARY_AUTH" \
+    "$SECONDARY_AUTH" \
+    "$CODEX_ROOT" \
+    "$CHATGPTX_AUTH_OUTPUT_DIR"
+}
+
 cleanup() {
+  local exit_code="${1:-$?}"
+  local capture_exit_code=0
+  trap - EXIT INT TERM
   if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
     kill -TERM "$APP_PID" 2>/dev/null || true
     wait "$APP_PID" 2>/dev/null || true
   fi
+  capture_authentication || capture_exit_code=$?
   if [[ "$KEEP_WORKDIR" == "1" ]]; then
     echo "kept local CI workdir: $WORK_ROOT"
   else
     rm -rf "$WORK_ROOT"
   fi
+  if [[ "$exit_code" == "0" && "$capture_exit_code" != "0" ]]; then
+    exit_code="$capture_exit_code"
+  fi
+  exit "$exit_code"
 }
-trap cleanup EXIT INT TERM
+trap 'cleanup $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 mkdir -p "$CODEX_ROOT" "$PROFILE_ROOT" "$LOG_ROOT" "$RELEASE_ROOT"
 chmod 700 "$TEST_HOME" "$CODEX_ROOT" "$PROFILE_ROOT"
 cp "$PRIMARY_AUTH" "$CODEX_ROOT/auth.json"
 chmod 600 "$CODEX_ROOT/auth.json"
+capture_authentication
 
 run_logged() {
   local name="$1"
@@ -177,6 +198,7 @@ stop_app() {
   done
   wait "$APP_PID" 2>/dev/null || true
   APP_PID=""
+  capture_authentication
 }
 
 launch_app initialize
