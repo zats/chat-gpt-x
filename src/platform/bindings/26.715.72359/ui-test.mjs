@@ -262,13 +262,15 @@ async function validateUi(
   newChat.click();
   await waitUntil(() => threadsApi.getCurrent() === undefined);
   const clearedThread = threadsApi.getCurrent();
-  const originalThreadRow = Array.from(
-    document.querySelectorAll('[data-app-action-sidebar-thread-row]'),
-  ).find((row) =>
-    row
-      .getAttribute('data-app-action-sidebar-thread-id')
-      ?.endsWith(originalThread.threadId),
-  );
+  const findThreadRow = (threadId) =>
+    Array.from(
+      document.querySelectorAll('[data-app-action-sidebar-thread-row]'),
+    ).find((row) =>
+      row
+        .getAttribute('data-app-action-sidebar-thread-id')
+        ?.endsWith(threadId),
+    );
+  const originalThreadRow = findThreadRow(originalThread.threadId);
   if (!originalThreadRow) throw new Error('Original thread row missing');
   const originalThreadKind = originalThreadRow.getAttribute(
     'data-app-action-sidebar-thread-kind',
@@ -1145,10 +1147,12 @@ async function validateUi(
   activateButton(colorRows[1]);
   await waitUntil(() =>
     Boolean(
-      originalThreadRow.querySelector('[data-thread-colors-indicator]'),
+      findThreadRow(threadId)?.querySelector(
+        '[data-thread-colors-indicator]',
+      ),
     ),
   );
-  const blueThreadIndicator = originalThreadRow.querySelector(
+  const blueThreadIndicator = findThreadRow(threadId)?.querySelector(
     '[data-thread-colors-indicator]',
   );
   check(
@@ -1185,8 +1189,9 @@ async function validateUi(
   activateButton(menuRows(colorFlyout)[0]);
   await waitUntil(
     () =>
-      originalThreadRow.querySelector('[data-thread-colors-indicator]') ===
-      null,
+      findThreadRow(threadId)?.querySelector(
+        '[data-thread-colors-indicator]',
+      ) === null,
   );
   check(
     Object.keys(headerAppearance.getProperties()).length === 0 &&
@@ -1195,7 +1200,9 @@ async function validateUi(
     'selecting Default restores ChatGPT native header CSS',
   );
   check(
-    originalThreadRow.querySelector('[data-thread-colors-indicator]') === null,
+    findThreadRow(threadId)?.querySelector(
+      '[data-thread-colors-indicator]',
+    ) === null,
     'selecting Default removes the thread indicator',
   );
   markProgress('thread-menu');
