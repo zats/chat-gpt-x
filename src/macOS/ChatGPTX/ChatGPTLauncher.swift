@@ -60,24 +60,24 @@ struct ChatGPTLauncher {
         try await quitRunningChatGPT()
 
         let launchConfigurationURL = try Self.launchConfiguration(for: mode)
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = arguments
-        process.environment = Self.environment(
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.arguments = arguments
+        configuration.environment = Self.environment(
             requiring: bridgeURL,
             launchConfigurationURL: launchConfigurationURL
         )
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        configuration.createsNewApplicationInstance = true
 
         do {
-            try process.run()
+            try await workspace.openApplication(
+                at: resolvedApplicationURL,
+                configuration: configuration
+            )
         } catch {
             if let launchConfigurationURL {
                 try? FileManager.default.removeItem(at: launchConfigurationURL)
             }
-            throw LaunchError.processLaunchFailed(error)
+            throw LaunchError.applicationLaunchFailed(error)
         }
 
         if !Self.supportsChatGPT(version: chatGPTVersion) {
@@ -310,7 +310,7 @@ private enum LaunchError: LocalizedError {
     case bridgeMissing
     case chatGPTWouldNotQuit
     case chatGPTQuitTimedOut
-    case processLaunchFailed(any Error)
+    case applicationLaunchFailed(any Error)
 
     var errorDescription: String? {
         switch self {
@@ -326,7 +326,7 @@ private enum LaunchError: LocalizedError {
             "The running ChatGPT app declined to quit."
         case .chatGPTQuitTimedOut:
             "The running ChatGPT app did not quit within 10 seconds."
-        case .processLaunchFailed(let error):
+        case .applicationLaunchFailed(let error):
             "ChatGPT could not be started: \(error.localizedDescription)"
         }
     }
