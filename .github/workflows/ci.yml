@@ -26,8 +26,12 @@ concurrency:
   group: >-
     ${{ github.event_name == 'workflow_dispatch' && inputs.protected_run
       && format('ci-protected-{0}', inputs.validation_id || github.run_id)
+      || github.event_name == 'push'
+      && format('ci-push-{0}', github.run_id)
       || format('ci-{0}', github.event.pull_request.number || github.ref) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || !inputs.protected_run }}
+  cancel-in-progress: >-
+    ${{ github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && !inputs.protected_run) }}
 
 jobs:
   test:
@@ -36,3 +40,65 @@ jobs:
       ref: ${{ github.sha }}
       refresh-auth: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch) }}
     secrets: inherit
+
+  component-release-plan:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out component source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate affected components
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node scripts/component-releases.mjs "$BASE_SHA" "$HEAD_SHA" \
+            > "$RUNNER_TEMP/component-releases.json"
+          jq \
+            '{generation, chatgptApi, bindings, extensions}' \
+            "$RUNNER_TEMP/component-releases.json"
+
+  publish-component-releases:
+    if: >-
+      github.event_name == 'push' &&
+      github.ref_name == github.event.repository.default_branch
+    needs:
+      - test
+      - component-release-plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tested landing
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - name: Build release artifacts
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          command -v zip >/dev/null
+          node scripts/component-releases.mjs "$BASE_SHA" "$HEAD_SHA" \
+            > "$RUNNER_TEMP/component-releases.json"
+          node scripts/build-component-releases.mjs \
+            "$RUNNER_TEMP/component-releases.json" \
+            "$RUNNER_TEMP/component-release-artifacts"
+      - name: Publish immutable component releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          scripts/publish-component-releases.sh
+          "$RUNNER_TEMP/component-release-artifacts/artifacts.json"
+          "$GITHUB_SHA"

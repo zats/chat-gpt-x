@@ -93,6 +93,8 @@ export async function checkCodexVersion(env: Env): Promise<CheckResult> {
     };
   }
 
+  await publishUnsupportedChatGPT(env, latest.version);
+
   const title = `ChatGPT ${latest.version} available`;
   const existingIssueNumber = await findIssueByTitle(env, title);
   if (existingIssueNumber) {
@@ -112,6 +114,52 @@ export async function checkCodexVersion(env: Env): Promise<CheckResult> {
     outcome: "issue-created",
     issueNumber,
   };
+}
+
+async function publishUnsupportedChatGPT(
+  env: Env,
+  version: string,
+): Promise<void> {
+  const repositoryPath = `/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
+  const filePath = "updates/chatgpt.json";
+  const file = await githubJson<{
+    content: string;
+    encoding: string;
+    sha: string;
+  }>(
+    env,
+    `${repositoryPath}/contents/${filePath}` +
+      `?ref=${encodeURIComponent(env.GITHUB_BRANCH)}`,
+  );
+  if (file.encoding !== "base64") {
+    throw new Error(`${filePath} must use base64 GitHub content encoding`);
+  }
+  const current = JSON.parse(
+    atob(file.content.replace(/\s/g, "")),
+  ) as {
+    chatgpt?: unknown;
+    supported?: unknown;
+  };
+  if (current.chatgpt === version && current.supported === false) return;
+
+  const manifest = `${JSON.stringify(
+    {
+      schemaVersion: 1,
+      chatgpt: version,
+      supported: false,
+    },
+    null,
+    2,
+  )}\n`;
+  await githubJson(env, `${repositoryPath}/contents/${filePath}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      message: `Record unsupported ChatGPT ${version}`,
+      content: btoa(manifest),
+      sha: file.sha,
+      branch: env.GITHUB_BRANCH,
+    }),
+  });
 }
 
 async function readPinnedVersion(env: Env): Promise<string> {

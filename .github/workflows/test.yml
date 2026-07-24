@@ -45,8 +45,12 @@ jobs:
           node --check scripts/auth-handoff.mjs
           node --check scripts/check-auth-exposure.mjs
           node --check scripts/capture-authentication-candidates.mjs
+          node --check scripts/build-component-releases.mjs
+          node --check scripts/component-releases.mjs
           node --check scripts/validate-pinned-chatgpt.mjs
           node --check scripts/wait-for-chatgpt-ready.mjs
+          bash -n scripts/publish-component-releases.sh
+          node --test scripts/component-releases.test.mjs
           node --test src/platform/runtime/extension-launch-config.test.cjs
 
   end-to-end:

@@ -5,7 +5,7 @@ description: Process for evolving the extension platform for the ChatGPT desktop
 
 # Manage Platform API
 
-The platform exposes a **stable public API** (`src/platform/types.d.ts`) that extensions are built against. App-version-specific **bindings** (`src/platform/bindings/<version>/`) bridge the current Electron build's minified internals to that API. This skill is the process for evolving both.
+The platform exposes a **stable public API** (`src/platform/types.d.ts`) whose semantic version lives in `src/platform/manifest.json`. App-version-specific **bindings** (`src/platform/bindings/<version>/`) bridge the current Electron build's minified internals to one exact API version. This skill is the process for evolving both.
 
 Layout conventions (paths, manifests, runtime settings): read `references/file-layout.md` first if the repo structure is unfamiliar.
 
@@ -16,7 +16,7 @@ Layout conventions (paths, manifests, runtime settings): read `references/file-l
 - **Tests define "working".** A binding is not done until the deterministic test suite passes against the real app.
 - Document **only the final working approach**. Intermediate failed attempts are noise; the derivation doc records what works and how it was found.
 - **No backward compatibility.** APIs change in place, one way — no deprecation shims, aliases, legacy paths, or parallel old/new variants. Remove the old way in the same change that introduces the new one.
-- **APIs land only as complete vertical slices.** A public API is "added" only together with its binding for the pinned app version and a green test suite against the live app. Never leave `types.d.ts` ahead of working, validated bindings — an unbound API is unfinished work, not an API.
+- **APIs land only as complete vertical slices.** A public API change increments its semantic version and lands with its updated pinned-app binding, mechanical test extension, and green live suite. Never leave `types.d.ts` ahead of working, validated bindings.
 
 ## Core design principle: every API has N consumers
 
@@ -51,9 +51,11 @@ Restate what the user asked for: which API, added/modified/removed, intended beh
 
 Edit `src/platform/types.d.ts`. Every API gets exhaustive TSDoc: intent, exactly when it fires / what it reads / what it mutates, parameter and ordering semantics, multi-consumer behavior, and a usage example. This documentation is what binding-generating agents (human or AI) use to locate the behavior in the app — write it as behavioral description, not just types.
 
+Increment `src/platform/manifest.json` using semantic versioning: major for breaking changes, minor for compatible additions, patch for behavior-preserving fixes. Update the `chatgptApi` value in the pinned binding manifest to that exact version.
+
 ### 3. Write tests first
 
-Update the mechanical test extension at `src/extensions/api-test-suite` so **every public API path** — including the new/changed one — is exercised deterministically. Tests must not depend on agent judgment at runtime: they call the API and assert.
+Update the mechanical test extension at `src/extensions/api-test-suite` so **every public API path** — including the new/changed one — is exercised deterministically. Increment its extension version and update its compatibility ranges. Tests must not depend on agent judgment at runtime: they call the API and assert.
 
 **Tests observe behavior through the public API surface only** — never the app's DOM, markup, or internals. Those are the binding's version-specific domain; the suite must stay stable while `src/platform/bindings/<version>/` iterates. If a behavior cannot be observed through the public API, the API lacks observability — extend the API (a design signal), never reach into the app. Rendering correctness is guaranteed by the reuse-first binding strategy and validated once per binding version (recorded in DERIVATION.md), not re-asserted per run.
 
@@ -75,7 +77,7 @@ The script prints JSON with `extractDir`. If the version/hash mismatches, stop a
 
 Work against the extracted sources using the **cascading anchor heuristics** in `references/anchor-heuristics.md` (i18n message IDs → protocol/contract strings → library behavioral invariants → data-testid → display strings last). App architecture facts you will need (injection mechanics, CSP, window factory, React/Radix/rolldown specifics): `references/app-facts.md`.
 
-For each API: find the in-app precedent of the behavior (e.g. existing profile menu items), understand what makes it tick, then implement the binding in `src/platform/bindings/<version>/` so the public API works through the real app. Follow "Reuse the app's own components" above: the binding composes the app's own components — it does not re-create their look or behavior.
+For each API: find the in-app precedent of the behavior (e.g. existing profile menu items), understand what makes it tick, then implement the binding in `src/platform/bindings/<version>/` so the public API works through the real app. Increment that binding's own `version`; keep `chatgpt` exact and set `chatgptApi` to the new API version. Follow "Reuse the app's own components" above: the binding composes the app's own components — it does not re-create their look or behavior.
 
 ### 6. Validate against the live app
 
@@ -85,6 +87,10 @@ Build the packaged launcher and run its executable with `--test-api` against the
 
 Write/update `src/platform/bindings/<version>/DERIVATION.md`: for each API, which anchors located the behavior, where it lives in the build, what the binding does, and what failure signatures indicate a broken binding. This document — plus the public API docs, the heuristics, and the same deterministic tests — is the complete input a future agent needs to **rebind the same API to a new app version** without re-deriving intent.
 
+Update `updates/latest.json`: increment `generation` once and replace the API, binding, and changed-extension entries with their exact versions and predictable release tags. Update `updates/chatgpt.json` when latest ChatGPT support changes. Run `node scripts/component-releases.mjs <base-sha> --worktree` before completion.
+
 ## Rebinding to a new app version
 
-When the app updates: same process, new `src/platform/bindings/<new-version>/` directory and versioned manifest. Feed the rebinding agent the previous version's DERIVATION.md as heuristics (things may have changed — verify, don't assume), then confirm with the unchanged deterministic test suite. After validation, update `src/platform/bindings/manifest.json` with the new version and exact Sparkle enclosure URL; `scripts/validate-pinned-chatgpt.mjs` must pass. The public API must not change during rebinding; if the new build makes the API impossible, escalate to the user instead of silently changing semantics.
+When the app updates: same process, new `src/platform/bindings/<new-version>/` directory with binding version `1.0.0`, exact `chatgpt`, and the unchanged `chatgptApi`. Feed the rebinding agent the previous version's DERIVATION.md as heuristics (things may have changed — verify, don't assume), then confirm with the unchanged deterministic test source. For every extension validated on the new build, expand `compatibility.chatgpt` and increment its extension version. After validation, update `src/platform/bindings/manifest.json`, `updates/latest.json`, and `updates/chatgpt.json`; both manifest validators must pass. If the new build makes the API impossible, escalate to the user instead of silently changing semantics.
+
+After CI passes on `main`, the landing workflow detects affected components from their source paths and publishes immutable GitHub Release archives. Versioned contents live in releases; source directories retain the latest implementation.

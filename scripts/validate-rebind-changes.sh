@@ -62,7 +62,7 @@ done < <(
 
 for changed_path in "${CHANGED_PATHS[@]}"; do
   case "$changed_path" in
-    "$BINDING_ROOT"/* | src/platform/bindings/manifest.json)
+    "$BINDING_ROOT"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json | updates/chatgpt.json)
       ;;
     *)
       echo "rebind changed a forbidden path: $changed_path" >&2
@@ -73,7 +73,7 @@ done
 
 jq -e \
   --arg version "$APP_VERSION" \
-  '.chatgpt == $version' \
+  '.version == "1.0.0" and .chatgpt == $version' \
   "$REPO_ROOT/$BINDING_ROOT/manifest.json" >/dev/null
 jq -e \
   --arg version "$APP_VERSION" \
@@ -81,3 +81,6 @@ jq -e \
   '.chatgpt == $version and .downloadUrl == $url' \
   "$REPO_ROOT/src/platform/bindings/manifest.json" >/dev/null
 node "$REPO_ROOT/scripts/validate-pinned-chatgpt.mjs"
+node "$REPO_ROOT/scripts/component-releases.mjs" \
+  "$BASE_SHA" \
+  --worktree >/dev/null

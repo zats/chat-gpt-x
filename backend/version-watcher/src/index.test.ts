@@ -30,6 +30,14 @@ function response(body: unknown, status = 200): Response {
   );
 }
 
+function contentResponse(body: unknown): Response {
+  return response({
+    content: btoa(`${JSON.stringify(body)}\n`),
+    encoding: "base64",
+    sha: "support-manifest-sha",
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -164,6 +172,13 @@ describe("version detection", () => {
       )
       .mockResolvedValueOnce(response([]))
       .mockResolvedValueOnce(
+        contentResponse({
+          schemaVersion: 1,
+          chatgpt: version,
+          supported: false,
+        }),
+      )
+      .mockResolvedValueOnce(
         response({
           items: [
             {
@@ -184,7 +199,7 @@ describe("version detection", () => {
       outcome: "issue-exists",
       issueNumber: 19,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
   it("creates one issue for an unbound and unreported version", async () => {
@@ -201,6 +216,14 @@ describe("version detection", () => {
         ),
       )
       .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(
+        contentResponse({
+          schemaVersion: 1,
+          chatgpt: previousVersion,
+          supported: true,
+        }),
+      )
+      .mockResolvedValueOnce(response({ content: { sha: "new-sha" } }))
       .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({}, 404))
       .mockResolvedValueOnce(response({ name: "pending" }, 201))
@@ -212,6 +235,26 @@ describe("version detection", () => {
       version,
       outcome: "issue-created",
       issueNumber: 21,
+    });
+
+    const supportUpdateRequest = fetchMock.mock.calls[4];
+    expect(supportUpdateRequest?.[0]).toContain(
+      "/contents/updates/chatgpt.json",
+    );
+    const supportUpdate = JSON.parse(
+      supportUpdateRequest?.[1]?.body as string,
+    );
+    expect(supportUpdate).toMatchObject({
+      message: `Record unsupported ChatGPT ${version}`,
+      sha: "support-manifest-sha",
+      branch: "main",
+    });
+    expect(
+      JSON.parse(atob(supportUpdate.content)),
+    ).toEqual({
+      schemaVersion: 1,
+      chatgpt: version,
+      supported: false,
     });
 
     const labelCreateRequest = fetchMock.mock.calls.at(-3);
@@ -235,6 +278,6 @@ describe("version detection", () => {
     expect(JSON.parse(issueLabelRequest?.[1]?.body as string)).toEqual({
       labels: ["pending"],
     });
-    expect(fetchMock).toHaveBeenCalledTimes(8);
+    expect(fetchMock).toHaveBeenCalledTimes(10);
   });
 });
