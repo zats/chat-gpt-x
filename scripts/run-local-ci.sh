@@ -401,21 +401,41 @@ else
 fi
 
 launch_app public-api api-test
+PUBLIC_API_PID="$APP_PID"
 run_logged public-api node "$BINDING_DIR/ui-test.mjs" "$PORT" \
   --public-api-only "$THREAD_SELECTION"
-stop_app
 
-RESULTS_FILE="$CODEX_ROOT/extensions/log/test-results.json"
-[[ -f "$RESULTS_FILE" ]] || {
-  echo "public API test results were not reported" >&2
-  exit 1
-}
-PUBLIC_TOTAL="$(jq 'length' "$RESULTS_FILE")"
-PUBLIC_PASSED="$(jq '[.[] | select(.pass)] | length' "$RESULTS_FILE")"
+PUBLIC_TOTAL="$(jq -er '.total' "$LOG_ROOT/public-api.log")"
+PUBLIC_PASSED="$(jq -er '.passed' "$LOG_ROOT/public-api.log")"
 [[ "$PUBLIC_TOTAL" == "$PUBLIC_PASSED" ]] || {
   echo "public API suite failed: $PUBLIC_PASSED/$PUBLIC_TOTAL" >&2
   exit 1
 }
+
+PUBLIC_API_BRIDGE_LOG="$CODEX_ROOT/extensions/log/bridge-$PUBLIC_API_PID.log"
+PUBLIC_API_RESULTS_FILE=""
+deadline=$((SECONDS + 5))
+while (( SECONDS < deadline )); do
+  if [[ -f "$PUBLIC_API_BRIDGE_LOG" ]]; then
+    result_path="$(jq -sr \
+      '[.[] | select(.event == "test-results" and .url == "app://-/index.html")][-1].file // empty' \
+      "$PUBLIC_API_BRIDGE_LOG")"
+    if [[ "$result_path" == "extensions/log/test-results/$PUBLIC_API_PID/"*.json ]]; then
+      candidate="$CODEX_ROOT/$result_path"
+      if [[ -f "$candidate" ]] && jq -e --slurpfile report "$LOG_ROOT/public-api.log" \
+        '. == $report[0].checks' "$candidate" >/dev/null; then
+        PUBLIC_API_RESULTS_FILE="$candidate"
+        break
+      fi
+    fi
+  fi
+  sleep 0.1
+done
+[[ -n "$PUBLIC_API_RESULTS_FILE" ]] || {
+  echo "main renderer public API results were not persisted" >&2
+  exit 1
+}
+stop_app
 
 launch_app validation composition
 run_logged native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \

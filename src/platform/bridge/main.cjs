@@ -14,7 +14,7 @@
  *    is privileged and bypasses the page CSP)
  *  - load enabled extensions from the resolved Codex home
  *    (in settings order = load order) and activate them through the host
- *  - report api-test-suite results beneath the resolved Codex home
+ *  - report api-test-suite results in separate files per launch and renderer
  *
  * Logs JSON lines beneath the resolved Codex home.
  */
@@ -47,7 +47,7 @@ function init() {
   const SETTINGS_FILE = path.join(STATE_DIR, "settings.json");
   const LAUNCH_CONFIGURATION_FILE =
     process.env.CHATGPTX_LAUNCH_CONFIGURATION;
-  const RESULTS_FILE = path.join(LOG_DIR, "test-results.json");
+  const RESULTS_DIR = path.join(LOG_DIR, "test-results", String(process.pid));
   const PRELOAD_FILE = path.join(__dirname, "preload.cjs");
   const AUTH_FILE = path.join(CODEX_HOME, "auth.json");
 
@@ -292,13 +292,13 @@ function init() {
       app.on("web-contents-created", (_event, contents) => attach(contents));
     });
 
-    // Result reporting: poll app windows for the api-test-suite results.
     const seenResults = new Set();
     setInterval(() => {
       try {
         for (const contents of electron.webContents?.getAllWebContents() ??
           []) {
-          if (!contents.getURL().startsWith("app:")) continue;
+          const url = contents.getURL();
+          if (!url.startsWith("app:")) continue;
           if (seenResults.has(contents.id)) continue;
           contents
             .executeJavaScript(
@@ -307,14 +307,23 @@ function init() {
             .then((json) => {
               if (!json || json === "null") return;
               seenResults.add(contents.id);
-              fs.mkdirSync(LOG_DIR, { recursive: true });
-              fs.writeFileSync(RESULTS_FILE, json);
-              log("test-results", { json });
+              fs.mkdirSync(RESULTS_DIR, { recursive: true });
+              const resultsFile = path.join(
+                RESULTS_DIR,
+                `${contents.id}.json`,
+              );
+              fs.writeFileSync(resultsFile, json);
+              log("test-results", {
+                webContentsId: contents.id,
+                url,
+                file: path.relative(CODEX_HOME, resultsFile),
+                json,
+              });
             })
             .catch(() => {});
         }
       } catch {
-        // polling must never break the app
+        // result reporting must never break the app
       }
     }, 1000);
 
