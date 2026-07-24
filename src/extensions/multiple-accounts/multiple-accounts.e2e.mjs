@@ -12,10 +12,9 @@ const port = process.argv[2] ?? "9222";
 const targets = await fetch(`http://127.0.0.1:${port}/json`).then((response) =>
   response.json(),
 );
-const page =
-  targets.find(
-    (target) => target.type === "page" && target.url.startsWith("app:"),
-  ) ?? targets.find((target) => target.type === "page");
+const page = targets.find(
+  (target) => target.type === "page" && target.url === "app://-/index.html",
+);
 
 if (!page) throw new Error(`No ChatGPT page target on CDP port ${port}`);
 
