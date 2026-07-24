@@ -1,10 +1,5 @@
 {
   "schemaVersion": 1,
-  "chatgpt": "26.721.31836",
-  "supported": true,
-  "binding": {
-    "version": "1.0.3",
-    "chatgptApi": "1.0.2",
-    "release": "binding-26.721.31836-v1.0.3"
-  }
+  "chatgpt": "26.721.41059",
+  "supported": false
 }
