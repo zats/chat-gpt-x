@@ -140,13 +140,23 @@ cp "$PRIMARY_AUTH" "$CODEX_ROOT/auth.json"
 chmod 600 "$CODEX_ROOT/auth.json"
 capture_authentication
 
+RUN_STARTED_AT="$SECONDS"
+
+progress() {
+  printf '[ci +%ss] %s\n' "$((SECONDS - RUN_STARTED_AT))" "$1"
+}
+
 run_logged() {
   local name="$1"
   shift
   local log_file="$LOG_ROOT/$name.log"
+  local started_at="$SECONDS"
+  progress "starting $name"
   if "$@" >"$log_file" 2>&1; then
+    progress "passed $name ($((SECONDS - started_at))s)"
     return
   fi
+  progress "failed $name ($((SECONDS - started_at))s)"
   echo "$name failed" >&2
   rg -n -i 'error:|failed|failure|exception|fatal' "$log_file" >&2 || true
   return 1
@@ -167,6 +177,8 @@ mkdir -p "$MULTIPLE_ACCOUNTS_ROOT"
 launch_app() {
   local name="$1"
   local mode="${2:-normal}"
+  local started_at="$SECONDS"
+  progress "launching ChatGPT for $name"
   if [[ "$mode" == "api-test" ]]; then
     env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
       "$LAUNCHER_BIN" \
@@ -214,6 +226,7 @@ launch_app() {
       return 1
     }
   fi
+  progress "ChatGPT ready for $name ($((SECONDS - started_at))s)"
 }
 
 stop_app() {
@@ -435,6 +448,7 @@ done
   echo "main renderer public API results were not persisted" >&2
   exit 1
 }
+progress "verified persisted public API results"
 stop_app
 
 launch_app validation composition
@@ -442,9 +456,11 @@ run_logged native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \
   "--alternate-auth=$SECONDARY_AUTH" "$THREAD_SELECTION"
 stop_app
 
+progress "verifying release artifact"
 codesign --verify --deep --strict --verbose=2 "$RELEASE_ROOT/ChatGPTX.app" >"$LOG_ROOT/codesign.log" 2>&1
 diff -rq "$BINDING_DIR" "$RELEASE_ROOT/ChatGPTX.app/Contents/Resources/bindings/$APP_VERSION" >"$LOG_ROOT/binding-diff.log"
 diff -q "$REPO_ROOT/src/platform/bridge/main.cjs" "$RELEASE_ROOT/ChatGPTX.app/Contents/Resources/bridge/main.cjs" >"$LOG_ROOT/bridge-diff.log"
+progress "verified release artifact"
 
 UNIT_PASSED="$(awk '/[0-9]+ pass/{passed=$1} END{print passed}' "$LOG_ROOT/unit-tests.log")"
 NATIVE_PASSED="$(jq -r '.passed' "$LOG_ROOT/native-ui.log")"
