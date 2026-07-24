@@ -234,6 +234,8 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let nestedItemClassName = null;
   let refreshAuthentication = null;
   let openNativeProfile = null;
+  let profileNavigationAttemptCount = 0;
+  let profileNavigationLastRequestedPath = null;
   let profileMenuHasNativeProfileCallback = null;
   let nativeAppServerRegistry = null;
   let activeSignIn = null;
@@ -2191,7 +2193,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
     function useNativeProfileNavigation() {
       const navigate = native.useNavigate();
-      openNativeProfile = () => navigate("/settings/profile");
+      openNativeProfile = () => {
+        profileNavigationAttemptCount += 1;
+        profileNavigationLastRequestedPath = "/settings/profile";
+        navigate(profileNavigationLastRequestedPath);
+      };
     }
 
     function threadContextForMenuProps(props) {
@@ -2763,6 +2769,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         authenticationAppServerRestartCount,
       profileMenuHasNativeProfileCallback: () =>
         profileMenuHasNativeProfileCallback,
+      profileNavigationAttemptCount: () => profileNavigationAttemptCount,
+      profileNavigationLastRequestedPath: () =>
+        profileNavigationLastRequestedPath,
       nativeAccount: () => nativeAppServerRegistry?.getDefault().getAccount(),
       nativeSignInStartCount: () => nativeSignInStartCount,
       inspectAuthentication,

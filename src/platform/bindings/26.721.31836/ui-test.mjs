@@ -1565,11 +1565,32 @@ async function validateUi(
       ?.startsWith('M16.585 10C16.585 6.3632'),
     'person icon reuses ChatGPT Profile artwork',
   );
+  const profileNavigationAttemptsBefore =
+    globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount();
+  const profileClickStartedAt = performance.now();
   profile?.click();
   await sleep(500);
   const profileIsCurrent = Array.from(
     document.querySelectorAll('[aria-current="page"]'),
   ).some((element) => element.textContent?.trim() === 'Profile');
+  let profileEventuallyBecameCurrent = profileIsCurrent;
+  let profileEventuallyBecameCurrentAfterMs =
+    profileIsCurrent ? Math.round(performance.now() - profileClickStartedAt) : null;
+  if (!profileIsCurrent) {
+    const deadline = performance.now() + 5_000;
+    while (performance.now() < deadline) {
+      await sleep(100);
+      profileEventuallyBecameCurrent = Array.from(
+        document.querySelectorAll('[aria-current="page"]'),
+      ).some((element) => element.textContent?.trim() === 'Profile');
+      if (profileEventuallyBecameCurrent) {
+        profileEventuallyBecameCurrentAfterMs = Math.round(
+          performance.now() - profileClickStartedAt,
+        );
+        break;
+      }
+    }
+  }
   check(
     Boolean(account && profile) &&
       !profileWasCurrent &&
@@ -1580,6 +1601,16 @@ async function validateUi(
       profileIsCurrent,
       foundAccount: Boolean(account),
       foundProfile: Boolean(profile),
+      profileNavigationAttemptsBefore,
+      profileNavigationAttemptsAfter:
+        globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount(),
+      profileNavigationLastRequestedPath:
+        globalThis.__CGPTX_HOST__?._debug.profileNavigationLastRequestedPath(),
+      profileEventuallyBecameCurrent,
+      profileEventuallyBecameCurrentAfterMs,
+      currentPageLabels: Array.from(
+        document.querySelectorAll('[aria-current="page"]'),
+      ).map((element) => element.textContent?.trim()),
     },
   );
   profileNavigationRegistration.dispose();
