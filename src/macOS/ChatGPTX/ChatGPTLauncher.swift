@@ -2,13 +2,23 @@ import AppKit
 import Darwin
 import Foundation
 
+enum ChatGPTLaunchMode {
+    case normal
+    case apiTest
+}
+
 struct ChatGPTLauncher {
     private static let chatGPTBundleIdentifier = "com.openai.codex"
     private static let bridgeRelativePath = "bridge/main.cjs"
+    private static let launchConfigurationEnvironmentKey =
+        "CHATGPTX_LAUNCH_CONFIGURATION"
     private static let restartCountdown = 10
     private static let quitTimeout: TimeInterval = 10
 
-    func launch() async throws {
+    func launch(
+        mode: ChatGPTLaunchMode = .normal,
+        arguments: [String] = []
+    ) async throws {
         let activity = ProcessInfo.processInfo.beginActivity(
             options: .userInitiated,
             reason: "Restart ChatGPT with the extension platform"
@@ -40,16 +50,21 @@ struct ChatGPTLauncher {
             throw LaunchError.bridgeMissing
         }
 
-        if Self.isChatGPTRunning,
+        if mode == .normal, Self.isChatGPTRunning,
             !RestartPrompt(seconds: Self.restartCountdown).run() {
             return
         }
 
         try await quitRunningChatGPT()
 
+        let launchConfigurationURL = try Self.launchConfiguration(for: mode)
         let process = Process()
         process.executableURL = executableURL
-        process.environment = Self.environment(requiring: bridgeURL)
+        process.arguments = arguments
+        process.environment = Self.environment(
+            requiring: bridgeURL,
+            launchConfigurationURL: launchConfigurationURL
+        )
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -57,6 +72,9 @@ struct ChatGPTLauncher {
         do {
             try process.run()
         } catch {
+            if let launchConfigurationURL {
+                try? FileManager.default.removeItem(at: launchConfigurationURL)
+            }
             throw LaunchError.processLaunchFailed(error)
         }
 
@@ -148,7 +166,37 @@ struct ChatGPTLauncher {
         return FileManager.default.fileExists(atPath: bindingURL.path)
     }
 
-    private static func environment(requiring bridgeURL: URL) -> [String: String] {
+    private static func launchConfiguration(
+        for mode: ChatGPTLaunchMode
+    ) throws -> URL? {
+        guard mode == .apiTest else { return nil }
+
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ChatGPTX", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+
+        let configurationURL = directoryURL.appendingPathComponent(
+            "launch-\(UUID().uuidString).json"
+        )
+        let data = try JSONSerialization.data(
+            withJSONObject: ["extensions": ["api-test-suite"]]
+        )
+        try data.write(to: configurationURL, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: configurationURL.path
+        )
+        return configurationURL
+    }
+
+    private static func environment(
+        requiring bridgeURL: URL,
+        launchConfigurationURL: URL?
+    ) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let requireOption = "--require \(quoteNodeOption(bridgeURL.path))"
 
@@ -156,6 +204,11 @@ struct ChatGPTLauncher {
             environment["NODE_OPTIONS"] = "\(requireOption) \(existingOptions)"
         } else {
             environment["NODE_OPTIONS"] = requireOption
+        }
+
+        if let launchConfigurationURL {
+            environment[launchConfigurationEnvironmentKey] =
+                launchConfigurationURL.path
         }
 
         return environment

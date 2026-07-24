@@ -35,6 +35,7 @@ jobs:
           node --check scripts/capture-authentication-candidates.mjs
           node --check scripts/validate-pinned-chatgpt.mjs
           node --check scripts/wait-for-chatgpt-ready.mjs
+          node --test src/platform/runtime/extension-launch-config.test.cjs
 
   end-to-end:
     needs: static

@@ -17,7 +17,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         launchTask = Task {
             do {
-                try await ChatGPTLauncher().launch()
+                let arguments = Array(CommandLine.arguments.dropFirst())
+                let isAPITest = arguments.contains("--test-api")
+                let mode: ChatGPTLaunchMode = isAPITest ? .apiTest : .normal
+                let chatGPTArguments = isAPITest
+                    ? arguments.filter { $0 != "--test-api" }
+                    : []
+                try await ChatGPTLauncher().launch(
+                    mode: mode,
+                    arguments: chatGPTArguments
+                )
                 NSApplication.shared.terminate(nil)
             } catch {
                 showLaunchError(error)

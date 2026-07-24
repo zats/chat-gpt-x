@@ -95,7 +95,7 @@ Use a throwaway `--user-data-dir` and an authenticated profile copy as described
 Validate in this order:
 
 1. Reproduce any discovered behavioral mismatch with a failing version-specific `ui-test.mjs` check.
-2. Run the unchanged public `api-test-suite`; require every test to pass.
+2. Build the packaged launcher and run its executable with `--test-api`; require every unchanged public `api-test-suite` test to pass. This mode restarts ChatGPT with only the suite enabled and does not modify persistent extension settings.
 3. Run the new version's native UI suite; require every check to pass.
 4. Run the API test extension together with representative shipped extensions to catch composition failures.
 5. Disable the test extension, then verify the normal shipped-extension flow.

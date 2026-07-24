@@ -35,6 +35,9 @@ function init() {
     resolveCodexHome,
     resolveExtensionsDirectory,
   } = require("../runtime/codex-paths.cjs");
+  const {
+    readExtensionEntries,
+  } = require("../runtime/extension-launch-config.cjs");
 
   const PLATFORM_ROOT = path.join(__dirname, "..");
   const CODEX_HOME = resolveCodexHome();
@@ -42,6 +45,8 @@ function init() {
   const LOG_DIR = path.join(STATE_DIR, "log");
   const LOG_FILE = path.join(LOG_DIR, `bridge-${process.pid}.log`);
   const SETTINGS_FILE = path.join(STATE_DIR, "settings.json");
+  const LAUNCH_CONFIGURATION_FILE =
+    process.env.CHATGPTX_LAUNCH_CONFIGURATION;
   const RESULTS_FILE = path.join(LOG_DIR, "test-results.json");
   const PRELOAD_FILE = path.join(__dirname, "preload.cjs");
   const AUTH_FILE = path.join(CODEX_HOME, "auth.json");
@@ -80,15 +85,6 @@ function init() {
     return electronWrapper ?? loaded;
   };
 
-  function readSettings() {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
-      return Array.isArray(parsed.extensions) ? parsed.extensions : [];
-    } catch {
-      return [];
-    }
-  }
-
   function injectIntoContents(contents, hostSource, extensions) {
     const url = contents.getURL();
     if (!url.startsWith("app:")) return;
@@ -126,7 +122,11 @@ function init() {
       log("bindings-missing", { version, hostFile });
     }
 
-    const extensions = readSettings()
+    const extensions = readExtensionEntries({
+      configurationFile: LAUNCH_CONFIGURATION_FILE,
+      settingsFile: SETTINGS_FILE,
+      extensionsDirectory: STATE_DIR,
+    })
       .filter((entry) => entry && entry.enabled && entry.id && entry.path)
       .map((entry) => {
         try {

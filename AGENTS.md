@@ -39,6 +39,8 @@ scripts/
 
 `src/extensions/build.sh [<extension-id> ...]` builds every extension, or only the listed extensions, and installs each bundle at `<Codex home>/extensions/<extension-id>/contents/main.js`. Manifests must declare that exact `main` path. The script preserves extension-owned state; persistent extension settings belong at `<Codex home>/extensions/<extension-id>/settings.json`. The global `<Codex home>/extensions/settings.json` controls enablement and load order. `resolveCodexHome()` defines Codex home from `CODEX_HOME`, defaulting to `$HOME/.codex`; all runtime paths use that shared resolver.
 
+Run the packaged launcher with `--test-api` to restart ChatGPT with only `api-test-suite` enabled. This launch-scoped mode ignores the global extension settings without modifying them. Additional arguments are forwarded to ChatGPT for isolated profiles and CDP.
+
 ## Invariants for any change
 
 1. Product code, tests, documentation, and defaults must work for arbitrary users and machines. Never hard-code a developer identity, account data, home directory, app installation path, or authenticated state. Use synthetic fixtures, OS discovery, configurable paths, and isolated seeded test profiles.

@@ -79,7 +79,7 @@ For each API: find the in-app precedent of the behavior (e.g. existing profile m
 
 ### 6. Validate against the live app
 
-Run the api-test-suite against the real app via the launcher (throwaway `--user-data-dir` profile — see `references/app-facts.md` § Injection). Iterate on the binding until the suite is green. If a test cannot pass, the API design or the binding is wrong — fix the cause, not the assertion.
+Build the packaged launcher and run its executable with `--test-api` against the real app using a throwaway `--user-data-dir` profile (see `references/app-facts.md` § Injection). This mode restarts ChatGPT with only `api-test-suite` enabled and leaves persistent extension settings unchanged. Iterate on the binding until the suite is green. If a test cannot pass, the API design or the binding is wrong — fix the cause, not the assertion.
 
 ### 7. Document the derivation
 
