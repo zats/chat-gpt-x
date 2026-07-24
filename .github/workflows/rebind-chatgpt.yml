@@ -358,8 +358,9 @@ jobs:
             --json \
             --output-last-message "$DIAGNOSTICS_ROOT/agent-final.txt" \
             --cd "$GITHUB_WORKSPACE" \
-            - < "$prompt_path" > "$DIAGNOSTICS_ROOT/agent.jsonl" 2>&1
-          agent_exit_code=$?
+            - < "$prompt_path" 2>&1 |
+            tee "$DIAGNOSTICS_ROOT/agent.jsonl"
+          agent_exit_code="${PIPESTATUS[0]}"
           set -e
           echo "exit-code=$agent_exit_code" >> "$GITHUB_OUTPUT"
 
