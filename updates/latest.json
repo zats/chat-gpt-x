@@ -1,32 +1,32 @@
 {
   "schemaVersion": 1,
-  "generation": 8,
+  "generation": 9,
   "chatgptApi": {
     "version": "1.0.2",
     "release": "chatgpt-api-v1.0.2"
   },
   "binding": {
-    "version": "1.0.3",
-    "chatgpt": "26.721.31836",
+    "version": "1.0.0",
+    "chatgpt": "26.721.41059",
     "chatgptApi": "1.0.2",
-    "release": "binding-26.721.31836-v1.0.3"
+    "release": "binding-26.721.41059-v1.0.0"
   },
   "extensions": {
     "api-test-suite": {
-      "version": "0.0.3",
-      "release": "extension-api-test-suite-v0.0.3"
+      "version": "0.0.4",
+      "release": "extension-api-test-suite-v0.0.4"
     },
     "multiple-accounts": {
-      "version": "0.1.0",
-      "release": "extension-multiple-accounts-v0.1.0"
+      "version": "0.1.1",
+      "release": "extension-multiple-accounts-v0.1.1"
     },
     "release-test-fixture": {
-      "version": "0.0.4",
-      "release": "extension-release-test-fixture-v0.0.4"
+      "version": "0.0.5",
+      "release": "extension-release-test-fixture-v0.0.5"
     },
     "thread-colors": {
-      "version": "0.1.0",
-      "release": "extension-thread-colors-v0.1.0"
+      "version": "0.1.1",
+      "release": "extension-thread-colors-v0.1.1"
     }
   }
 }
