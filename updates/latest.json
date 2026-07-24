@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generation": 5,
+  "generation": 6,
   "chatgptApi": {
     "version": "1.0.2",
     "release": "chatgpt-api-v1.0.2"
@@ -21,8 +21,8 @@
       "release": "extension-multiple-accounts-v0.1.0"
     },
     "release-test-fixture": {
-      "version": "0.0.1",
-      "release": "extension-release-test-fixture-v0.0.1"
+      "version": "0.0.2",
+      "release": "extension-release-test-fixture-v0.0.2"
     },
     "thread-colors": {
       "version": "0.1.0",
