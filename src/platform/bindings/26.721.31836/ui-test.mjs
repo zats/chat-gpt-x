@@ -1568,6 +1568,25 @@ async function validateUi(
   const profileNavigationAttemptsBefore =
     globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount();
   const profileClickStartedAt = performance.now();
+  let profileDomTransitionAfterMs = null;
+  const profileTransitionObserver = new MutationObserver(() => {
+    if (
+      profileDomTransitionAfterMs === null &&
+      Array.from(document.querySelectorAll('[aria-current="page"]')).some(
+        (element) => element.textContent?.trim() === 'Profile',
+      )
+    ) {
+      profileDomTransitionAfterMs = Math.round(
+        performance.now() - profileClickStartedAt,
+      );
+    }
+  });
+  profileTransitionObserver.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['aria-current'],
+    childList: true,
+    subtree: true,
+  });
   profile?.click();
   await sleep(500);
   const profileIsCurrent = Array.from(
@@ -1591,6 +1610,7 @@ async function validateUi(
       }
     }
   }
+  profileTransitionObserver.disconnect();
   check(
     Boolean(account && profile) &&
       !profileWasCurrent &&
@@ -1608,6 +1628,7 @@ async function validateUi(
         globalThis.__CGPTX_HOST__?._debug.profileNavigationLastRequestedPath(),
       profileEventuallyBecameCurrent,
       profileEventuallyBecameCurrentAfterMs,
+      profileDomTransitionAfterMs,
       currentPageLabels: Array.from(
         document.querySelectorAll('[aria-current="page"]'),
       ).map((element) => element.textContent?.trim()),
@@ -1615,18 +1636,45 @@ async function validateUi(
   );
   const repeatedProfileNavigationAttempts = [];
   for (let index = 0; index < 8; index += 1) {
-    const back = Array.from(
-      document.querySelectorAll('button, a, [role="button"]'),
-    ).find((element) => element.textContent?.trim() === 'Back to app');
-    if (!back) {
+    history.back();
+    const returnDeadline = performance.now() + 5_000;
+    while (
+      performance.now() < returnDeadline &&
+      Array.from(document.querySelectorAll('[aria-current="page"]')).some(
+        (element) => element.textContent?.trim() === 'Profile',
+      )
+    ) {
+      await sleep(100);
+    }
+    const returnedFromProfile = !Array.from(
+      document.querySelectorAll('[aria-current="page"]'),
+    ).some((element) => element.textContent?.trim() === 'Profile');
+    if (!returnedFromProfile) {
       repeatedProfileNavigationAttempts.push({
         index,
-        error: 'Back to app missing',
+        error: 'history did not return from Profile',
       });
       break;
     }
-    back.click();
-    await sleep(300);
+    const triggerDeadline = performance.now() + 5_000;
+    while (
+      performance.now() < triggerDeadline &&
+      !Array.from(document.querySelectorAll('button')).some((button) =>
+        button.querySelector('img.rounded-full'),
+      )
+    ) {
+      await sleep(100);
+    }
+    const profileTriggerReady = Array.from(
+      document.querySelectorAll('button'),
+    ).some((button) => button.querySelector('img.rounded-full'));
+    if (!profileTriggerReady) {
+      repeatedProfileNavigationAttempts.push({
+        index,
+        error: 'Profile trigger did not return',
+      });
+      break;
+    }
 
     const repeatedColumn = await openProfile();
     const repeatedAccount = repeatedColumn?.querySelector(
@@ -1640,6 +1688,23 @@ async function validateUi(
     const attemptsBefore =
       globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount();
     const startedAt = performance.now();
+    let domTransitionAfterMs = null;
+    const transitionObserver = new MutationObserver(() => {
+      if (
+        domTransitionAfterMs === null &&
+        Array.from(document.querySelectorAll('[aria-current="page"]')).some(
+          (element) => element.textContent?.trim() === 'Profile',
+        )
+      ) {
+        domTransitionAfterMs = Math.round(performance.now() - startedAt);
+      }
+    });
+    transitionObserver.observe(document.body, {
+      attributes: true,
+      attributeFilter: ['aria-current'],
+      childList: true,
+      subtree: true,
+    });
     repeatedProfile?.click();
     await sleep(500);
     const currentAt500Ms = Array.from(
@@ -1661,6 +1726,7 @@ async function validateUi(
         }
       }
     }
+    transitionObserver.disconnect();
     repeatedProfileNavigationAttempts.push({
       index,
       foundAccount: Boolean(repeatedAccount),
@@ -1671,6 +1737,7 @@ async function validateUi(
       currentAt500Ms,
       eventuallyCurrent,
       currentAfterMs,
+      domTransitionAfterMs,
       currentPageLabels: Array.from(
         document.querySelectorAll('[aria-current="page"]'),
       ).map((element) => element.textContent?.trim()),
