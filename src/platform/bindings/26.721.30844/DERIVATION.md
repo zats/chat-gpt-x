@@ -19,7 +19,7 @@ This build consolidates most shared implementations in `app-initial-BTphDPeq.js`
 | --- | --- | --- |
 | React, JSX, and React DOM | `app-initial-BTphDPeq.js` | `Lvt()` is React 19.2.5; `jvt()` supplies mutable `jsx` and `jsxs`; `ipt()` supplies `createRoot` |
 | Native menus | `app-initial-BTphDPeq.js` | initializer `QB`; `YB` Item; `ZB` Separator; `qB` in-place SubmenuItem; `JB.FlyoutSubmenuItem`; `KB` dropdown root |
-| Native icons | `app-initial-BTphDPeq.js` | initializer `Xlt` and component `Ylt` for the menu chevron; initializer `TH` and component `wH` for the Settings/Profile person icon |
+| Native icons | `app-initial-BTphDPeq.js` | initializer `Xlt` and component `Ylt` for the menu chevron; initializer `c_` and component `s_` for the Profile person icon; initializer `TH` and component `wH` for Settings |
 | Native color picker | `app-initial-BTphDPeq.js` | initializer `To`; controlled picker `wo` |
 | Authentication context | `app-initial-BTphDPeq.js` | initializer `LX`; `BX` auth-nonce hook; `JX` app-server registry hook |
 | Query and message contracts | `app-initial-BTphDPeq.js` | `Avt` query-client hook; `Qut` account-info query-key builder; initializer `sdt` and message bus `cdt` |
@@ -49,6 +49,8 @@ The visible Usage remaining Item owns presentation only. Its native SubmenuItem 
 The stock authenticated baseline contained the native account row, expandable Usage remaining with its native detail and link rows, Show pet, an account-dependent upgrade action, Settings with `⌘,`, and Log out. Usage expanded in place, Arrow Down moved focus to a nested native menu item, and the menu retained focus. The binding preserves that behavior in the 62-check native suite.
 
 The profile root supplies current identity and the native avatar. The binding refreshes identity on every render and uses the verified `/settings/profile` navigation hook if the app omits its profile callback. Transformers compose in registration order, recursively enforce extension namespaces and unique ids, preserve moved built-ins, and isolate failures.
+
+The `person` icon maps to the same 20-point artwork used by ChatGPT's native Profile row.
 
 ## menus.thread, threads, and threads.list
 

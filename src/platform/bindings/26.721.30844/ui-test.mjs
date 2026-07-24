@@ -1535,6 +1535,7 @@ async function validateUi(
                   kind: 'action',
                   id: 'profile-navigation-fixture.profile',
                   label: 'Profile',
+                  icon: 'person',
                   onClick: nativeAccount.onClick,
                 },
               ],
@@ -1556,6 +1557,13 @@ async function validateUi(
   await sleep(100);
   const profile = column?.querySelector(
     '[data-cgptx-id="profile-navigation-fixture.profile"]',
+  );
+  check(
+    profile
+      ?.querySelector('svg[viewBox="0 0 20 20"] > path')
+      ?.getAttribute('d')
+      ?.startsWith('M16.585 10C16.585 6.3632'),
+    'person icon reuses ChatGPT Profile artwork',
   );
   profile?.click();
   await sleep(500);

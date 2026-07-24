@@ -110,6 +110,7 @@ test("stored accounts exclude the current account and remain selectable", () => 
   assert.deepEqual(parent.items?.map((item) => item.id), ["multiple-accounts.profile", "multiple-accounts.account.other-user", "multiple-accounts.add-account"]);
   assert.equal(parent.items?.[0]?.kind === "action" ? parent.items[0].icon : undefined, "person");
   const otherItem = parent.items?.[1];
+  assert.equal(otherItem?.kind === "action" ? otherItem.icon : undefined, "person");
   if (otherItem?.kind === "action") otherItem.onClick?.();
   assert.deepEqual(selected, [other]);
 });
