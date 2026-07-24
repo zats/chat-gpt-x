@@ -17,7 +17,8 @@ struct ChatGPTLauncher {
 
     func launch(
         mode: ChatGPTLaunchMode = .normal,
-        arguments: [String] = []
+        arguments: [String] = [],
+        applicationURL: URL? = nil
     ) async throws {
         let activity = ProcessInfo.processInfo.beginActivity(
             options: .userInitiated,
@@ -27,9 +28,10 @@ struct ChatGPTLauncher {
 
         let workspace = NSWorkspace.shared
 
-        guard let applicationURL = Self.installedChatGPTURL(
-            workspace: workspace
-        ), let chatGPTBundle = Bundle(url: applicationURL),
+        guard let resolvedApplicationURL = applicationURL
+            ?? Self.installedChatGPTURL(workspace: workspace),
+            Self.isChatGPTBundle(resolvedApplicationURL),
+            let chatGPTBundle = Bundle(url: resolvedApplicationURL),
             let executableURL = chatGPTBundle.executableURL else {
             throw LaunchError.chatGPTNotInstalled
         }

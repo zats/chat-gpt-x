@@ -152,27 +152,52 @@ run_logged() {
   return 1
 }
 
-run_logged extensions env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" "$REPO_ROOT/src/extensions/build.sh"
+run_logged release-build env \
+  HOME="$TEST_HOME" \
+  CODEX_HOME="$CODEX_ROOT" \
+  CHATGPTX_BUILD_CONFIGURATION=Release \
+  CHATGPTX_BUILD_DIR="$RELEASE_ROOT" \
+  "$REPO_ROOT/src/macOS/scripts/build.sh"
 
-EXTENSION_SETTINGS="$CODEX_ROOT/extensions/settings.json"
+LAUNCHER_BIN="$RELEASE_ROOT/ChatGPTX.app/Contents/MacOS/ChatGPTX"
 
 MULTIPLE_ACCOUNTS_ROOT="$CODEX_ROOT/extensions/multiple-accounts"
 mkdir -p "$MULTIPLE_ACCOUNTS_ROOT"
 
 launch_app() {
   local name="$1"
-  env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
-    NODE_OPTIONS="--require \"$REPO_ROOT/src/platform/bridge/main.cjs\"" \
-    "$APP_BIN" \
-    --user-data-dir="$PROFILE_ROOT" \
-    --remote-debugging-port="$PORT" \
-    >"$LOG_ROOT/$name.stdout.log" 2>"$LOG_ROOT/$name.stderr.log" &
-  APP_PID=$!
+  local mode="${2:-normal}"
+  if [[ "$mode" == "api-test" ]]; then
+    env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
+      "$LAUNCHER_BIN" \
+      --test-api \
+      "--chatgpt-app=$APP_PATH" \
+      "--user-data-dir=$PROFILE_ROOT" \
+      "--remote-debugging-port=$PORT" \
+      >"$LOG_ROOT/$name.stdout.log" 2>"$LOG_ROOT/$name.stderr.log"
+    APP_PID=""
+  else
+    local launch_configuration=""
+    if [[ "$mode" == "composition" ]]; then
+      launch_configuration="$WORK_ROOT/$name-launch.json"
+      jq '{extensions: [.extensions[].id]}' \
+        "$CODEX_ROOT/extensions/settings.json" > "$launch_configuration"
+      chmod 600 "$launch_configuration"
+    fi
+    env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
+      CHATGPTX_LAUNCH_CONFIGURATION="$launch_configuration" \
+      NODE_OPTIONS="--require \"$REPO_ROOT/src/platform/bridge/main.cjs\"" \
+      "$APP_BIN" \
+      --user-data-dir="$PROFILE_ROOT" \
+      --remote-debugging-port="$PORT" \
+      >"$LOG_ROOT/$name.stdout.log" 2>"$LOG_ROOT/$name.stderr.log" &
+    APP_PID=$!
+  fi
   local deadline=$((SECONDS + 30))
   until curl -fsS "http://127.0.0.1:$PORT/json" 2>/dev/null \
     | jq -e 'any(.[]; .type == "page" and (.url | startswith("app:")))' \
       >/dev/null 2>&1; do
-    if ! kill -0 "$APP_PID" 2>/dev/null; then
+    if [[ -n "$APP_PID" ]] && ! kill -0 "$APP_PID" 2>/dev/null; then
       echo "ChatGPT exited during $name" >&2
       return 1
     fi
@@ -182,6 +207,13 @@ launch_app() {
     }
     sleep 0.1
   done
+  if [[ -z "$APP_PID" ]]; then
+    APP_PID="$(lsof -nP -tiTCP:"$PORT" -sTCP:LISTEN)"
+    [[ "$APP_PID" =~ ^[0-9]+$ ]] || {
+      echo "ChatGPT PID could not be resolved during $name" >&2
+      return 1
+    }
+  fi
 }
 
 stop_app() {
@@ -357,23 +389,20 @@ INSERT INTO threads (
 );
 SQL
 
-jq '(.extensions[] | select(.id == "api-test-suite") | .enabled) = true' "$EXTENSION_SETTINGS" > "$WORK_ROOT/extensions-settings.json"
-mv "$WORK_ROOT/extensions-settings.json" "$EXTENSION_SETTINGS"
-chmod 600 "$EXTENSION_SETTINGS"
-
 run_logged unit-tests bun test \
   "$REPO_ROOT/src/extensions/multiple-accounts/multiple-accounts.test.ts" \
   "$REPO_ROOT/src/extensions/thread-colors/thread-colors.test.ts" \
   "$REPO_ROOT/src/platform/utilities/extension-storage.test.ts"
 
-launch_app validation
 if [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
   THREAD_SELECTION="--select-thread-kind=remote"
 else
   THREAD_SELECTION="--select-thread=$THREAD_ID"
 fi
-run_logged native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \
-  "--alternate-auth=$SECONDARY_AUTH" "$THREAD_SELECTION"
+
+launch_app public-api api-test
+run_logged public-api node "$BINDING_DIR/ui-test.mjs" "$PORT" \
+  --public-api-only "$THREAD_SELECTION"
 stop_app
 
 RESULTS_FILE="$CODEX_ROOT/extensions/log/test-results.json"
@@ -388,12 +417,11 @@ PUBLIC_PASSED="$(jq '[.[] | select(.pass)] | length' "$RESULTS_FILE")"
   exit 1
 }
 
-run_logged release-build env \
-  HOME="$TEST_HOME" \
-  CODEX_HOME="$CODEX_ROOT" \
-  CHATGPTX_BUILD_CONFIGURATION=Release \
-  CHATGPTX_BUILD_DIR="$RELEASE_ROOT" \
-  "$REPO_ROOT/src/macOS/scripts/build.sh"
+launch_app validation composition
+run_logged native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \
+  "--alternate-auth=$SECONDARY_AUTH" "$THREAD_SELECTION"
+stop_app
+
 codesign --verify --deep --strict --verbose=2 "$RELEASE_ROOT/ChatGPTX.app" >"$LOG_ROOT/codesign.log" 2>&1
 diff -rq "$BINDING_DIR" "$RELEASE_ROOT/ChatGPTX.app/Contents/Resources/bindings/$APP_VERSION" >"$LOG_ROOT/binding-diff.log"
 diff -q "$REPO_ROOT/src/platform/bridge/main.cjs" "$RELEASE_ROOT/ChatGPTX.app/Contents/Resources/bridge/main.cjs" >"$LOG_ROOT/bridge-diff.log"

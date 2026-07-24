@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 
 @main
 enum ChatGPTXApplication {
@@ -15,20 +16,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        let isAPITest = arguments.contains("--test-api")
+        let chatGPTAppArgument = arguments.first {
+            $0.hasPrefix("--chatgpt-app=")
+        }
+        let chatGPTAppURL = chatGPTAppArgument.map {
+            URL(fileURLWithPath: String($0.dropFirst("--chatgpt-app=".count)))
+        }
+        let chatGPTArguments = isAPITest
+            ? arguments.filter {
+                $0 != "--test-api" && !$0.hasPrefix("--chatgpt-app=")
+            }
+            : []
+
         launchTask = Task {
             do {
-                let arguments = Array(CommandLine.arguments.dropFirst())
-                let isAPITest = arguments.contains("--test-api")
                 let mode: ChatGPTLaunchMode = isAPITest ? .apiTest : .normal
-                let chatGPTArguments = isAPITest
-                    ? arguments.filter { $0 != "--test-api" }
-                    : []
                 try await ChatGPTLauncher().launch(
                     mode: mode,
-                    arguments: chatGPTArguments
+                    arguments: chatGPTArguments,
+                    applicationURL: chatGPTAppURL
                 )
                 NSApplication.shared.terminate(nil)
             } catch {
+                if isAPITest {
+                    FileHandle.standardError.write(
+                        Data("\(error.localizedDescription)\n".utf8)
+                    )
+                    Darwin.exit(EXIT_FAILURE)
+                }
                 showLaunchError(error)
             }
         }

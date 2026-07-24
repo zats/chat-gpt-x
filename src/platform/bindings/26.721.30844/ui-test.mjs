@@ -9,6 +9,7 @@
  *   [--alternate-auth=/path/to/auth.json]
  *   [--select-thread=<thread-id>]
  *   [--select-thread-kind=remote]
+ *   [--public-api-only]
  */
 
 import { readFile } from 'node:fs/promises';
@@ -17,6 +18,7 @@ const port = process.argv[2] ?? '9222';
 const expectNativeProfileCallbackMissing = process.argv.includes(
   '--expect-native-profile-callback-missing',
 );
+const publicAPIOnly = process.argv.includes('--public-api-only');
 const alternateAuthPath = process.argv
   .find((argument) => argument.startsWith('--alternate-auth='))
   ?.slice('--alternate-auth='.length);
@@ -1701,6 +1703,21 @@ const semanticResults = await evaluate('globalThis.__CGPTX_TEST_RESULTS__');
 const failedSemantic = semanticResults.filter((result) => !result.pass);
 if (failedSemantic.length > 0) {
   throw new Error('Public API suite failed: ' + JSON.stringify(failedSemantic));
+}
+if (publicAPIOnly) {
+  socket.close();
+  console.log(
+    JSON.stringify(
+      {
+        passed: semanticResults.length,
+        total: semanticResults.length,
+        checks: semanticResults,
+      },
+      null,
+      2,
+    ),
+  );
+  process.exit(0);
 }
 
 const report = await evaluate(
