@@ -17,13 +17,15 @@ jobs:
   static:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Validate pinned ChatGPT version
+      - name: Validate pinned ChatGPT manifest
         run: node scripts/validate-pinned-chatgpt.mjs
-      - name: Check scripts
+      - name: Validate scripts and extension launch configuration
         run: |
           bash -n scripts/download-pinned-chatgpt.sh
           bash -n scripts/download-chatgpt-version.sh
@@ -42,23 +44,25 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - name: Install build dependencies
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install ripgrep and XcodeGen
         run: brew install ripgrep xcodegen
-      - name: Cache ChatGPT download
+      - name: Restore pinned ChatGPT archive cache
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/chatgpt-download-cache
           key: chatgpt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/platform/bindings/manifest.json') }}
-      - name: Download pinned ChatGPT app
+      - name: Extract and verify pinned ChatGPT app
         id: chatgpt
         env:
           CHATGPTX_DOWNLOAD_CACHE_DIR: ${{ runner.temp }}/chatgpt-download-cache
         run: |
           app_path="$(scripts/download-pinned-chatgpt.sh "$RUNNER_TEMP/chatgpt-app")"
           echo "path=$app_path" >> "$GITHUB_OUTPUT"
-      - name: Materialize burner authentication
+      - name: Write burner authentication files
         id: authentication
         env:
           PRIMARY_AUTH_JSON: ${{ secrets.CHATGPTX_PRIMARY_AUTH_JSON }}
@@ -80,7 +84,7 @@ jobs:
           chmod 600 "$auth_root/primary.json" "$auth_root/secondary.json"
           echo "primary=$auth_root/primary.json" >> "$GITHUB_OUTPUT"
           echo "secondary=$auth_root/secondary.json" >> "$GITHUB_OUTPUT"
-      - name: Run isolated end-to-end suite
+      - name: Build launcher and run isolated end-to-end suite
         env:
           CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
           CHATGPTX_AUTH_OUTPUT_DIR: ${{ runner.temp }}/chatgptx-refreshed-auth
@@ -88,7 +92,7 @@ jobs:
           scripts/run-local-ci.sh
           "${{ steps.authentication.outputs.primary }}"
           "${{ steps.authentication.outputs.secondary }}"
-      - name: Encrypt authentication handoff
+      - name: Encrypt refreshed authentication candidates
         if: always() && github.event_name == 'push' && steps.authentication.outcome == 'success'
         id: authentication-handoff
         run: |
@@ -104,7 +108,7 @@ jobs:
             "$candidate_root" \
             "$encrypted_root"
           echo "available=true" >> "$GITHUB_OUTPUT"
-      - name: Upload encrypted authentication handoff
+      - name: Upload encrypted authentication candidates
         if: always() && steps.authentication-handoff.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -112,7 +116,7 @@ jobs:
           path: ${{ runner.temp }}/chatgptx-auth-handoff
           if-no-files-found: error
           retention-days: 1
-      - name: Remove sensitive and extracted files
+      - name: Delete authentication and extracted app files
         if: always()
         run: >-
           rm -rf
