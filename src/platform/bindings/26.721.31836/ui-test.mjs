@@ -1613,6 +1613,82 @@ async function validateUi(
       ).map((element) => element.textContent?.trim()),
     },
   );
+  const repeatedProfileNavigationAttempts = [];
+  for (let index = 0; index < 8; index += 1) {
+    const back = Array.from(
+      document.querySelectorAll('button, a, [role="button"]'),
+    ).find((element) => element.textContent?.trim() === 'Back to app');
+    if (!back) {
+      repeatedProfileNavigationAttempts.push({
+        index,
+        error: 'Back to app missing',
+      });
+      break;
+    }
+    back.click();
+    await sleep(300);
+
+    const repeatedColumn = await openProfile();
+    const repeatedAccount = repeatedColumn?.querySelector(
+      '[data-cgptx-id="codex.profileDropdown.account"]',
+    );
+    repeatedAccount?.click();
+    await sleep(100);
+    const repeatedProfile = repeatedColumn?.querySelector(
+      '[data-cgptx-id="profile-navigation-fixture.profile"]',
+    );
+    const attemptsBefore =
+      globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount();
+    const startedAt = performance.now();
+    repeatedProfile?.click();
+    await sleep(500);
+    const currentAt500Ms = Array.from(
+      document.querySelectorAll('[aria-current="page"]'),
+    ).some((element) => element.textContent?.trim() === 'Profile');
+    let eventuallyCurrent = currentAt500Ms;
+    let currentAfterMs =
+      currentAt500Ms ? Math.round(performance.now() - startedAt) : null;
+    if (!currentAt500Ms) {
+      const deadline = performance.now() + 5_000;
+      while (performance.now() < deadline) {
+        await sleep(100);
+        eventuallyCurrent = Array.from(
+          document.querySelectorAll('[aria-current="page"]'),
+        ).some((element) => element.textContent?.trim() === 'Profile');
+        if (eventuallyCurrent) {
+          currentAfterMs = Math.round(performance.now() - startedAt);
+          break;
+        }
+      }
+    }
+    repeatedProfileNavigationAttempts.push({
+      index,
+      foundAccount: Boolean(repeatedAccount),
+      foundProfile: Boolean(repeatedProfile),
+      attemptsBefore,
+      attemptsAfter:
+        globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount(),
+      currentAt500Ms,
+      eventuallyCurrent,
+      currentAfterMs,
+      currentPageLabels: Array.from(
+        document.querySelectorAll('[aria-current="page"]'),
+      ).map((element) => element.textContent?.trim()),
+    });
+    if (!eventuallyCurrent) break;
+  }
+  check(
+    repeatedProfileNavigationAttempts.length === 8 &&
+      repeatedProfileNavigationAttempts.every(
+        (attempt) =>
+          attempt.foundAccount === true &&
+          attempt.foundProfile === true &&
+          attempt.attemptsAfter === attempt.attemptsBefore + 1 &&
+          attempt.currentAt500Ms === true,
+      ),
+    'repeated Profile navigation remains deterministic',
+    { attempts: repeatedProfileNavigationAttempts },
+  );
   profileNavigationRegistration.dispose();
   markProgress('profile-menu');
 
