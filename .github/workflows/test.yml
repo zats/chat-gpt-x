@@ -130,10 +130,13 @@ jobs:
             echo "screen recording did not start" >&2
             exit 1
           }
-          discard_recording() {
+          stop_recording() {
             touch "$recording_stop"
-            pkill -TERM -P "$recorder_pid" 2>/dev/null || true
+            pkill -INT -P "$recorder_pid" 2>/dev/null || true
             wait "$recorder_pid" 2>/dev/null || true
+          }
+          discard_recording() {
+            stop_recording
             rm -rf "$video_dir"
           }
           trap discard_recording EXIT INT TERM
@@ -152,8 +155,7 @@ jobs:
             discard_recording
           else
             echo "[ci] end-to-end suite failed; finalizing recording"
-            touch "$recording_stop"
-            wait "$recorder_pid"
+            stop_recording
           fi
           trap - EXIT INT TERM
 
