@@ -24,7 +24,7 @@ done
 
 node "$REPO_ROOT/scripts/validate-pinned-chatgpt.mjs" >/dev/null
 
-APP_VERSION="$(jq -er '.appVersion' "$MANIFEST")"
+APP_VERSION="$(jq -er '.chatgpt' "$MANIFEST")"
 DOWNLOAD_URL="$(jq -er '.downloadUrl' "$MANIFEST")"
 BINDING_MANIFEST="$REPO_ROOT/src/platform/bindings/$APP_VERSION/manifest.json"
 EXPECTED_ASAR="$(jq -er '.asarSha256' "$BINDING_MANIFEST")"

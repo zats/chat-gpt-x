@@ -131,17 +131,17 @@ async function readPinnedVersion(env: Env): Promise<string> {
   }
 
   const manifest = JSON.parse(await response.text()) as {
-    appVersion?: unknown;
+    chatgpt?: unknown;
   };
   if (
-    typeof manifest.appVersion !== "string" ||
-    !/^\d+(?:\.\d+)+$/.test(manifest.appVersion)
+    typeof manifest.chatgpt !== "string" ||
+    !/^\d+(?:\.\d+)+$/.test(manifest.chatgpt)
   ) {
     throw new Error(
-      "bindings/manifest.json appVersion must be numeric dot-separated components",
+      "bindings/manifest.json chatgpt must be numeric dot-separated components",
     );
   }
-  return manifest.appVersion;
+  return manifest.chatgpt;
 }
 
 async function readSparkleFeed(): Promise<LatestCodexVersion> {

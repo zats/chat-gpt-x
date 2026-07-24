@@ -26,10 +26,10 @@ async function readJson(filePath) {
 
 const pinned = await readJson(pinnedManifestPath);
 if (
-  typeof pinned.appVersion !== "string" ||
-  !/^\d+(?:\.\d+)+$/.test(pinned.appVersion)
+  typeof pinned.chatgpt !== "string" ||
+  !/^\d+(?:\.\d+)+$/.test(pinned.chatgpt)
 ) {
-  throw new Error("bindings/manifest.json appVersion must be numeric");
+  throw new Error("bindings/manifest.json chatgpt must be numeric");
 }
 
 let downloadUrl;
@@ -41,17 +41,17 @@ try {
 if (downloadUrl.protocol !== "https:") {
   throw new Error("bindings/manifest.json downloadUrl must use HTTPS");
 }
-if (!path.basename(downloadUrl.pathname).includes(pinned.appVersion)) {
-  throw new Error("downloadUrl must identify the pinned appVersion");
+if (!path.basename(downloadUrl.pathname).includes(pinned.chatgpt)) {
+  throw new Error("downloadUrl must identify the pinned ChatGPT version");
 }
 
-const bindingDirectory = path.join(bindingsRoot, pinned.appVersion);
+const bindingDirectory = path.join(bindingsRoot, pinned.chatgpt);
 if (!(await stat(bindingDirectory)).isDirectory()) {
-  throw new Error(`missing binding directory ${pinned.appVersion}`);
+  throw new Error(`missing binding directory ${pinned.chatgpt}`);
 }
 
 const binding = await readJson(path.join(bindingDirectory, "manifest.json"));
-if (binding.appVersion !== pinned.appVersion) {
+if (binding.chatgpt !== pinned.chatgpt) {
   throw new Error("pinned and versioned binding manifests disagree");
 }
 
@@ -66,9 +66,9 @@ const versions = (
         const manifest = await readJson(
           path.join(bindingsRoot, entry.name, "manifest.json"),
         );
-        if (manifest.appVersion !== entry.name) {
+        if (manifest.chatgpt !== entry.name) {
           throw new Error(
-            `${entry.name}/manifest.json appVersion must match its directory`,
+            `${entry.name}/manifest.json chatgpt must match its directory`,
           );
         }
         return entry.name;
@@ -77,7 +77,7 @@ const versions = (
 ).sort(compareVersions);
 
 const latestVersion = versions.at(-1);
-if (pinned.appVersion !== latestVersion) {
+if (pinned.chatgpt !== latestVersion) {
   throw new Error(
     `bindings/manifest.json must pin the newest binding ${latestVersion}`,
   );
@@ -85,7 +85,7 @@ if (pinned.appVersion !== latestVersion) {
 
 console.log(
   JSON.stringify({
-    appVersion: pinned.appVersion,
+    chatgpt: pinned.chatgpt,
     downloadUrl: pinned.downloadUrl,
   }),
 );

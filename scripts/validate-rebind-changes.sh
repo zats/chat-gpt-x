@@ -73,11 +73,11 @@ done
 
 jq -e \
   --arg version "$APP_VERSION" \
-  '.appVersion == $version' \
+  '.chatgpt == $version' \
   "$REPO_ROOT/$BINDING_ROOT/manifest.json" >/dev/null
 jq -e \
   --arg version "$APP_VERSION" \
   --arg url "$DOWNLOAD_URL" \
-  '.appVersion == $version and .downloadUrl == $url' \
+  '.chatgpt == $version and .downloadUrl == $url' \
   "$REPO_ROOT/src/platform/bindings/manifest.json" >/dev/null
 node "$REPO_ROOT/scripts/validate-pinned-chatgpt.mjs"

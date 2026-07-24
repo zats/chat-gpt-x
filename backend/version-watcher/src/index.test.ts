@@ -110,7 +110,7 @@ describe("version detection", () => {
       .mockResolvedValueOnce(
         response(
           JSON.stringify({
-            appVersion: version,
+            chatgpt: version,
             downloadUrl,
           }),
         ),
@@ -135,7 +135,7 @@ describe("version detection", () => {
       .mockResolvedValueOnce(
         response(
           JSON.stringify({
-            appVersion: version,
+            chatgpt: version,
             downloadUrl,
           }),
         ),
@@ -156,7 +156,7 @@ describe("version detection", () => {
       .mockResolvedValueOnce(
         response(
           JSON.stringify({
-            appVersion: previousVersion,
+            chatgpt: previousVersion,
             downloadUrl:
               "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.715.70719.zip",
           }),
@@ -194,7 +194,7 @@ describe("version detection", () => {
       .mockResolvedValueOnce(
         response(
           JSON.stringify({
-            appVersion: previousVersion,
+            chatgpt: previousVersion,
             downloadUrl:
               "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.715.70719.zip",
           }),
