@@ -188,6 +188,8 @@ jobs:
       version: ${{ needs.request.outputs.version }}
       download-url: ${{ needs.request.outputs.download-url }}
       issue-number: ${{ needs.request.outputs.issue-number }}
+      base-sha: ${{ steps.base.outputs.sha }}
+      codex-version: ${{ steps.codex.outputs.version }}
       patch-artifact: ${{ steps.patch.outputs.artifact-name }}
       app-validation-error: ${{ steps.chatgpt.outputs.validation-error }}
     steps:
@@ -254,6 +256,7 @@ jobs:
           }
 
       - name: Install bundled Codex CLI
+        id: codex
         env:
           CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
         run: |
@@ -265,6 +268,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/bin"
           install -m 755 "$cli_path" "$RUNNER_TEMP/bin/codex"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          codex_version="$("$RUNNER_TEMP/bin/codex" --version | awk '{print $2}')"
+          [[ "$codex_version" =~ ^[0-9]+(\.[0-9]+){2}([-+][0-9A-Za-z.-]+)?$ ]]
+          echo "version=$codex_version" >> "$GITHUB_OUTPUT"
           "$RUNNER_TEMP/bin/codex" --version
 
       - name: Materialize authentication
@@ -520,24 +526,27 @@ jobs:
   open-pull-request:
     needs: generate
     runs-on: ubuntu-latest
+    environment: ci-auth-refresh
     permissions:
       contents: write
       pull-requests: write
     outputs:
-      head-sha: ${{ steps.binding.outputs.head-sha }}
+      head-sha: ${{ steps.binding-final.outputs.head-sha }}
       pr-number: ${{ steps.pull-request.outputs.number }}
       pr-url: ${{ steps.pull-request.outputs.url }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ needs.generate.outputs.base-sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/download-artifact@v4
         with:
           name: ${{ needs.generate.outputs.patch-artifact }}
           path: ${{ runner.temp }}/binding-patch
 
-      - name: Commit binding
+      - name: Commit binding and attempt rebase
         id: binding
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
@@ -549,16 +558,280 @@ jobs:
           git config user.name "chat-gpt-x[bot]"
           git config user.email "chat-gpt-x[bot]@users.noreply.github.com"
           git commit -m "Create bindings for ChatGPT $APP_VERSION"
+          git fetch --no-tags origin main
+          latest_main_sha="$(git rev-parse FETCH_HEAD)"
+          echo "latest-main-sha=$latest_main_sha" >> "$GITHUB_OUTPUT"
+          if git rebase "$latest_main_sha"; then
+            echo "conflicted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git diff --name-only --diff-filter=U \
+            > "$RUNNER_TEMP/rebase-conflicts.txt"
+          [[ -s "$RUNNER_TEMP/rebase-conflicts.txt" ]] || {
+            echo "Rebase failed without reporting conflicted files." >&2
+            exit 1
+          }
+          while IFS= read -r index_line; do
+            conflict_path="${index_line#*$'\t'}"
+            if ! grep -Fxq \
+              "$conflict_path" \
+              "$RUNNER_TEMP/rebase-conflicts.txt"; then
+              printf '%s\n' "$index_line"
+            fi
+          done < <(git ls-files --stage) \
+            > "$RUNNER_TEMP/rebase-index-before.txt"
+          echo "conflicted=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.binding.outputs.conflicted == 'true'
+        with:
+          node-version: 22
+
+      - name: Download refreshed authentication handoff
+        if: steps.binding.outputs.conflicted == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-auth-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rebase-auth-handoff
+
+      - name: Install rebase resolver Codex CLI
+        if: steps.binding.outputs.conflicted == 'true'
+        env:
+          CODEX_VERSION: ${{ needs.generate.outputs.codex-version }}
+        run: |
+          codex_prefix="$RUNNER_TEMP/codex-npm"
+          npm install \
+            --global \
+            --prefix "$codex_prefix" \
+            "@openai/codex@$CODEX_VERSION"
+          echo "$codex_prefix/bin" >> "$GITHUB_PATH"
+          installed_version="$("$codex_prefix/bin/codex" --version | awk '{print $2}')"
+          [[ "$installed_version" == "$CODEX_VERSION" ]]
+
+      - name: Materialize rebase resolver authentication
+        if: steps.binding.outputs.conflicted == 'true'
+        id: resolver-authentication
+        env:
+          HANDOFF_PRIVATE_KEY: ${{ secrets.CHATGPTX_AUTH_HANDOFF_PRIVATE_KEY }}
+        run: |
+          [[ -n "$HANDOFF_PRIVATE_KEY" ]] || {
+            echo "CHATGPTX_AUTH_HANDOFF_PRIVATE_KEY is required." >&2
+            exit 1
+          }
+          key_path="$RUNNER_TEMP/rebase-auth-handoff-private.pem"
+          decrypted_root="$RUNNER_TEMP/rebase-auth-decrypted"
+          resolver_home="$RUNNER_TEMP/codex-rebase-home"
+          printf '%s' "$HANDOFF_PRIVATE_KEY" > "$key_path"
+          chmod 600 "$key_path"
+          node scripts/auth-handoff.mjs \
+            decrypt \
+            "$key_path" \
+            "$RUNNER_TEMP/rebase-auth-handoff" \
+            "$decrypted_root" \
+            agent
+          mkdir -p "$resolver_home"
+          chmod 700 "$resolver_home"
+          install -m 600 "$decrypted_root/agent.json" "$resolver_home/auth.json"
+          jq -e \
+            '.tokens | type == "object" and has("access_token") and has("refresh_token")' \
+            "$resolver_home/auth.json" >/dev/null
+          echo "home=$resolver_home" >> "$GITHUB_OUTPUT"
+          CODEX_HOME="$resolver_home" codex login status
+
+      - name: Resolve rebase conflicts with Codex
+        if: steps.binding.outputs.conflicted == 'true'
+        id: rebase-resolver
+        env:
+          AGENT_CODEX_HOME: ${{ steps.resolver-authentication.outputs.home }}
+          APP_VERSION: ${{ needs.generate.outputs.version }}
+          BASE_SHA: ${{ needs.generate.outputs.base-sha }}
+          LATEST_MAIN_SHA: ${{ steps.binding.outputs.latest-main-sha }}
+        run: |
+          prompt_path="$RUNNER_TEMP/rebase-resolver-prompt.md"
+          conflicts="$(
+            sed 's/^/- /' "$RUNNER_TEMP/rebase-conflicts.txt"
+          )"
+          cat > "$prompt_path" <<PROMPT
+          Resolve only the active git rebase conflicts for the generated ChatGPT $APP_VERSION binding.
+
+          The binding was fully generated and validated from tested base $BASE_SHA. It is being rebased onto current main $LATEST_MAIN_SHA.
+
+          Conflicted files:
+          $conflicts
+
+          Preserve the current main changes and the generated binding changes. Follow the repository versioning and update-manifest invariants. For an extension manifest whose compatibility range expands, increment from the current main version. Increment updates/latest.json generation exactly once from current main and keep every release entry aligned with its component manifest.
+
+          Modify only the conflicted files listed above. Do not stage files, commit, continue or abort the rebase, push, inspect authentication, weaken validation, or modify any non-conflicted file. Remove every conflict marker and run git diff --check. Finish only when the conflicted files contain the complete resolution.
+          PROMPT
+
+          set +e
+          CODEX_HOME="$AGENT_CODEX_HOME" codex exec \
+            --ignore-user-config \
+            --strict-config \
+            --model gpt-5.6-terra \
+            --config 'model_reasoning_effort="high"' \
+            --config 'service_tier="fast"' \
+            --dangerously-bypass-approvals-and-sandbox \
+            --color never \
+            --json \
+            --output-last-message "$RUNNER_TEMP/rebase-resolver-final.txt" \
+            --cd "$GITHUB_WORKSPACE" \
+            - < "$prompt_path" 2>&1 |
+            tee "$RUNNER_TEMP/rebase-resolver.jsonl"
+          resolver_exit_code="${PIPESTATUS[0]}"
+          set -e
+          echo "exit-code=$resolver_exit_code" >> "$GITHUB_OUTPUT"
+
+      - name: Check rebase diagnostics for authentication exposure
+        if: >-
+          always() &&
+          steps.binding.outputs.conflicted == 'true' &&
+          steps.resolver-authentication.outcome == 'success'
+        id: rebase-exposure
+        env:
+          AGENT_HOME: ${{ steps.resolver-authentication.outputs.home }}
+        run: |
+          node scripts/check-auth-exposure.mjs \
+            "$AGENT_HOME/auth.json" \
+            -- \
+            "$RUNNER_TEMP/rebase-resolver.jsonl" \
+            "$RUNNER_TEMP/rebase-resolver-final.txt"
+
+      - name: Validate and push binding
+        if: always() && steps.binding.outcome == 'success'
+        id: binding-final
+        env:
+          APP_VERSION: ${{ needs.generate.outputs.version }}
+          DOWNLOAD_URL: ${{ needs.generate.outputs.download-url }}
+          LATEST_MAIN_SHA: ${{ steps.binding.outputs.latest-main-sha }}
+          REBASE_CONFLICTED: ${{ steps.binding.outputs.conflicted }}
+          RESOLVER_AUTHENTICATION_OUTCOME: ${{ steps.resolver-authentication.outcome }}
+          RESOLVER_EXIT_CODE: ${{ steps.rebase-resolver.outputs.exit-code }}
+          REBASE_EXPOSURE_OUTCOME: ${{ steps.rebase-exposure.outcome }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$REBASE_CONFLICTED" == "true" ]]; then
+            [[ "$RESOLVER_AUTHENTICATION_OUTCOME" == "success" ]]
+            [[ "$RESOLVER_EXIT_CODE" == "0" ]]
+            [[ "$REBASE_EXPOSURE_OUTCOME" == "success" ]]
+
+            while IFS= read -r index_line; do
+              conflict_path="${index_line#*$'\t'}"
+              if ! grep -Fxq \
+                "$conflict_path" \
+                "$RUNNER_TEMP/rebase-conflicts.txt"; then
+                printf '%s\n' "$index_line"
+              fi
+            done < <(git ls-files --stage) \
+              > "$RUNNER_TEMP/rebase-index-after.txt"
+            cmp \
+              "$RUNNER_TEMP/rebase-index-before.txt" \
+              "$RUNNER_TEMP/rebase-index-after.txt" || {
+              echo "Codex changed the index outside the conflicted files." >&2
+              exit 1
+            }
+
+            comm -23 \
+              <(git diff --name-only | sort) \
+              <(sort "$RUNNER_TEMP/rebase-conflicts.txt") \
+              > "$RUNNER_TEMP/rebase-unexpected-paths.txt"
+            [[ ! -s "$RUNNER_TEMP/rebase-unexpected-paths.txt" ]] || {
+              echo "Codex changed non-conflicted files:" >&2
+              cat "$RUNNER_TEMP/rebase-unexpected-paths.txt" >&2
+              exit 1
+            }
+            git ls-files --others --exclude-standard \
+              > "$RUNNER_TEMP/rebase-untracked-paths.txt"
+            [[ ! -s "$RUNNER_TEMP/rebase-untracked-paths.txt" ]] || {
+              echo "Codex created untracked files:" >&2
+              cat "$RUNNER_TEMP/rebase-untracked-paths.txt" >&2
+              exit 1
+            }
+
+            while IFS= read -r conflict_path; do
+              if grep -nE \
+                '^(<<<<<<<|=======|>>>>>>>)' \
+                "$conflict_path"; then
+                echo "Conflict markers remain in $conflict_path." >&2
+                exit 1
+              fi
+              git add -- "$conflict_path"
+            done < "$RUNNER_TEMP/rebase-conflicts.txt"
+            [[ -z "$(git diff --name-only --diff-filter=U)" ]]
+            git diff --cached --check
+            GIT_EDITOR=true git rebase --continue
+          fi
+
+          git diff --check "$LATEST_MAIN_SHA"
+          binding_root="src/platform/bindings/$APP_VERSION"
+          if git cat-file -e \
+            "$LATEST_MAIN_SHA:$binding_root" \
+            2>/dev/null; then
+            echo "Binding $APP_VERSION already existed on current main." >&2
+            exit 1
+          fi
+          binding_entries=("$binding_root"/*)
+          [[ "${#binding_entries[@]}" == "4" ]]
+          for binding_entry in "${binding_entries[@]}"; do
+            [[ -f "$binding_entry" && ! -L "$binding_entry" ]]
+            case "$(basename "$binding_entry")" in
+              DERIVATION.md | host.js | manifest.json | ui-test.mjs)
+                ;;
+              *)
+                echo "Unexpected binding file: $binding_entry" >&2
+                exit 1
+                ;;
+            esac
+          done
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              "$binding_root"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json | updates/chatgpt.json)
+                ;;
+              *)
+                echo "Rebase changed a forbidden path: $changed_path" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git diff --name-only "$LATEST_MAIN_SHA" HEAD)
+          jq -e \
+            --arg version "$APP_VERSION" \
+            '.version == "1.0.0" and .chatgpt == $version' \
+            "$binding_root/manifest.json" >/dev/null
+          jq -e \
+            --arg version "$APP_VERSION" \
+            --arg url "$DOWNLOAD_URL" \
+            '.chatgpt == $version and .downloadUrl == $url' \
+            src/platform/bindings/manifest.json >/dev/null
+          node scripts/validate-pinned-chatgpt.mjs
+          node scripts/component-releases.mjs "$LATEST_MAIN_SHA" --worktree
+          [[ -z "$(git status --porcelain)" ]]
+
           binding_sha="$(git rev-parse HEAD)"
           [[ "$binding_sha" =~ ^[0-9a-f]{40}$ ]]
           echo "head-sha=$binding_sha" >> "$GITHUB_OUTPUT"
+          branch_name="codex/bindings-chatgpt-$APP_VERSION"
+          gh auth setup-git
           git push --force origin "HEAD:refs/heads/$branch_name"
+
+      - name: Remove rebase resolver files
+        if: always()
+        run: >-
+          rm -rf
+          "$RUNNER_TEMP/codex-rebase-home"
+          "$RUNNER_TEMP/codex-npm"
+          "$RUNNER_TEMP/rebase-auth-handoff"
+          "$RUNNER_TEMP/rebase-auth-handoff-private.pem"
+          "$RUNNER_TEMP/rebase-auth-decrypted"
+          "$RUNNER_TEMP/rebase-resolver-prompt.md"
+          "$RUNNER_TEMP/rebase-resolver.jsonl"
+          "$RUNNER_TEMP/rebase-resolver-final.txt"
 
       - name: Open pull request
         id: pull-request
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
-          EXPECTED_HEAD_SHA: ${{ steps.binding.outputs.head-sha }}
+          EXPECTED_HEAD_SHA: ${{ steps.binding-final.outputs.head-sha }}
           ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
           GH_TOKEN: ${{ github.token }}
         run: |
