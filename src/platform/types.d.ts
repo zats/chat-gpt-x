@@ -5,7 +5,8 @@
  * internals are minified and re-scrambled every build; bindings in
  * `src/platform/bindings/<version>/` bridge them to this API, so this file
  * stays stable across app updates. ChatGPTX-owned utilities live separately
- * under `src/platform/utilities/`.
+ * under `src/platform/utilities/`. Its semantic version is declared in
+ * `src/platform/manifest.json`.
  *
  * Rules for anything exported here:
  * - Declarations only: no implementations, app internals, DOM/Electron

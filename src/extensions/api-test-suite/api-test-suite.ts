@@ -18,6 +18,7 @@
  *
  * Layer note: requires an authenticated session — the profile menu's
  * built-in items exist only when signed in.
+ * Release revisions preserve these deterministic behavioral assertions.
  */
 
 import type {

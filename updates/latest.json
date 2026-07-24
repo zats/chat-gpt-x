@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
-  "generation": 2,
+  "generation": 3,
   "chatgptApi": {
-    "version": "1.0.0",
-    "release": "chatgpt-api-v1.0.0"
+    "version": "1.0.1",
+    "release": "chatgpt-api-v1.0.1"
   },
   "binding": {
-    "version": "1.0.1",
+    "version": "1.0.2",
     "chatgpt": "26.721.31836",
-    "chatgptApi": "1.0.0",
-    "release": "binding-26.721.31836-v1.0.1"
+    "chatgptApi": "1.0.1",
+    "release": "binding-26.721.31836-v1.0.2"
   },
   "extensions": {
     "api-test-suite": {
-      "version": "0.0.1",
-      "release": "extension-api-test-suite-v0.0.1"
+      "version": "0.0.2",
+      "release": "extension-api-test-suite-v0.0.2"
     },
     "multiple-accounts": {
       "version": "0.1.0",
