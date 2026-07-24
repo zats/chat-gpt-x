@@ -304,7 +304,6 @@ jobs:
           cp scripts/auth-handoff.mjs "$RUNNER_TEMP/trusted-auth-handoff.mjs"
           : > "$diagnostics_root/agent.jsonl"
           : > "$diagnostics_root/agent-final.txt"
-          : > "$diagnostics_root/post-test.log"
           : > "$diagnostics_root/binding.patch"
           {
             echo "agent-home=$agent_home"
@@ -394,23 +393,6 @@ jobs:
           artifact_name="chatgpt-binding-$APP_VERSION-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"
 
-      - name: Run deterministic post-agent suite
-        id: tests
-        if: steps.patch.outcome == 'success'
-        env:
-          CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
-          CHATGPTX_AUTH_OUTPUT_DIR: ${{ steps.authentication.outputs.candidate-root }}
-          PRIMARY_AUTH: ${{ steps.authentication.outputs.auth-root }}/primary.json
-          SECONDARY_AUTH: ${{ steps.authentication.outputs.auth-root }}/secondary.json
-          DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
-        run: |
-          set +e
-          scripts/run-local-ci.sh "$PRIMARY_AUTH" "$SECONDARY_AUTH" \
-            > "$DIAGNOSTICS_ROOT/post-test.log" 2>&1
-          test_exit_code=$?
-          set -e
-          echo "exit-code=$test_exit_code" >> "$GITHUB_OUTPUT"
-
       - name: Check diagnostics for authentication exposure
         id: exposure
         if: always() && steps.authentication.outcome == 'success'
@@ -432,13 +414,11 @@ jobs:
             -- \
             "$DIAGNOSTICS_ROOT/agent.jsonl" \
             "$DIAGNOSTICS_ROOT/agent-final.txt" \
-            "$DIAGNOSTICS_ROOT/post-test.log" \
             "$DIAGNOSTICS_ROOT/binding.patch"
 
-      - name: Upload tested binding patch
+      - name: Upload binding patch
         if: >-
           steps.patch.outcome == 'success' &&
-          steps.tests.outputs.exit-code == '0' &&
           steps.exposure.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
@@ -480,7 +460,6 @@ jobs:
         if: always() && steps.exposure.outcome == 'success'
         env:
           AGENT_EXIT_CODE: ${{ steps.agent.outputs.exit-code }}
-          TEST_EXIT_CODE: ${{ steps.tests.outputs.exit-code }}
           DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
         run: |
           if [[ "$AGENT_EXIT_CODE" != "0" ]]; then
@@ -491,13 +470,6 @@ jobs:
           if [[ -s "$DIAGNOSTICS_ROOT/agent-final.txt" ]]; then
             cat "$DIAGNOSTICS_ROOT/agent-final.txt"
           fi
-          if [[ "$TEST_EXIT_CODE" == "0" ]]; then
-            cat "$DIAGNOSTICS_ROOT/post-test.log"
-          elif [[ -s "$DIAGNOSTICS_ROOT/post-test.log" ]]; then
-            echo "Deterministic post-agent suite failed"
-            rg -n -i 'error:|failed|failure|exception|fatal' \
-              "$DIAGNOSTICS_ROOT/post-test.log" || true
-          fi
 
       - name: Upload failure diagnostics
         if: >-
@@ -506,10 +478,6 @@ jobs:
           (
             steps.agent.outputs.exit-code != '0' ||
             steps.scope.outcome == 'failure' ||
-            (
-              steps.tests.outcome == 'success' &&
-              steps.tests.outputs.exit-code != '0'
-            ) ||
             steps.patch.outcome == 'failure'
           )
         uses: actions/upload-artifact@v4
@@ -518,7 +486,6 @@ jobs:
           path: |
             ${{ steps.authentication.outputs.diagnostics-root }}/agent.jsonl
             ${{ steps.authentication.outputs.diagnostics-root }}/agent-final.txt
-            ${{ steps.authentication.outputs.diagnostics-root }}/post-test.log
             ${{ steps.authentication.outputs.diagnostics-root }}/binding.patch
           if-no-files-found: error
           retention-days: 7
@@ -539,13 +506,11 @@ jobs:
         env:
           AGENT_EXIT_CODE: ${{ steps.agent.outputs.exit-code }}
           SCOPE_OUTCOME: ${{ steps.scope.outcome }}
-          TEST_EXIT_CODE: ${{ steps.tests.outputs.exit-code }}
           PATCH_OUTCOME: ${{ steps.patch.outcome }}
           EXPOSURE_OUTCOME: ${{ steps.exposure.outcome }}
         run: |
           [[ "$AGENT_EXIT_CODE" == "0" ]]
           [[ "$SCOPE_OUTCOME" == "success" ]]
-          [[ "$TEST_EXIT_CODE" == "0" ]]
           [[ "$PATCH_OUTCOME" == "success" ]]
           [[ "$EXPOSURE_OUTCOME" == "success" ]]
 
@@ -556,6 +521,8 @@ jobs:
       contents: write
       pull-requests: write
     outputs:
+      head-sha: ${{ steps.binding.outputs.head-sha }}
+      pr-number: ${{ steps.pull-request.outputs.number }}
       pr-url: ${{ steps.pull-request.outputs.url }}
     steps:
       - uses: actions/checkout@v4
@@ -568,6 +535,7 @@ jobs:
           path: ${{ runner.temp }}/binding-patch
 
       - name: Commit binding
+        id: binding
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
         run: |
@@ -578,20 +546,24 @@ jobs:
           git config user.name "chat-gpt-x[bot]"
           git config user.email "chat-gpt-x[bot]@users.noreply.github.com"
           git commit -m "Create bindings for ChatGPT $APP_VERSION"
+          binding_sha="$(git rev-parse HEAD)"
+          [[ "$binding_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "head-sha=$binding_sha" >> "$GITHUB_OUTPUT"
           git push --force origin "HEAD:refs/heads/$branch_name"
 
       - name: Open pull request
         id: pull-request
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
+          EXPECTED_HEAD_SHA: ${{ steps.binding.outputs.head-sha }}
           ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
           GH_TOKEN: ${{ github.token }}
         run: |
           branch_name="codex/bindings-chatgpt-$APP_VERSION"
           title="Create bindings for ChatGPT $APP_VERSION"
-          body="Generated and validated by the ChatGPT rebinding workflow.
+          body="Generated by the ChatGPT rebinding workflow. The shared CI workflow must pass before automatic merge.
 
-          Closes #$ISSUE_NUMBER"
+          Tracks #$ISSUE_NUMBER."
           existing_pr="$(
             gh pr list \
               --head "$branch_name" \
@@ -615,7 +587,143 @@ jobs:
                 --body "$body"
             )"
           fi
-          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+          gh pr view "$pr_url" \
+            --json headRefOid,number,url \
+            > "$RUNNER_TEMP/pull-request.json"
+          jq -e \
+            --arg headSha "$EXPECTED_HEAD_SHA" \
+            '.headRefOid == $headSha' \
+            "$RUNNER_TEMP/pull-request.json" >/dev/null
+          {
+            echo "number=$(jq -r .number "$RUNNER_TEMP/pull-request.json")"
+            echo "url=$(jq -r .url "$RUNNER_TEMP/pull-request.json")"
+          } >> "$GITHUB_OUTPUT"
+
+  validate-pull-request:
+    needs: open-pull-request
+    permissions:
+      contents: read
+    uses: ./.github/workflows/test.yml
+    with:
+      ref: ${{ needs.open-pull-request.outputs.head-sha }}
+      refresh-auth: false
+    secrets: inherit
+
+  merge-pull-request:
+    needs:
+      - generate
+      - open-pull-request
+      - validate-pull-request
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out tested binding
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.open-pull-request.outputs.head-sha }}
+          fetch-depth: 0
+
+      - name: Validate generated pull request
+        env:
+          APP_VERSION: ${{ needs.generate.outputs.version }}
+          EXPECTED_HEAD_SHA: ${{ needs.open-pull-request.outputs.head-sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.open-pull-request.outputs.pr-number }}
+          PR_URL: ${{ needs.open-pull-request.outputs.pr-url }}
+        run: |
+          gh pr view "$PR_URL" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json number,state,title,author,baseRefName,headRefName,headRefOid,isCrossRepository \
+            > "$RUNNER_TEMP/pull-request.json"
+          jq -e \
+            --arg title "Create bindings for ChatGPT $APP_VERSION" \
+            --arg branch "codex/bindings-chatgpt-$APP_VERSION" \
+            --arg headSha "$EXPECTED_HEAD_SHA" \
+            --argjson number "$PR_NUMBER" \
+            '
+              .state == "OPEN" and
+              .number == $number and
+              .title == $title and
+              .author.login == "app/github-actions" and
+              .baseRefName == "main" and
+              .headRefName == $branch and
+              .headRefOid == $headSha and
+              .isCrossRepository == false
+            ' "$RUNNER_TEMP/pull-request.json" >/dev/null
+
+      - name: Fast-forward tested binding and test main
+        env:
+          APP_VERSION: ${{ needs.generate.outputs.version }}
+          EXPECTED_HEAD_SHA: ${{ needs.open-pull-request.outputs.head-sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.open-pull-request.outputs.pr-number }}
+        run: |
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_HEAD_SHA" ]]
+          git push origin "$EXPECTED_HEAD_SHA:refs/heads/main"
+
+          merged_sha="$(
+            deadline=$((SECONDS + 60))
+            while (( SECONDS < deadline )); do
+              candidate="$(
+                gh pr view "$PR_NUMBER" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --json mergeCommit,state \
+                  --jq 'select(.state == "MERGED") | .mergeCommit.oid'
+              )"
+              if [[ -n "$candidate" ]]; then
+                echo "$candidate"
+                break
+              fi
+              sleep 2
+            done
+          )"
+          [[ "$merged_sha" == "$EXPECTED_HEAD_SHA" ]] || {
+            echo "GitHub did not mark the exact tested commit as merged" >&2
+            exit 1
+          }
+          branch_name="codex/bindings-chatgpt-$APP_VERSION"
+          git push origin --delete "$branch_name"
+
+          validation_id="rebind-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          validation_title="CI ($validation_id)"
+          gh workflow run ci.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f protected_run=true \
+            -f validation_id="$validation_id"
+
+          run_id=""
+          deadline=$((SECONDS + 120))
+          while (( SECONDS < deadline )); do
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow ci.yml \
+              --branch main \
+              --event workflow_dispatch \
+              --limit 20 \
+              --json databaseId,displayTitle,headSha \
+              > "$RUNNER_TEMP/main-ci-runs.json"
+            run_id="$(
+              jq -r \
+                --arg headSha "$merged_sha" \
+                --arg title "$validation_title" \
+                '[.[] | select(.headSha == $headSha and .displayTitle == $title)][0].databaseId // empty' \
+                "$RUNNER_TEMP/main-ci-runs.json"
+            )"
+            [[ -z "$run_id" ]] || break
+            sleep 2
+          done
+          [[ -n "$run_id" ]] || {
+            echo "Post-merge CI run did not appear for $merged_sha" >&2
+            exit 1
+          }
+
+          gh run watch "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
 
   finalize-issue:
     if: >-
@@ -633,6 +741,8 @@ jobs:
       - mark-issue-in-progress
       - generate
       - open-pull-request
+      - validate-pull-request
+      - merge-pull-request
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -652,6 +762,8 @@ jobs:
           APP_VALIDATION_ERROR: ${{ needs.generate.outputs.app-validation-error }}
           PR_RESULT: ${{ needs.open-pull-request.result }}
           PR_URL: ${{ needs.open-pull-request.outputs.pr-url }}
+          VALIDATION_RESULT: ${{ needs.validate-pull-request.result }}
+          MERGE_RESULT: ${{ needs.merge-pull-request.result }}
         run: |
           issue_number="$REQUEST_ISSUE_NUMBER"
           if [[ -z "$issue_number" ]]; then
@@ -697,7 +809,9 @@ jobs:
             "$REQUEST_RESULT" == "success" &&
             "$MARK_RESULT" == "success" &&
             "$GENERATE_RESULT" == "success" &&
-            "$PR_RESULT" == "success"
+            "$PR_RESULT" == "success" &&
+            "$VALIDATION_RESULT" == "success" &&
+            "$MERGE_RESULT" == "success"
           ]]; then
             gh issue edit "$issue_number" \
               --repo "$GITHUB_REPOSITORY" \

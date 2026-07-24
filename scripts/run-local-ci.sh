@@ -141,9 +141,14 @@ chmod 600 "$CODEX_ROOT/auth.json"
 capture_authentication
 
 RUN_STARTED_AT="$SECONDS"
+PROGRESS_FD="${CHATGPTX_PROGRESS_FD:-1}"
+[[ "$PROGRESS_FD" =~ ^[1-9][0-9]*$ ]] || {
+  echo "CHATGPTX_PROGRESS_FD must be a positive file descriptor" >&2
+  exit 1
+}
 
 progress() {
-  printf '[ci +%ss] %s\n' "$((SECONDS - RUN_STARTED_AT))" "$1"
+  printf '[ci +%ss] %s\n' "$((SECONDS - RUN_STARTED_AT))" "$1" >&"$PROGRESS_FD"
 }
 
 run_logged() {

@@ -1,0 +1,161 @@
+name: ChatGPTX Tests
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact commit to test
+        required: true
+        type: string
+      refresh-auth:
+        description: Produce refreshed authentication candidates
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      CHATGPTX_PRIMARY_AUTH_JSON:
+        required: true
+      CHATGPTX_SECONDARY_AUTH_JSON:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate pinned ChatGPT manifest
+        run: node scripts/validate-pinned-chatgpt.mjs
+      - name: Validate scripts and extension launch configuration
+        run: |
+          bash -n scripts/download-pinned-chatgpt.sh
+          bash -n scripts/download-chatgpt-version.sh
+          bash -n scripts/run-local-ci.sh
+          bash -n scripts/validate-rebind-changes.sh
+          bash -n .agents/skills/manage-platform-api/scripts/extract-app.sh
+          node --check scripts/auth-handoff.mjs
+          node --check scripts/check-auth-exposure.mjs
+          node --check scripts/capture-authentication-candidates.mjs
+          node --check scripts/validate-pinned-chatgpt.mjs
+          node --check scripts/wait-for-chatgpt-ready.mjs
+          node --test src/platform/runtime/extension-launch-config.test.cjs
+
+  end-to-end:
+    needs: static
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install ripgrep and XcodeGen
+        run: brew install ripgrep xcodegen
+      - name: Restore pinned ChatGPT archive cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/chatgpt-download-cache
+          key: chatgpt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/platform/bindings/manifest.json') }}
+      - name: Extract and verify pinned ChatGPT app
+        id: chatgpt
+        env:
+          CHATGPTX_DOWNLOAD_CACHE_DIR: ${{ runner.temp }}/chatgpt-download-cache
+        run: |
+          app_path="$(scripts/download-pinned-chatgpt.sh "$RUNNER_TEMP/chatgpt-app")"
+          echo "path=$app_path" >> "$GITHUB_OUTPUT"
+      - name: Write burner authentication files
+        id: authentication
+        env:
+          PRIMARY_AUTH_JSON: ${{ secrets.CHATGPTX_PRIMARY_AUTH_JSON }}
+          SECONDARY_AUTH_JSON: ${{ secrets.CHATGPTX_SECONDARY_AUTH_JSON }}
+        run: |
+          [[ -n "$PRIMARY_AUTH_JSON" ]] || {
+            echo "CHATGPTX_PRIMARY_AUTH_JSON is required" >&2
+            exit 1
+          }
+          [[ -n "$SECONDARY_AUTH_JSON" ]] || {
+            echo "CHATGPTX_SECONDARY_AUTH_JSON is required" >&2
+            exit 1
+          }
+          auth_root="$RUNNER_TEMP/chatgptx-auth"
+          mkdir -p "$auth_root"
+          chmod 700 "$auth_root"
+          printf '%s' "$PRIMARY_AUTH_JSON" > "$auth_root/primary.json"
+          printf '%s' "$SECONDARY_AUTH_JSON" > "$auth_root/secondary.json"
+          chmod 600 "$auth_root/primary.json" "$auth_root/secondary.json"
+          echo "primary=$auth_root/primary.json" >> "$GITHUB_OUTPUT"
+          echo "secondary=$auth_root/secondary.json" >> "$GITHUB_OUTPUT"
+      - name: Build launcher and run isolated end-to-end suite
+        env:
+          CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
+          CHATGPTX_AUTH_OUTPUT_DIR: ${{ runner.temp }}/chatgptx-refreshed-auth
+        run: |
+          test_log="$RUNNER_TEMP/chatgptx-end-to-end.log"
+          set +e
+          CHATGPTX_PROGRESS_FD=3 scripts/run-local-ci.sh \
+            "${{ steps.authentication.outputs.primary }}" \
+            "${{ steps.authentication.outputs.secondary }}" \
+            3>&1 \
+            > "$test_log" 2>&1
+          test_exit_code=$?
+          set -e
+
+          auth_paths=(
+            "${{ steps.authentication.outputs.primary }}"
+            "${{ steps.authentication.outputs.secondary }}"
+          )
+          for candidate in \
+            "$CHATGPTX_AUTH_OUTPUT_DIR/primary.json" \
+            "$CHATGPTX_AUTH_OUTPUT_DIR/secondary.json"; do
+            [[ ! -f "$candidate" ]] || auth_paths+=("$candidate")
+          done
+          node scripts/check-auth-exposure.mjs \
+            "${auth_paths[@]}" \
+            -- \
+            "$test_log"
+          cat "$test_log"
+          exit "$test_exit_code"
+      - name: Encrypt refreshed authentication candidates
+        if: always() && inputs.refresh-auth && steps.authentication.outcome == 'success'
+        id: authentication-handoff
+        run: |
+          candidate_root="$RUNNER_TEMP/chatgptx-refreshed-auth"
+          if [[ ! -f "$candidate_root/primary.json" || ! -f "$candidate_root/secondary.json" ]]; then
+            echo "No authentication candidates were captured"
+            exit 0
+          fi
+          encrypted_root="$RUNNER_TEMP/chatgptx-auth-handoff"
+          node scripts/auth-handoff.mjs \
+            encrypt \
+            .github/ci-auth-refresh-public.pem \
+            "$candidate_root" \
+            "$encrypted_root"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+      - name: Upload encrypted authentication candidates
+        if: always() && steps.authentication-handoff.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-auth-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/chatgptx-auth-handoff
+          if-no-files-found: error
+          retention-days: 1
+      - name: Delete authentication and extracted app files
+        if: always()
+        run: >-
+          rm -rf
+          "$RUNNER_TEMP/chatgptx-auth"
+          "$RUNNER_TEMP/chatgptx-refreshed-auth"
+          "$RUNNER_TEMP/chatgptx-auth-handoff"
+          "$RUNNER_TEMP/chatgptx-end-to-end.log"
+          "$RUNNER_TEMP/chatgpt-app"

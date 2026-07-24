@@ -19,7 +19,10 @@ jobs:
       (
         (
           github.event.workflow_run.name == 'CI' &&
-          github.event.workflow_run.event == 'push'
+          (
+            github.event.workflow_run.event == 'push' ||
+            github.event.workflow_run.event == 'workflow_dispatch'
+          )
         ) ||
         (
           github.event.workflow_run.name == 'Rebind ChatGPT' &&
