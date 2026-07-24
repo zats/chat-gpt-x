@@ -7,7 +7,7 @@ interface Env {
 
 interface CheckResult {
   version: string;
-  outcome: "binding-exists" | "issue-exists" | "workflow-dispatched";
+  outcome: "binding-exists" | "issue-exists" | "issue-created";
   issueNumber?: number;
 }
 
@@ -19,6 +19,7 @@ interface LatestCodexVersion {
 const userAgent = "chat-gpt-x-version-watch-cloudflare-worker";
 const feedUrl =
   "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
+const pendingLabel = "pending";
 
 export default {
   async scheduled(
@@ -51,8 +52,15 @@ export default {
 
 export async function checkCodexVersion(env: Env): Promise<CheckResult> {
   const latest = await readSparkleFeed();
+  const pinnedVersion = await readPinnedVersion(env);
 
-  if (await bindingDirectoryExists(env, latest.version)) {
+  if (!(await bindingDirectoryExists(env, pinnedVersion))) {
+    throw new Error(
+      `bindings/manifest.json pins ${pinnedVersion}, but its binding directory is missing`,
+    );
+  }
+
+  if (pinnedVersion === latest.version) {
     return {
       version: latest.version,
       outcome: "binding-exists",
@@ -69,14 +77,45 @@ export async function checkCodexVersion(env: Env): Promise<CheckResult> {
     };
   }
 
+  await ensurePendingLabel(env);
   const issueNumber = await createIssue(env, title, issueBody(latest));
-  await dispatchRebind(env, latest, issueNumber);
+  await addPendingLabel(env, issueNumber);
 
   return {
     version: latest.version,
-    outcome: "workflow-dispatched",
+    outcome: "issue-created",
     issueNumber,
   };
+}
+
+async function readPinnedVersion(env: Env): Promise<string> {
+  const path =
+    `/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}` +
+    `/contents/src/platform/bindings/manifest.json` +
+    `?ref=${encodeURIComponent(env.GITHUB_BRANCH)}`;
+  const response = await githubFetch(env, path, {
+    headers: {
+      Accept: "application/vnd.github.raw+json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Pinned binding manifest lookup failed: ${response.status} ${await response.text()}`,
+    );
+  }
+
+  const manifest = JSON.parse(await response.text()) as {
+    appVersion?: unknown;
+  };
+  if (
+    typeof manifest.appVersion !== "string" ||
+    !/^\d+(?:\.\d+)+$/.test(manifest.appVersion)
+  ) {
+    throw new Error(
+      "bindings/manifest.json appVersion must be numeric dot-separated components",
+    );
+  }
+  return manifest.appVersion;
 }
 
 async function readSparkleFeed(): Promise<LatestCodexVersion> {
@@ -160,6 +199,39 @@ async function findIssueByTitle(
   return result.items.find((issue) => issue.title === title)?.number ?? null;
 }
 
+async function ensurePendingLabel(env: Env): Promise<void> {
+  const repositoryPath = `/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}`;
+  const response = await githubFetch(
+    env,
+    `${repositoryPath}/labels/${encodeURIComponent(pendingLabel)}`,
+  );
+  if (response.ok) return;
+  if (response.status !== 404) {
+    throw new Error(
+      `Pending label lookup failed: ${response.status} ${await response.text()}`,
+    );
+  }
+  await githubJson(env, `${repositoryPath}/labels`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: pendingLabel,
+      color: "D4C5F9",
+      description: "Waiting for binding generation",
+    }),
+  });
+}
+
+async function addPendingLabel(env: Env, issueNumber: number): Promise<void> {
+  await githubJson(
+    env,
+    `/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/issues/${issueNumber}/labels`,
+    {
+      method: "POST",
+      body: JSON.stringify({ labels: [pendingLabel] }),
+    },
+  );
+}
+
 async function createIssue(
   env: Env,
   title: string,
@@ -174,33 +246,6 @@ async function createIssue(
     },
   );
   return issue.number;
-}
-
-async function dispatchRebind(
-  env: Env,
-  latest: LatestCodexVersion,
-  issueNumber: number,
-): Promise<void> {
-  const response = await githubFetch(
-    env,
-    `/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/dispatches`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        event_type: "chatgpt-version-detected",
-        client_payload: {
-          version: latest.version,
-          download_url: latest.downloadUrl,
-          issue_number: issueNumber,
-        },
-      }),
-    },
-  );
-  if (!response.ok) {
-    throw new Error(
-      `Workflow dispatch failed: ${response.status} ${await response.text()}`,
-    );
-  }
 }
 
 async function githubJson<T>(
@@ -236,14 +281,15 @@ function githubFetch(
 }
 
 function issueBody(latest: LatestCodexVersion): string {
-  return `ChatGPT version detected from the Sparkle feed.
-
-| Field | Value |
-| --- | --- |
-| Version | \`${latest.version}\` |
-| Feed URL | ${feedUrl} |
-| Download URL | ${latest.downloadUrl} |
-`;
+  return JSON.stringify(
+    {
+      schema: 1,
+      version: latest.version,
+      download_url: latest.downloadUrl,
+    },
+    null,
+    2,
+  );
 }
 
 function matchFirst(

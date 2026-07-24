@@ -1,6 +1,9 @@
 name: Rebind ChatGPT
 
 on:
+  issues:
+    types:
+      - labeled
   workflow_dispatch:
     inputs:
       version:
@@ -20,53 +23,182 @@ on:
       - chatgpt-version-detected
 
 concurrency:
-  group: rebind-chatgpt-${{ inputs.version || github.event.client_payload.version }}
+  group: rebind-chatgpt-issue-${{ inputs.issue_number || github.event.client_payload.issue_number || github.event.issue.number || github.run_id }}
   cancel-in-progress: false
 
 jobs:
+  request:
+    if: >-
+      github.event_name != 'issues' ||
+      (
+        github.event.label.name == 'pending' &&
+        startsWith(github.event.issue.title, 'ChatGPT ') &&
+        endsWith(github.event.issue.title, ' available')
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.request.outputs.version }}
+      download-url: ${{ steps.request.outputs.download-url }}
+      issue-number: ${{ steps.request.outputs.issue-number }}
+      validation-error: ${{ steps.request.outputs.validation-error }}
+    steps:
+      - name: Validate request
+        id: request
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DOWNLOAD_URL: ${{ inputs.download_url }}
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          PAYLOAD_VERSION: ${{ github.event.client_payload.version }}
+          PAYLOAD_DOWNLOAD_URL: ${{ github.event.client_payload.download_url }}
+          PAYLOAD_ISSUE_NUMBER: ${{ github.event.client_payload.issue_number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          invalid() {
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "validation-error=$1" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          if [[ "$EVENT_NAME" == "issues" ]]; then
+            [[ "$ISSUE_TITLE" =~ ^ChatGPT\ ([0-9]+(\.[0-9]+)+)\ available$ ]] ||
+              invalid "Issue title must match: ChatGPT <numeric version> available."
+            title_version="${BASH_REMATCH[1]}"
+            metadata="$(
+              jq -ce '
+                select(
+                  type == "object" and
+                  .schema == 1 and
+                  (.version | type) == "string" and
+                  (.download_url | type) == "string" and
+                  (keys | sort) == ["download_url", "schema", "version"]
+                )
+              ' <<< "$ISSUE_BODY" 2>/dev/null
+            )" ||
+              invalid "Issue body must contain valid ChatGPTX version metadata JSON."
+            request_version="$(jq -r .version <<< "$metadata")"
+            [[ "$request_version" == "$title_version" ]] ||
+              invalid "Issue title and JSON version do not match."
+            request_download_url="$(jq -r .download_url <<< "$metadata")"
+            request_issue_number="$EVENT_ISSUE_NUMBER"
+          elif [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
+            request_version="$PAYLOAD_VERSION"
+            request_download_url="$PAYLOAD_DOWNLOAD_URL"
+            request_issue_number="$PAYLOAD_ISSUE_NUMBER"
+          else
+            request_version="$INPUT_VERSION"
+            request_download_url="$INPUT_DOWNLOAD_URL"
+            request_issue_number="$INPUT_ISSUE_NUMBER"
+          fi
+
+          [[ "$request_version" =~ ^[0-9]+(\.[0-9]+)+$ ]] ||
+            invalid "Version must contain numeric dot-separated components."
+          expected_url="https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-$request_version.zip"
+          [[ "$request_download_url" == "$expected_url" ]] ||
+            invalid "Download URL must be $expected_url."
+          [[ "$request_issue_number" =~ ^[1-9][0-9]*$ ]] ||
+            invalid "Issue number must be a positive integer."
+          {
+            echo "valid=true"
+            echo "version=$request_version"
+            echo "download-url=$request_download_url"
+            echo "issue-number=$request_issue_number"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Require valid request
+        env:
+          REQUEST_VALID: ${{ steps.request.outputs.valid }}
+          VALIDATION_ERROR: ${{ steps.request.outputs.validation-error }}
+        run: |
+          [[ "$REQUEST_VALID" == "true" ]] || {
+            echo "$VALIDATION_ERROR" >&2
+            exit 1
+          }
+
+  mark-issue-in-progress:
+    needs: request
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Mark issue in progress
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.request.outputs.issue-number }}
+        run: |
+          gh label create in-progress \
+            --repo "$GITHUB_REPOSITORY" \
+            --color FBCA04 \
+            --description "Binding generation is running" \
+            --force
+          gh label create failed \
+            --repo "$GITHUB_REPOSITORY" \
+            --color D73A4A \
+            --description "Binding generation failed" \
+            --force
+          gh label create success \
+            --repo "$GITHUB_REPOSITORY" \
+            --color 0E8A16 \
+            --description "Binding generation succeeded" \
+            --force
+
+          if [[ "$(
+            gh issue view "$ISSUE_NUMBER" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json state \
+              --jq .state
+          )" == "CLOSED" ]]; then
+            gh issue reopen "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY"
+          fi
+
+          current_labels="$(
+            gh issue view "$ISSUE_NUMBER" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json labels \
+              --jq '.labels[].name'
+          )"
+          for label in pending in-progress failed success; do
+            if grep -Fxq "$label" <<< "$current_labels"; then
+              gh issue edit "$ISSUE_NUMBER" \
+                --repo "$GITHUB_REPOSITORY" \
+                --remove-label "$label"
+            fi
+          done
+          gh issue edit "$ISSUE_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --add-label in-progress
+
+          run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh issue comment "$ISSUE_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --body "Binding generation started: [workflow run #$GITHUB_RUN_NUMBER]($run_url)."
+
   generate:
+    needs:
+      - request
+      - mark-issue-in-progress
     runs-on: macos-26
     timeout-minutes: 360
     environment: codex-agent
     permissions:
       contents: read
     outputs:
-      version: ${{ steps.request.outputs.version }}
-      download-url: ${{ steps.request.outputs.download-url }}
-      issue-number: ${{ steps.request.outputs.issue-number }}
+      version: ${{ needs.request.outputs.version }}
+      download-url: ${{ needs.request.outputs.download-url }}
+      issue-number: ${{ needs.request.outputs.issue-number }}
       patch-artifact: ${{ steps.patch.outputs.artifact-name }}
+      app-validation-error: ${{ steps.chatgpt.outputs.validation-error }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           persist-credentials: false
 
-      - name: Validate request
-        id: request
-        env:
-          REQUEST_VERSION: ${{ inputs.version || github.event.client_payload.version }}
-          REQUEST_DOWNLOAD_URL: ${{ inputs.download_url || github.event.client_payload.download_url }}
-          REQUEST_ISSUE_NUMBER: ${{ inputs.issue_number || github.event.client_payload.issue_number }}
-        run: |
-          [[ "$REQUEST_VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]] || {
-            echo "invalid version" >&2
-            exit 1
-          }
-          expected_url="https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-$REQUEST_VERSION.zip"
-          [[ "$REQUEST_DOWNLOAD_URL" == "$expected_url" ]] || {
-            echo "invalid download URL" >&2
-            exit 1
-          }
-          [[ "$REQUEST_ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
-            echo "invalid issue number" >&2
-            exit 1
-          }
-          {
-            echo "version=$REQUEST_VERSION"
-            echo "download-url=$REQUEST_DOWNLOAD_URL"
-            echo "issue-number=$REQUEST_ISSUE_NUMBER"
-            echo "base-sha=$(git rev-parse HEAD)"
-          } >> "$GITHUB_OUTPUT"
+      - name: Record tested base
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: oven-sh/setup-bun@v2
 
@@ -77,19 +209,49 @@ jobs:
       - name: Install build dependencies
         run: brew install ripgrep xcodegen
 
-      - name: Download requested ChatGPT app
+      - name: Download and validate requested ChatGPT app
         id: chatgpt
         env:
-          APP_VERSION: ${{ steps.request.outputs.version }}
-          DOWNLOAD_URL: ${{ steps.request.outputs.download-url }}
+          APP_VERSION: ${{ needs.request.outputs.version }}
+          DOWNLOAD_URL: ${{ needs.request.outputs.download-url }}
         run: |
+          error_path="$RUNNER_TEMP/chatgpt-download-error.log"
+          set +e
           app_path="$(
             scripts/download-chatgpt-version.sh \
               "$APP_VERSION" \
               "$DOWNLOAD_URL" \
               "$RUNNER_TEMP/chatgpt-app"
-          )"
-          echo "path=$app_path" >> "$GITHUB_OUTPUT"
+          )" 2> "$error_path"
+          download_status=$?
+          set -e
+          if (( download_status != 0 )); then
+            validation_error="$(
+              tr '\r\n' '  ' < "$error_path" |
+                sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+            )"
+            [[ -n "$validation_error" ]] ||
+              validation_error="The ChatGPT archive could not be downloaded or validated."
+            {
+              echo "valid=false"
+              echo "validation-error=$validation_error"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "valid=true"
+            echo "path=$app_path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Require valid requested ChatGPT app
+        env:
+          APP_VALID: ${{ steps.chatgpt.outputs.valid }}
+          VALIDATION_ERROR: ${{ steps.chatgpt.outputs.validation-error }}
+        run: |
+          [[ "$APP_VALID" == "true" ]] || {
+            echo "$VALIDATION_ERROR" >&2
+            exit 1
+          }
 
       - name: Install bundled Codex CLI
         env:
@@ -155,9 +317,9 @@ jobs:
       - name: Run Codex rebind agent
         id: agent
         env:
-          APP_VERSION: ${{ steps.request.outputs.version }}
-          DOWNLOAD_URL: ${{ steps.request.outputs.download-url }}
-          ISSUE_NUMBER: ${{ steps.request.outputs.issue-number }}
+          APP_VERSION: ${{ needs.request.outputs.version }}
+          DOWNLOAD_URL: ${{ needs.request.outputs.download-url }}
+          ISSUE_NUMBER: ${{ needs.request.outputs.issue-number }}
           CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
           AGENT_CODEX_HOME: ${{ steps.authentication.outputs.agent-home }}
           AUTH_ROOT: ${{ steps.authentication.outputs.auth-root }}
@@ -205,17 +367,17 @@ jobs:
         id: scope
         if: steps.agent.outputs.exit-code == '0'
         env:
-          APP_VERSION: ${{ steps.request.outputs.version }}
-          DOWNLOAD_URL: ${{ steps.request.outputs.download-url }}
-          BASE_SHA: ${{ steps.request.outputs.base-sha }}
+          APP_VERSION: ${{ needs.request.outputs.version }}
+          DOWNLOAD_URL: ${{ needs.request.outputs.download-url }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
         run: scripts/validate-rebind-changes.sh "$APP_VERSION" "$DOWNLOAD_URL" "$BASE_SHA"
 
       - name: Create scoped binding patch
         id: patch
         if: steps.scope.outcome == 'success'
         env:
-          APP_VERSION: ${{ steps.request.outputs.version }}
-          BASE_SHA: ${{ steps.request.outputs.base-sha }}
+          APP_VERSION: ${{ needs.request.outputs.version }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
           DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
         run: |
           git diff --check "$BASE_SHA"
@@ -351,7 +513,7 @@ jobs:
           )
         uses: actions/upload-artifact@v4
         with:
-          name: rebind-failure-${{ steps.request.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: rebind-failure-${{ needs.request.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ steps.authentication.outputs.diagnostics-root }}/agent.jsonl
             ${{ steps.authentication.outputs.diagnostics-root }}/agent-final.txt
@@ -392,6 +554,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      pr-url: ${{ steps.pull-request.outputs.url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -416,6 +580,7 @@ jobs:
           git push --force origin "HEAD:refs/heads/$branch_name"
 
       - name: Open pull request
+        id: pull-request
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
           ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
@@ -435,10 +600,172 @@ jobs:
           )"
           if [[ -n "$existing_pr" ]]; then
             gh pr edit "$existing_pr" --title "$title" --body "$body"
+            pr_url="$(
+              gh pr view "$existing_pr" \
+                --json url \
+                --jq .url
+            )"
           else
-            gh pr create \
-              --base main \
-              --head "$branch_name" \
-              --title "$title" \
-              --body "$body"
+            pr_url="$(
+              gh pr create \
+                --base main \
+                --head "$branch_name" \
+                --title "$title" \
+                --body "$body"
+            )"
           fi
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+  finalize-issue:
+    if: >-
+      always() &&
+      (
+        github.event_name != 'issues' ||
+        (
+          github.event.label.name == 'pending' &&
+          startsWith(github.event.issue.title, 'ChatGPT ') &&
+          endsWith(github.event.issue.title, ' available')
+        )
+      )
+    needs:
+      - request
+      - mark-issue-in-progress
+      - generate
+      - open-pull-request
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - name: Mark final issue status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ISSUE_NUMBER: ${{ needs.request.outputs.issue-number }}
+          EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          PAYLOAD_ISSUE_NUMBER: ${{ github.event.client_payload.issue_number }}
+          REQUEST_RESULT: ${{ needs.request.result }}
+          REQUEST_VALIDATION_ERROR: ${{ needs.request.outputs.validation-error }}
+          MARK_RESULT: ${{ needs.mark-issue-in-progress.result }}
+          GENERATE_RESULT: ${{ needs.generate.result }}
+          APP_VALIDATION_ERROR: ${{ needs.generate.outputs.app-validation-error }}
+          PR_RESULT: ${{ needs.open-pull-request.result }}
+          PR_URL: ${{ needs.open-pull-request.outputs.pr-url }}
+        run: |
+          issue_number="$REQUEST_ISSUE_NUMBER"
+          if [[ -z "$issue_number" ]]; then
+            issue_number="${EVENT_ISSUE_NUMBER:-${INPUT_ISSUE_NUMBER:-$PAYLOAD_ISSUE_NUMBER}}"
+          fi
+          [[ "$issue_number" =~ ^[1-9][0-9]*$ ]] || {
+            echo "cannot report workflow result without a valid issue number" >&2
+            exit 1
+          }
+
+          gh label create in-progress \
+            --repo "$GITHUB_REPOSITORY" \
+            --color FBCA04 \
+            --description "Binding generation is running" \
+            --force
+          gh label create failed \
+            --repo "$GITHUB_REPOSITORY" \
+            --color D73A4A \
+            --description "Binding generation failed" \
+            --force
+          gh label create success \
+            --repo "$GITHUB_REPOSITORY" \
+            --color 0E8A16 \
+            --description "Binding generation succeeded" \
+            --force
+
+          current_labels="$(
+            gh issue view "$issue_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json labels \
+              --jq '.labels[].name'
+          )"
+          for label in pending in-progress failed success; do
+            if grep -Fxq "$label" <<< "$current_labels"; then
+              gh issue edit "$issue_number" \
+                --repo "$GITHUB_REPOSITORY" \
+                --remove-label "$label"
+            fi
+          done
+
+          run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          if [[ \
+            "$REQUEST_RESULT" == "success" &&
+            "$MARK_RESULT" == "success" &&
+            "$GENERATE_RESULT" == "success" &&
+            "$PR_RESULT" == "success"
+          ]]; then
+            gh issue edit "$issue_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --add-label success
+            success_body="$(
+              printf \
+                'Binding generation succeeded: [workflow run #%s](%s).\n\nPull request: [%s](%s)' \
+                "$GITHUB_RUN_NUMBER" \
+                "$run_url" \
+                "$PR_URL" \
+                "$PR_URL"
+            )"
+            gh issue comment "$issue_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --body "$success_body"
+            gh issue close "$issue_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --reason completed
+            exit 0
+          fi
+
+          jobs_path="$RUNNER_TEMP/jobs.json"
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
+            > "$jobs_path"
+          failure_details="$(
+            jq -r '
+              .jobs[]
+              | select(
+                  .conclusion != null
+                  and .conclusion != "success"
+                  and .conclusion != "skipped"
+                )
+              | (
+                  [
+                    .steps[]?
+                    | select(
+                        .conclusion != null
+                        and .conclusion != "success"
+                        and .conclusion != "skipped"
+                      )
+                    | "\(.name) (\(.conclusion))"
+                  ]
+                  | join(", ")
+                ) as $steps
+              | "- [\(.name)](\(.html_url)): "
+                + (if $steps == "" then .conclusion else $steps end)
+            ' "$jobs_path"
+          )"
+          if [[ -z "$failure_details" ]]; then
+            failure_details="- Workflow stopped before GitHub reported a failed step."
+          fi
+          validation_error="${REQUEST_VALIDATION_ERROR:-$APP_VALIDATION_ERROR}"
+          if [[ -n "$validation_error" ]]; then
+            failure_details="$(
+              printf -- '- %s\n%s' "$validation_error" "$failure_details"
+            )"
+          fi
+
+          gh issue edit "$issue_number" \
+            --repo "$GITHUB_REPOSITORY" \
+            --add-label failed
+          failure_body="$(
+            printf \
+              'Binding generation failed: [workflow run #%s](%s).\n\n%s' \
+              "$GITHUB_RUN_NUMBER" \
+              "$run_url" \
+              "$failure_details"
+          )"
+          gh issue comment "$issue_number" \
+            --repo "$GITHUB_REPOSITORY" \
+            --body "$failure_body"

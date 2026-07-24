@@ -1,22 +1,24 @@
 # Codex Version Watch Cloudflare Worker
 
-This Worker checks the Codex Sparkle feed every five minutes, opens one issue for each app version that does not have bindings, and dispatches its binding workflow.
+This Worker checks the Codex Sparkle feed every five minutes and opens one issue for each app version that does not have bindings. Applying the `pending` label starts the binding workflow.
 
 ## What It Does
 
 1. Reads `https://persistent.oaistatic.com/codex-app-prod/appcast.xml`.
-2. Stops when `src/platform/bindings/<version>/` already exists.
-3. Stops when an issue named `ChatGPT <version> available` already exists.
-4. Opens an issue for a new version.
-5. Dispatches `Rebind ChatGPT` with the version, enclosure URL, and issue number.
+2. Reads `src/platform/bindings/manifest.json` and fails if its binding folder is missing.
+3. Stops when the manifest pins the latest Sparkle version.
+4. Stops when an issue named `ChatGPT <version> available` already exists.
+5. Opens an issue with versioned JSON metadata and applies `pending`.
+6. GitHub starts `Rebind ChatGPT` when `pending` is applied.
 
 The binding folder and issue are the durable deduplication records.
+Repository CI enforces the same manifest and folder invariant.
 
 ## Setup
 
 Create a fine-grained GitHub token for `zats/chat-gpt-x` with:
 
-- Contents: read/write
+- Contents: read
 - Issues: read/write
 
 Then configure Cloudflare:

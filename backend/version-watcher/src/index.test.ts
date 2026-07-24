@@ -17,6 +17,7 @@ const feed = `<?xml version="1.0"?>
 <pubDate>Wed, 22 Jul 2026 09:06:22 +0000</pubDate>
 <enclosure url="${downloadUrl}" />
 </item></channel></rss>`;
+const previousVersion = "26.715.70719";
 
 function response(body: unknown, status = 200): Response {
   return new Response(
@@ -34,10 +35,18 @@ afterEach(() => {
 });
 
 describe("version detection", () => {
-  it("stops before issue lookup when the binding folder exists", async () => {
+  it("stops when the manifest pins the latest version and its folder exists", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(response(feed))
+      .mockResolvedValueOnce(
+        response(
+          JSON.stringify({
+            appVersion: version,
+            downloadUrl,
+          }),
+        ),
+      )
       .mockResolvedValueOnce(response([]));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -45,22 +54,58 @@ describe("version detection", () => {
       version,
       outcome: "binding-exists",
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1][0]).toContain(
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[2][0]).toContain(
       `/contents/src/platform/bindings/${version}`,
     );
+  });
+
+  it("fails when the pinned binding folder is missing", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response(feed))
+      .mockResolvedValueOnce(
+        response(
+          JSON.stringify({
+            appVersion: version,
+            downloadUrl,
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(response({}, 404));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(checkCodexVersion(env)).rejects.toThrow(
+      `bindings/manifest.json pins ${version}, but its binding directory is missing`,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("stops when an issue with the exact version title exists", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(response(feed))
-      .mockResolvedValueOnce(response({}, 404))
+      .mockResolvedValueOnce(
+        response(
+          JSON.stringify({
+            appVersion: previousVersion,
+            downloadUrl:
+              "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.715.70719.zip",
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(response([]))
       .mockResolvedValueOnce(
         response({
           items: [
-            { number: 18, title: `ChatGPT ${version} available soon` },
-            { number: 19, title: `ChatGPT ${version} available` },
+            {
+              number: 18,
+              title: `ChatGPT ${version} available soon`,
+            },
+            {
+              number: 19,
+              title: `ChatGPT ${version} available`,
+            },
           ],
         }),
       );
@@ -71,40 +116,57 @@ describe("version detection", () => {
       outcome: "issue-exists",
       issueNumber: 19,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  it("creates one issue and dispatches its binding workflow", async () => {
+  it("creates one issue for an unbound and unreported version", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(response(feed))
-      .mockResolvedValueOnce(response({}, 404))
+      .mockResolvedValueOnce(
+        response(
+          JSON.stringify({
+            appVersion: previousVersion,
+            downloadUrl:
+              "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.715.70719.zip",
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(response([]))
       .mockResolvedValueOnce(response({ items: [] }))
+      .mockResolvedValueOnce(response({}, 404))
+      .mockResolvedValueOnce(response({ name: "pending" }, 201))
       .mockResolvedValueOnce(response({ number: 21 }, 201))
-      .mockResolvedValueOnce(response(null, 204));
+      .mockResolvedValueOnce(response([{ name: "pending" }]));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(checkCodexVersion(env)).resolves.toMatchObject({
       version,
-      outcome: "workflow-dispatched",
+      outcome: "issue-created",
       issueNumber: 21,
     });
 
+    const labelCreateRequest = fetchMock.mock.calls.at(-3);
+    expect(labelCreateRequest?.[0]).toMatch(/\/labels$/);
+    expect(JSON.parse(labelCreateRequest?.[1]?.body as string)).toMatchObject({
+      name: "pending",
+    });
     const issueRequest = fetchMock.mock.calls.at(-2);
     expect(issueRequest?.[0]).toContain("/issues");
-    expect(JSON.parse(issueRequest?.[1]?.body as string)).toMatchObject({
+    const issuePayload = JSON.parse(issueRequest?.[1]?.body as string);
+    expect(issuePayload).toMatchObject({
       title: `ChatGPT ${version} available`,
     });
-    const dispatchRequest = fetchMock.mock.calls.at(-1);
-    expect(dispatchRequest?.[0]).toContain("/dispatches");
-    expect(JSON.parse(dispatchRequest?.[1]?.body as string)).toEqual({
-      event_type: "chatgpt-version-detected",
-      client_payload: {
-        version,
-        download_url: downloadUrl,
-        issue_number: 21,
-      },
+    expect(JSON.parse(issuePayload.body)).toEqual({
+      schema: 1,
+      version,
+      download_url: downloadUrl,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    const issueLabelRequest = fetchMock.mock.calls.at(-1);
+    expect(issueLabelRequest?.[0]).toContain("/issues/21/labels");
+    expect(JSON.parse(issueLabelRequest?.[1]?.body as string)).toEqual({
+      labels: ["pending"],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(8);
   });
 });
