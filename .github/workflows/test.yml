@@ -97,11 +97,28 @@ jobs:
           echo "primary=$auth_root/primary.json" >> "$GITHUB_OUTPUT"
           echo "secondary=$auth_root/secondary.json" >> "$GITHUB_OUTPUT"
       - name: Build launcher and run isolated end-to-end suite
+        id: end-to-end
         env:
           CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
           CHATGPTX_AUTH_OUTPUT_DIR: ${{ runner.temp }}/chatgptx-refreshed-auth
         run: |
           test_log="$RUNNER_TEMP/chatgptx-end-to-end.log"
+          video_path="$RUNNER_TEMP/chatgptx-end-to-end.mov"
+          recorder_log="$RUNNER_TEMP/chatgptx-screen-recorder.log"
+          screencapture -v -V2700 -C -x "$video_path" > "$recorder_log" 2>&1 &
+          recorder_pid=$!
+          sleep 1
+          kill -0 "$recorder_pid" || {
+            cat "$recorder_log" >&2
+            echo "screen recording did not start" >&2
+            exit 1
+          }
+          stop_recording() {
+            kill -INT "$recorder_pid" 2>/dev/null || true
+            wait "$recorder_pid" 2>/dev/null || true
+          }
+          trap stop_recording EXIT INT TERM
+
           set +e
           CHATGPTX_PROGRESS_FD=3 scripts/run-local-ci.sh \
             "${{ steps.authentication.outputs.primary }}" \
@@ -110,6 +127,8 @@ jobs:
             > "$test_log" 2>&1
           test_exit_code=$?
           set -e
+          stop_recording
+          trap - EXIT INT TERM
 
           auth_paths=(
             "${{ steps.authentication.outputs.primary }}"
@@ -126,6 +145,14 @@ jobs:
             "$test_log"
           cat "$test_log"
           exit "$test_exit_code"
+      - name: Upload failed end-to-end video
+        if: failure() && steps.end-to-end.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-video-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/chatgptx-end-to-end.mov
+          if-no-files-found: error
+          retention-days: 7
       - name: Encrypt refreshed authentication candidates
         if: always() && inputs.refresh-auth && steps.authentication.outcome == 'success'
         id: authentication-handoff
@@ -158,4 +185,6 @@ jobs:
           "$RUNNER_TEMP/chatgptx-refreshed-auth"
           "$RUNNER_TEMP/chatgptx-auth-handoff"
           "$RUNNER_TEMP/chatgptx-end-to-end.log"
+          "$RUNNER_TEMP/chatgptx-end-to-end.mov"
+          "$RUNNER_TEMP/chatgptx-screen-recorder.log"
           "$RUNNER_TEMP/chatgpt-app"

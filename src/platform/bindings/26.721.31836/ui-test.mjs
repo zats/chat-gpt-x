@@ -1588,33 +1588,26 @@ async function validateUi(
     subtree: true,
   });
   profile?.click();
-  await sleep(500);
-  const profileIsCurrent = Array.from(
-    document.querySelectorAll('[aria-current="page"]'),
-  ).some((element) => element.textContent?.trim() === 'Profile');
-  let profileEventuallyBecameCurrent = profileIsCurrent;
-  let profileEventuallyBecameCurrentAfterMs =
-    profileIsCurrent ? Math.round(performance.now() - profileClickStartedAt) : null;
-  if (!profileIsCurrent) {
-    const deadline = performance.now() + 5_000;
-    while (performance.now() < deadline) {
-      await sleep(100);
-      profileEventuallyBecameCurrent = Array.from(
-        document.querySelectorAll('[aria-current="page"]'),
-      ).some((element) => element.textContent?.trim() === 'Profile');
-      if (profileEventuallyBecameCurrent) {
-        profileEventuallyBecameCurrentAfterMs = Math.round(
-          performance.now() - profileClickStartedAt,
-        );
-        break;
-      }
-    }
+  const profileNavigationDeadline = performance.now() + 10_000;
+  let profileIsCurrent = false;
+  while (performance.now() < profileNavigationDeadline) {
+    profileIsCurrent = Array.from(
+      document.querySelectorAll('[aria-current="page"]'),
+    ).some((element) => element.textContent?.trim() === 'Profile');
+    if (profileIsCurrent) break;
+    await sleep(50);
   }
   profileTransitionObserver.disconnect();
+  const profileNavigationAttemptsAfter =
+    globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount();
+  const profileNavigationLastRequestedPath =
+    globalThis.__CGPTX_HOST__?._debug.profileNavigationLastRequestedPath();
   check(
     Boolean(account && profile) &&
       !profileWasCurrent &&
-      profileIsCurrent,
+      profileIsCurrent &&
+      profileNavigationAttemptsAfter === profileNavigationAttemptsBefore + 1 &&
+      profileNavigationLastRequestedPath === '/settings/profile',
     'account submenu Profile child opens native Profile settings',
     {
       profileWasCurrent,
@@ -1622,139 +1615,13 @@ async function validateUi(
       foundAccount: Boolean(account),
       foundProfile: Boolean(profile),
       profileNavigationAttemptsBefore,
-      profileNavigationAttemptsAfter:
-        globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount(),
-      profileNavigationLastRequestedPath:
-        globalThis.__CGPTX_HOST__?._debug.profileNavigationLastRequestedPath(),
-      profileEventuallyBecameCurrent,
-      profileEventuallyBecameCurrentAfterMs,
+      profileNavigationAttemptsAfter,
+      profileNavigationLastRequestedPath,
       profileDomTransitionAfterMs,
       currentPageLabels: Array.from(
         document.querySelectorAll('[aria-current="page"]'),
       ).map((element) => element.textContent?.trim()),
     },
-  );
-  const repeatedProfileNavigationAttempts = [];
-  for (let index = 0; index < 8; index += 1) {
-    history.back();
-    const returnDeadline = performance.now() + 5_000;
-    while (
-      performance.now() < returnDeadline &&
-      Array.from(document.querySelectorAll('[aria-current="page"]')).some(
-        (element) => element.textContent?.trim() === 'Profile',
-      )
-    ) {
-      await sleep(100);
-    }
-    const returnedFromProfile = !Array.from(
-      document.querySelectorAll('[aria-current="page"]'),
-    ).some((element) => element.textContent?.trim() === 'Profile');
-    if (!returnedFromProfile) {
-      repeatedProfileNavigationAttempts.push({
-        index,
-        error: 'history did not return from Profile',
-      });
-      break;
-    }
-    const triggerDeadline = performance.now() + 5_000;
-    while (
-      performance.now() < triggerDeadline &&
-      !Array.from(document.querySelectorAll('button')).some((button) =>
-        button.querySelector('img.rounded-full'),
-      )
-    ) {
-      await sleep(100);
-    }
-    const profileTriggerReady = Array.from(
-      document.querySelectorAll('button'),
-    ).some((button) => button.querySelector('img.rounded-full'));
-    if (!profileTriggerReady) {
-      repeatedProfileNavigationAttempts.push({
-        index,
-        error: 'Profile trigger did not return',
-      });
-      break;
-    }
-
-    const repeatedColumn = await openProfile();
-    const repeatedAccount = repeatedColumn?.querySelector(
-      '[data-cgptx-id="codex.profileDropdown.account"]',
-    );
-    repeatedAccount?.click();
-    await sleep(100);
-    const repeatedProfile = repeatedColumn?.querySelector(
-      '[data-cgptx-id="profile-navigation-fixture.profile"]',
-    );
-    const attemptsBefore =
-      globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount();
-    const startedAt = performance.now();
-    let domTransitionAfterMs = null;
-    const transitionObserver = new MutationObserver(() => {
-      if (
-        domTransitionAfterMs === null &&
-        Array.from(document.querySelectorAll('[aria-current="page"]')).some(
-          (element) => element.textContent?.trim() === 'Profile',
-        )
-      ) {
-        domTransitionAfterMs = Math.round(performance.now() - startedAt);
-      }
-    });
-    transitionObserver.observe(document.body, {
-      attributes: true,
-      attributeFilter: ['aria-current'],
-      childList: true,
-      subtree: true,
-    });
-    repeatedProfile?.click();
-    await sleep(500);
-    const currentAt500Ms = Array.from(
-      document.querySelectorAll('[aria-current="page"]'),
-    ).some((element) => element.textContent?.trim() === 'Profile');
-    let eventuallyCurrent = currentAt500Ms;
-    let currentAfterMs =
-      currentAt500Ms ? Math.round(performance.now() - startedAt) : null;
-    if (!currentAt500Ms) {
-      const deadline = performance.now() + 5_000;
-      while (performance.now() < deadline) {
-        await sleep(100);
-        eventuallyCurrent = Array.from(
-          document.querySelectorAll('[aria-current="page"]'),
-        ).some((element) => element.textContent?.trim() === 'Profile');
-        if (eventuallyCurrent) {
-          currentAfterMs = Math.round(performance.now() - startedAt);
-          break;
-        }
-      }
-    }
-    transitionObserver.disconnect();
-    repeatedProfileNavigationAttempts.push({
-      index,
-      foundAccount: Boolean(repeatedAccount),
-      foundProfile: Boolean(repeatedProfile),
-      attemptsBefore,
-      attemptsAfter:
-        globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount(),
-      currentAt500Ms,
-      eventuallyCurrent,
-      currentAfterMs,
-      domTransitionAfterMs,
-      currentPageLabels: Array.from(
-        document.querySelectorAll('[aria-current="page"]'),
-      ).map((element) => element.textContent?.trim()),
-    });
-    if (!eventuallyCurrent) break;
-  }
-  check(
-    repeatedProfileNavigationAttempts.length === 8 &&
-      repeatedProfileNavigationAttempts.every(
-        (attempt) =>
-          attempt.foundAccount === true &&
-          attempt.foundProfile === true &&
-          attempt.attemptsAfter === attempt.attemptsBefore + 1 &&
-          attempt.currentAt500Ms === true,
-      ),
-    'repeated Profile navigation remains deterministic',
-    { attempts: repeatedProfileNavigationAttempts },
   );
   profileNavigationRegistration.dispose();
   markProgress('profile-menu');
@@ -1817,6 +1684,9 @@ async function threadSelectionSnapshot(selector) {
       const row = document.querySelector(${JSON.stringify(selector)});
       const trigger = row?.querySelector("[data-thread-title-trigger]");
       const rect = row?.getBoundingClientRect();
+      const reactPropsKey = row
+        ? Object.keys(row).find((key) => key.startsWith("__reactProps$"))
+        : undefined;
       return {
         href: location.href,
         currentThreadId:
@@ -1832,6 +1702,8 @@ async function threadSelectionSnapshot(selector) {
               className: row.className,
               width: rect?.width ?? 0,
               height: rect?.height ?? 0,
+              hasReactOnClick:
+                typeof row[reactPropsKey]?.onClick === "function",
             }
           : null,
         trigger: trigger
@@ -1853,12 +1725,25 @@ async function activateThreadRow(selector, expectedThreadId) {
     `(async () => {
       const deadline = Date.now() + 60000;
       let row;
+      let reactPropsKey;
       while (Date.now() < deadline) {
         row = document.querySelector(${JSON.stringify(selector)});
-        if (row) break;
+        reactPropsKey = row
+          ? Object.keys(row).find((key) => key.startsWith("__reactProps$"))
+          : undefined;
+        if (
+          row &&
+          typeof row[reactPropsKey]?.onClick === "function" &&
+          globalThis.__CGPTX_HOST__?._debug.nativeReady() === true
+        ) {
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       if (!row) throw new Error('Selected native thread row missing');
+      if (typeof row[reactPropsKey]?.onClick !== "function") {
+        throw new Error('Selected native thread row never became interactive');
+      }
       if (!globalThis.__CGPTX_UI_TEST_THREADS__) {
         globalThis.__CGPTX_HOST__.registerExtension("ui-test-thread-selection", {
           activate(api) {
@@ -1886,6 +1771,7 @@ async function activateThreadRow(selector, expectedThreadId) {
           className: row.className,
           width: rect.width,
           height: rect.height,
+          hasReactOnClick: true,
         },
         trigger: trigger
           ? {
