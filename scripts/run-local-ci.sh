@@ -162,8 +162,10 @@ run_logged() {
     return
   fi
   progress "failed $name ($((SECONDS - started_at))s)"
-  echo "$name failed" >&2
-  rg -n -i 'error:|failed|failure|exception|fatal' "$log_file" >&2 || true
+  {
+    echo "$name failed; complete captured output follows:"
+    cat "$log_file"
+  } >&2
   return 1
 }
 
