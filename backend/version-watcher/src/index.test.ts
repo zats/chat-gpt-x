@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkCodexVersion } from "./index";
+import worker, { checkCodexVersion } from "./index";
 
 const env = {
   GITHUB_TOKEN: "test-token",
@@ -31,7 +31,75 @@ function response(body: unknown, status = 200): Response {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("job logging", () => {
+  it("logs scheduled job start and failure", async () => {
+    const error = new Error("feed unavailable");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(error));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const logError = vi.spyOn(console, "error").mockImplementation(() => {});
+    let pending: Promise<unknown> | undefined;
+    const ctx = {
+      waitUntil(promise: Promise<unknown>) {
+        pending = promise;
+      },
+    } as ExecutionContext;
+
+    await worker.scheduled({} as ScheduledEvent, env, ctx);
+
+    expect(log).toHaveBeenCalledWith("[version-watcher] check started", {
+      trigger: "scheduled",
+    });
+    await expect(pending).rejects.toThrow("feed unavailable");
+    expect(logError).toHaveBeenCalledWith(
+      "[version-watcher] check failed",
+      expect.objectContaining({
+        trigger: "scheduled",
+        error: expect.objectContaining({
+          name: "Error",
+          message: "feed unavailable",
+        }),
+      }),
+    );
+  });
+
+  it("logs HTTP job completion with its result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(response(feed))
+        .mockResolvedValueOnce(
+          response(JSON.stringify({ chatgpt: version, downloadUrl })),
+        )
+        .mockResolvedValueOnce(response([])),
+    );
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    const result = await worker.fetch(
+      new Request("https://version-watcher.test/check"),
+      env,
+    );
+
+    expect(result.status).toBe(200);
+    expect(log).toHaveBeenNthCalledWith(
+      1,
+      "[version-watcher] check started",
+      { trigger: "http" },
+    );
+    expect(log).toHaveBeenNthCalledWith(
+      2,
+      "[version-watcher] check completed",
+      {
+        trigger: "http",
+        version,
+        outcome: "binding-exists",
+      },
+    );
+  });
 });
 
 describe("version detection", () => {

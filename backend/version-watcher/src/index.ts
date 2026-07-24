@@ -16,6 +16,8 @@ interface LatestCodexVersion {
   downloadUrl: string;
 }
 
+type CheckTrigger = "scheduled" | "http";
+
 const userAgent = "chat-gpt-x-version-watch-cloudflare-worker";
 const feedUrl =
   "https://persistent.oaistatic.com/codex-app-prod/appcast.xml";
@@ -27,7 +29,7 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
-    ctx.waitUntil(checkCodexVersion(env));
+    ctx.waitUntil(runLoggedCheck(env, "scheduled"));
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -41,14 +43,38 @@ export default {
     }
 
     try {
-      return Response.json(await checkCodexVersion(env));
+      return Response.json(await runLoggedCheck(env, "http"));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(message);
       return Response.json({ error: "check failed", message }, { status: 500 });
     }
   },
 };
+
+async function runLoggedCheck(
+  env: Env,
+  trigger: CheckTrigger,
+): Promise<CheckResult> {
+  console.log("[version-watcher] check started", { trigger });
+  try {
+    const result = await checkCodexVersion(env);
+    console.log("[version-watcher] check completed", { trigger, ...result });
+    return result;
+  } catch (error) {
+    console.error("[version-watcher] check failed", {
+      trigger,
+      error:
+        error instanceof Error
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack,
+            }
+          : String(error),
+    });
+    throw error;
+  }
+}
 
 export async function checkCodexVersion(env: Env): Promise<CheckResult> {
   const latest = await readSparkleFeed();
