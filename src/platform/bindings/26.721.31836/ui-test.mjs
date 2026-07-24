@@ -1637,19 +1637,50 @@ async function validateUi(
   return checks;
 }
 
-async function selectThread(threadId) {
-  const selector =
-    '[data-app-action-sidebar-thread-id$=":' + threadId + '"]';
+async function threadSelectionSnapshot(selector) {
+  return evaluate(
+    `(() => {
+      const row = document.querySelector(${JSON.stringify(selector)});
+      const trigger = row?.querySelector("[data-thread-title-trigger]");
+      const rect = row?.getBoundingClientRect();
+      return {
+        href: location.href,
+        currentThreadId:
+          globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId ?? null,
+        fixtureReady: globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true,
+        nativeReady: globalThis.__CGPTX_HOST__?._debug.nativeReady() === true,
+        row: row
+          ? {
+              connected: row.isConnected,
+              ariaCurrent: row.getAttribute("aria-current"),
+              ariaSelected: row.getAttribute("aria-selected"),
+              dataState: row.getAttribute("data-state"),
+              className: row.className,
+              width: rect?.width ?? 0,
+              height: rect?.height ?? 0,
+            }
+          : null,
+        trigger: trigger
+          ? {
+              tagName: trigger.tagName,
+              ariaCurrent: trigger.getAttribute("aria-current"),
+              ariaSelected: trigger.getAttribute("aria-selected"),
+              dataState: trigger.getAttribute("data-state"),
+              pointerEvents: getComputedStyle(trigger).pointerEvents,
+            }
+          : null,
+      };
+    })()`,
+  );
+}
+
+async function activateThreadRow(selector, threadId) {
+  await waitFor(
+    `document.querySelector(${JSON.stringify(selector)}) !== null`,
+    60000,
+  );
   await evaluate(
-    `(async () => {
-      const deadline = Date.now() + 60000;
-      let row;
-      while (Date.now() < deadline) {
-        row = document.querySelector(${JSON.stringify(selector)});
-        if (row) break;
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      if (!row) throw new Error('Selected native thread row missing');
+    `(() => {
       if (!globalThis.__CGPTX_UI_TEST_THREADS__) {
         globalThis.__CGPTX_HOST__.registerExtension("ui-test-thread-selection", {
           activate(api) {
@@ -1657,13 +1688,29 @@ async function selectThread(threadId) {
           },
         });
       }
-      row.click();
     })()`,
   );
-  await waitFor(
-    `globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId === ${JSON.stringify(threadId)}`,
-    60000,
+  const before = await threadSelectionSnapshot(selector);
+  await evaluate(
+    `document.querySelector(${JSON.stringify(selector)}).click()`,
   );
+  try {
+    await waitFor(
+      `globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId === ${JSON.stringify(threadId)}`,
+      60000,
+    );
+  } catch (error) {
+    const after = await threadSelectionSnapshot(selector);
+    throw new Error(
+      `${error.message}; thread selection state: ${JSON.stringify({ before, after })}`,
+    );
+  }
+}
+
+async function selectThread(threadId) {
+  const selector =
+    '[data-app-action-sidebar-thread-id$=":' + threadId + '"]';
+  await activateThreadRow(selector, threadId);
 }
 
 async function selectThreadByKind(kind) {
@@ -1681,20 +1728,12 @@ async function selectThreadByKind(kind) {
       if (!row) throw new Error('Selected native ${kind} thread row missing');
       const scopedId = row.getAttribute('data-app-action-sidebar-thread-id');
       const threadId = scopedId.slice(scopedId.lastIndexOf(':') + 1);
-      if (!globalThis.__CGPTX_UI_TEST_THREADS__) {
-        globalThis.__CGPTX_HOST__.registerExtension("ui-test-thread-selection", {
-          activate(api) {
-            globalThis.__CGPTX_UI_TEST_THREADS__ = api.threads;
-          },
-        });
-      }
-      row.click();
       return threadId;
     })()`,
   );
-  await waitFor(
-    `globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId === ${JSON.stringify(threadId)}`,
-    60000,
+  await activateThreadRow(
+    '[data-app-action-sidebar-thread-kind="remote"]',
+    threadId,
   );
   return threadId;
 }
