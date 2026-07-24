@@ -109,6 +109,7 @@ jobs:
           test_log="$RUNNER_TEMP/chatgptx-end-to-end.log"
           video_dir="$RUNNER_TEMP/chatgptx-end-to-end-video"
           recording_stop="$video_dir/.stop"
+          recording_pid_file="$video_dir/.capture-pid"
           recorder_log="$RUNNER_TEMP/chatgptx-screen-recorder.log"
           mkdir -p "$video_dir"
           record_video() {
@@ -116,9 +117,15 @@ jobs:
             while [[ ! -e "$recording_stop" ]]; do
               segment=$((segment + 1))
               printf -v segment_path '%s/segment-%04d.mov' "$video_dir" "$segment"
-              screencapture -v -V30 -C -x "$segment_path" >> "$recorder_log" 2>&1 || {
+              screencapture -v -V30 -C -x "$segment_path" >> "$recorder_log" 2>&1 &
+              capture_pid=$!
+              printf '%s\n' "$capture_pid" > "$recording_pid_file"
+              capture_exit_code=0
+              wait "$capture_pid" || capture_exit_code=$?
+              rm -f "$recording_pid_file"
+              [[ "$capture_exit_code" -eq 0 ]] || {
                 [[ -e "$recording_stop" ]] && return 0
-                return 1
+                return "$capture_exit_code"
               }
             done
           }
@@ -132,7 +139,10 @@ jobs:
           }
           stop_recording() {
             touch "$recording_stop"
-            pkill -INT -P "$recorder_pid" 2>/dev/null || true
+            if [[ -s "$recording_pid_file" ]]; then
+              capture_pid="$(cat "$recording_pid_file")"
+              kill -INT "$capture_pid" 2>/dev/null || true
+            fi
             wait "$recorder_pid" 2>/dev/null || true
           }
           discard_recording() {

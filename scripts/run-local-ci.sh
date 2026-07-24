@@ -169,6 +169,17 @@ run_logged() {
   return 1
 }
 
+wait_for_process_exit() {
+  local process_id="$1"
+  local deadline="$2"
+  while kill -0 "$process_id" 2>/dev/null; do
+    [[ "$(ps -o state= -p "$process_id" | tr -d ' ')" == Z ]] && break
+    (( SECONDS < deadline )) || return 124
+    sleep 0.1
+  done
+  wait "$process_id"
+}
+
 run_logged release-build env \
   HOME="$TEST_HOME" \
   CODEX_HOME="$CODEX_ROOT" \
@@ -193,7 +204,34 @@ launch_app() {
       "--chatgpt-app=$APP_PATH" \
       "--user-data-dir=$PROFILE_ROOT" \
       "--remote-debugging-port=$PORT" \
-      >"$LOG_ROOT/$name.stdout.log" 2>"$LOG_ROOT/$name.stderr.log"
+      >"$LOG_ROOT/$name.stdout.log" 2>"$LOG_ROOT/$name.stderr.log" &
+    local launcher_pid=$!
+    local launcher_exit_code=0
+    wait_for_process_exit "$launcher_pid" "$((SECONDS + 30))" \
+      || launcher_exit_code=$?
+    if [[ "$launcher_exit_code" == "124" ]]; then
+      kill -TERM "$launcher_pid" 2>/dev/null || true
+      wait "$launcher_pid" 2>/dev/null || true
+      APP_PID="$(
+        lsof -nP -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null \
+          | head -n 1 \
+          || true
+      )"
+      if [[ -z "$APP_PID" ]]; then
+        APP_PID="$(
+          ps -axo pid=,command= \
+            | awk -v executable="$APP_BIN" '$2 == executable { print $1; exit }'
+        )"
+      fi
+      cat "$LOG_ROOT/$name.stderr.log" >&2
+      echo "ChatGPTX launcher did not exit during $name" >&2
+      return 1
+    fi
+    if [[ "$launcher_exit_code" != "0" ]]; then
+      cat "$LOG_ROOT/$name.stderr.log" >&2
+      echo "ChatGPTX launcher failed during $name" >&2
+      return "$launcher_exit_code"
+    fi
     APP_PID=""
   else
     local launch_configuration=""
