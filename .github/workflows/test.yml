@@ -141,7 +141,19 @@ jobs:
             touch "$recording_stop"
             if [[ -s "$recording_pid_file" ]]; then
               capture_pid="$(cat "$recording_pid_file")"
-              kill -INT "$capture_pid" 2>/dev/null || true
+              if [[ "$capture_pid" =~ ^[0-9]+$ ]]; then
+                kill -TERM "$capture_pid" 2>/dev/null || true
+                capture_deadline=$((SECONDS + 5))
+                while kill -0 "$capture_pid" 2>/dev/null; do
+                  [[ "$(ps -o state= -p "$capture_pid" | tr -d ' ')" == Z ]] \
+                    && break
+                  if (( SECONDS >= capture_deadline )); then
+                    kill -KILL "$capture_pid" 2>/dev/null || true
+                    break
+                  fi
+                  sleep 0.1
+                done
+              fi
             fi
             wait "$recorder_pid" 2>/dev/null || true
           }
