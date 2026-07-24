@@ -4,6 +4,7 @@
  * The binding patches the app's shared JSX runtime and transforms native
  * profile and thread menu item trees. Items remain inside the app's existing
  * Radix roots and use the app's exported menu components.
+ * Binding revisions can update this bridge without changing the public API.
  */
 (() => {
   "use strict";
