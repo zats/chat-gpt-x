@@ -1720,7 +1720,11 @@ async function threadSelectionSnapshot(selector) {
   );
 }
 
-async function activateThreadRow(selector, expectedThreadId) {
+async function activateThreadRow(
+  selector,
+  expectedThreadId,
+  waitForCurrent = true,
+) {
   const selection = await evaluate(
     `(async () => {
       const deadline = Date.now() + 60000;
@@ -1787,6 +1791,7 @@ async function activateThreadRow(selector, expectedThreadId) {
       return { before, threadId };
     })()`,
   );
+  if (!waitForCurrent) return selection.threadId;
   try {
     await waitFor(
       `globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId === ${JSON.stringify(selection.threadId)}`,
@@ -1801,26 +1806,28 @@ async function activateThreadRow(selector, expectedThreadId) {
   return selection.threadId;
 }
 
-async function selectThread(threadId) {
+async function selectThread(threadId, waitForCurrent = true) {
   const selector =
     '[data-app-action-sidebar-thread-id$=":' + threadId + '"]';
-  await activateThreadRow(selector, threadId);
+  await activateThreadRow(selector, threadId, waitForCurrent);
 }
 
-async function selectThreadByKind(kind) {
+async function selectThreadByKind(kind, waitForCurrent = true) {
   return activateThreadRow(
     '[data-app-action-sidebar-thread-kind="remote"]',
     undefined,
+    waitForCurrent,
   );
 }
 
-await waitFor('globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true', 90000);
 let selectedThreadId = selectThreadId;
 if (selectThreadKind) {
-  selectedThreadId = await selectThreadByKind(selectThreadKind);
+  selectedThreadId = await selectThreadByKind(selectThreadKind, false);
 } else if (selectedThreadId) {
-  await selectThread(selectedThreadId);
+  await selectThread(selectedThreadId, false);
 }
+await waitFor('globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true', 90000);
+if (selectedThreadId) await selectThread(selectedThreadId);
 const semanticResults = await evaluate('globalThis.__CGPTX_TEST_RESULTS__');
 const failedSemantic = semanticResults.filter((result) => !result.pass);
 if (failedSemantic.length > 0) {
