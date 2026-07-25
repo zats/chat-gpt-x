@@ -7,6 +7,10 @@ final class LauncherWindowController: NSWindowController {
         get { launcherViewController.onOpenChatGPT }
         set { launcherViewController.onOpenChatGPT = newValue }
     }
+    var onCheckForUpdates: (() -> Void)? {
+        get { launcherViewController.onCheckForUpdates }
+        set { launcherViewController.onCheckForUpdates = newValue }
+    }
 
     init(applicationURL: URL?) {
         launcherViewController = LauncherViewController(
@@ -48,6 +52,10 @@ final class LauncherWindowController: NSWindowController {
         launcherViewController.refreshStatus()
     }
 
+    func setCheckingForUpdates(_ isChecking: Bool) {
+        launcherViewController.setCheckingForUpdates(isChecking)
+    }
+
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
@@ -56,11 +64,13 @@ final class LauncherWindowController: NSWindowController {
 
 private final class LauncherViewController: NSViewController {
     var onOpenChatGPT: (() -> Void)?
+    var onCheckForUpdates: (() -> Void)?
 
     private let configuredApplicationURL: URL?
     private let statusDotView = NSImageView()
     private let statusLabel = NSTextField(labelWithString: "Not Running")
     private let revealButton = NSButton()
+    private let updateButton = NSButton()
     private let openButton = NSButton()
     private var currentApplicationURL: URL?
     private var statusMonitor: ChatGPTStatusMonitor?
@@ -96,7 +106,9 @@ private final class LauncherViewController: NSViewController {
             for: .horizontal
         )
 
-        let appRow = NSStackView(views: [statusStack, spacer, revealButton])
+        let appRow = NSStackView(
+            views: [statusStack, spacer, updateButton, revealButton]
+        )
         appRow.orientation = .horizontal
         appRow.alignment = .centerY
         appRow.spacing = 12
@@ -130,13 +142,16 @@ private final class LauncherViewController: NSViewController {
             statusDotView.heightAnchor.constraint(equalToConstant: 8),
             revealButton.widthAnchor.constraint(equalToConstant: 28),
             revealButton.heightAnchor.constraint(equalToConstant: 28),
+            updateButton.widthAnchor.constraint(equalToConstant: 28),
+            updateButton.heightAnchor.constraint(equalToConstant: 28),
         ])
     }
 
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.initialFirstResponder = openButton
-        openButton.nextKeyView = revealButton
+        openButton.nextKeyView = updateButton
+        updateButton.nextKeyView = revealButton
         revealButton.nextKeyView = openButton
 
         guard statusMonitor == nil else { return }
@@ -152,11 +167,17 @@ private final class LauncherViewController: NSViewController {
 
     func setLaunching(_ isLaunching: Bool) {
         openButton.isEnabled = !isLaunching
+        updateButton.isEnabled = !isLaunching
         openButton.title = isLaunching ? "Opening…" : "Open ChatGPT"
     }
 
     func refreshStatus() {
         statusMonitor?.refresh()
+    }
+
+    func setCheckingForUpdates(_ isChecking: Bool) {
+        updateButton.isEnabled = !isChecking
+        openButton.isEnabled = !isChecking
     }
 
     private func configureControls() {
@@ -183,6 +204,21 @@ private final class LauncherViewController: NSViewController {
         revealButton.target = self
         revealButton.action = #selector(revealChatGPT)
         revealButton.setAccessibilityIdentifier("reveal-chatgpt")
+
+        updateButton.image = NSImage(
+            systemSymbolName: "arrow.clockwise.circle.fill",
+            accessibilityDescription: "Check for Updates"
+        )?.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
+        )
+        updateButton.imagePosition = .imageOnly
+        updateButton.isBordered = false
+        updateButton.contentTintColor = .secondaryLabelColor
+        updateButton.focusRingType = .none
+        updateButton.toolTip = "Check for Updates"
+        updateButton.target = self
+        updateButton.action = #selector(checkForUpdates)
+        updateButton.setAccessibilityIdentifier("check-for-updates")
 
         openButton.title = "Open ChatGPT"
         openButton.bezelStyle = .glass
@@ -222,5 +258,10 @@ private final class LauncherViewController: NSViewController {
     @objc
     private func openChatGPT() {
         onOpenChatGPT?()
+    }
+
+    @objc
+    private func checkForUpdates() {
+        onCheckForUpdates?()
     }
 }

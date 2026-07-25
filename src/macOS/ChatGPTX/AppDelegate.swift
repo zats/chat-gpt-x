@@ -5,9 +5,17 @@ import Darwin
 enum ChatGPTXApplication {
     static func main() {
         let application = NSApplication.shared
-        let options = LaunchOptions(
-            arguments: Array(CommandLine.arguments.dropFirst())
-        )
+        let options: LaunchOptions
+        do {
+            options = try LaunchOptions(
+                arguments: Array(CommandLine.arguments.dropFirst())
+            )
+        } catch {
+            FileHandle.standardError.write(
+                Data("\(error.localizedDescription)\n".utf8)
+            )
+            Darwin.exit(EXIT_FAILURE)
+        }
         application.setActivationPolicy(
             options.isAPITest ? .prohibited : .regular
         )
@@ -20,14 +28,28 @@ enum ChatGPTXApplication {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: LaunchOptions
+    private var componentStore: ComponentStore?
+    private var preparedComponents: PreparedComponentStore?
     private var launchTask: Task<Void, Never>?
+    private var updateTask: Task<Void, Never>?
     private var windowController: LauncherWindowController?
+    private var injectionMonitor: ChatGPTInjectionMonitor?
+    private var notificationController: InjectionNotificationController?
 
     init(options: LaunchOptions) {
         self.options = options
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        do {
+            let componentStore = try ComponentStore()
+            self.componentStore = componentStore
+            preparedComponents = try componentStore.prepare()
+        } catch {
+            failStartup(error)
+            return
+        }
+
         if options.isAPITest {
             runAPITest()
             return
@@ -40,9 +62,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowController.onOpenChatGPT = { [weak self] in
             self?.openChatGPT()
         }
+        windowController.onCheckForUpdates = { [weak self] in
+            self?.checkForUpdates()
+        }
         self.windowController = windowController
         windowController.showWindow(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
+
+        let notificationController = InjectionNotificationController()
+        notificationController.onRestart = { [weak self] in
+            self?.openChatGPT(forceRestart: true)
+        }
+        notificationController.onCheckForUpdates = { [weak self] in
+            self?.checkForUpdates()
+        }
+        self.notificationController = notificationController
+
+        let injectionMonitor = ChatGPTInjectionMonitor(
+            expectedBinding: { [weak self] in
+                self?.preparedComponents?.versions.binding
+            },
+            failureHandler: { [weak notificationController] failure in
+                notificationController?.notify(failure)
+            }
+        )
+        self.injectionMonitor = injectionMonitor
+        injectionMonitor.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        injectionMonitor?.stop()
     }
 
     func applicationShouldHandleReopen(
@@ -56,11 +105,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func runAPITest() {
+        guard let preparedComponents else {
+            failStartup(ComponentStoreUnavailable())
+            return
+        }
         launchTask = Task {
             do {
-                try await ChatGPTLauncher().launch(
+                try await ChatGPTLauncher(
+                    componentStore: preparedComponents
+                ).launch(
                     mode: .apiTest,
                     arguments: options.chatGPTArguments,
+                    localExtensionURLs: options.extensionURLs,
                     applicationURL: options.applicationURL
                 )
                 NSApplication.shared.terminate(nil)
@@ -73,8 +129,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func openChatGPT() {
-        guard launchTask == nil else { return }
+    private func openChatGPT(forceRestart: Bool = false) {
+        guard launchTask == nil, updateTask == nil else { return }
+        guard let preparedComponents else {
+            failStartup(ComponentStoreUnavailable())
+            return
+        }
         windowController?.setLaunching(true)
 
         launchTask = Task { [weak self] in
@@ -86,13 +146,106 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             do {
-                try await ChatGPTLauncher().launch(
+                try await ChatGPTLauncher(
+                    componentStore: preparedComponents
+                ).launch(
                     mode: .normal,
+                    localExtensionURLs: options.extensionURLs,
+                    forceRestart: forceRestart,
                     applicationURL: options.applicationURL
                 )
             } catch {
                 showLaunchError(error)
             }
+        }
+    }
+
+    private func checkForUpdates() {
+        guard updateTask == nil, launchTask == nil else { return }
+        guard let componentStore else {
+            failStartup(ComponentStoreUnavailable())
+            return
+        }
+
+        windowController?.setCheckingForUpdates(true)
+        updateTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                updateTask = nil
+                windowController?.setCheckingForUpdates(false)
+            }
+
+            do {
+                let workspace = NSWorkspace.shared
+                guard let applicationURL = options.applicationURL
+                    ?? ChatGPTLauncher.installedApplicationURL(
+                        workspace: workspace
+                    ),
+                    let chatgptVersion =
+                        ChatGPTLauncher.applicationVersion(
+                            at: applicationURL
+                        )
+                else {
+                    throw UpdateUIError.chatGPTNotInstalled
+                }
+                let index = try await ComponentUpdater.fetchIndex()
+                let result = try await componentStore.install(
+                    index,
+                    chatgptVersion: chatgptVersion
+                )
+                preparedComponents = result.preparedStore
+                showUpdateResult(result)
+            } catch {
+                showUpdateError(error)
+            }
+        }
+    }
+
+    private func showUpdateResult(_ result: ComponentUpdateResult) {
+        let alert = NSAlert()
+        switch result {
+        case .upToDate:
+            alert.messageText = "Up to Date"
+            alert.informativeText = "All components are current."
+            alert.addButton(withTitle: "OK")
+        case .installed:
+            alert.messageText = "Components Installed"
+            if ChatGPTRuntime.runningApplications.isEmpty {
+                alert.informativeText =
+                    "Updates will activate when ChatGPT opens."
+                alert.addButton(withTitle: "OK")
+            } else {
+                alert.informativeText =
+                    "Restart ChatGPT to activate the updates."
+                alert.addButton(withTitle: "Restart ChatGPT")
+                alert.addButton(withTitle: "Later")
+            }
+        }
+
+        guard let window = windowController?.window else {
+            alert.runModal()
+            return
+        }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard case .installed = result,
+                response == .alertFirstButtonReturn,
+                !ChatGPTRuntime.runningApplications.isEmpty else {
+                return
+            }
+            self?.openChatGPT(forceRestart: true)
+        }
+    }
+
+    private func showUpdateError(_ error: any Error) {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Update Failed"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+        if let window = windowController?.window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
         }
     }
 
@@ -109,6 +262,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             alert.runModal()
         }
+    }
+
+    private func failStartup(_ error: any Error) {
+        if options.isAPITest {
+            FileHandle.standardError.write(
+                Data("\(error.localizedDescription)\n".utf8)
+            )
+            Darwin.exit(EXIT_FAILURE)
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "ChatGPTX couldn’t prepare its components"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "Quit")
+        alert.runModal()
+        NSApplication.shared.terminate(nil)
     }
 
     private func installMainMenu() {
@@ -151,5 +321,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         NSApplication.shared.windowsMenu = windowMenu
         NSApplication.shared.mainMenu = mainMenu
+    }
+}
+
+private struct ComponentStoreUnavailable: LocalizedError {
+    var errorDescription: String? {
+        "The component store is unavailable."
+    }
+}
+
+private enum UpdateUIError: LocalizedError {
+    case chatGPTNotInstalled
+
+    var errorDescription: String? {
+        "ChatGPT.app is not installed."
     }
 }

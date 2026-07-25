@@ -33,23 +33,27 @@ enum ChatGPTBridgeLog {
             return false
         }
 
+        return events(at: url).contains("injected")
+    }
+
+    static func events(at url: URL) -> Set<String> {
         guard
             let handle = try? FileHandle(forReadingFrom: url),
             let data = try? handle.read(upToCount: maximumBytes)
         else {
-            return false
+            return []
         }
         try? handle.close()
 
-        return data.split(separator: 0x0A).contains { line in
+        return Set(data.split(separator: 0x0A).compactMap { line in
             guard
                 let object = try? JSONSerialization.jsonObject(with: Data(line))
                     as? [String: Any]
             else {
-                return false
+                return nil
             }
-            return object["event"] as? String == "injected"
-        }
+            return object["event"] as? String
+        })
     }
 }
 
@@ -64,17 +68,23 @@ enum ChatGPTRuntime {
         for application: NSRunningApplication,
         fileManager: FileManager = .default
     ) -> Bool {
-        let logURL = codexHomeURL()
-            .appendingPathComponent("extensions", isDirectory: true)
-            .appendingPathComponent("log", isDirectory: true)
-            .appendingPathComponent(
-                "bridge-\(application.processIdentifier).log"
-            )
+        let logURL = bridgeLogURL(for: application)
         return ChatGPTBridgeLog.hasInjectedPlatform(
             at: logURL,
             launchedAt: application.launchDate,
             fileManager: fileManager
         )
+    }
+
+    static func bridgeLogURL(
+        for application: NSRunningApplication
+    ) -> URL {
+        codexHomeURL()
+            .appendingPathComponent("extensions", isDirectory: true)
+            .appendingPathComponent("log", isDirectory: true)
+            .appendingPathComponent(
+                "bridge-\(application.processIdentifier).log"
+            )
     }
 
     static func activateRunningApplicationWithExtensions() -> Bool {
@@ -90,13 +100,92 @@ enum ChatGPTRuntime {
         return true
     }
 
-    private static func codexHomeURL() -> URL {
+    static func codexHomeURL() -> URL {
         if let path = ProcessInfo.processInfo.environment["CODEX_HOME"],
             !path.isEmpty {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex", isDirectory: true)
+    }
+}
+
+enum ChatGPTInjectionFailure {
+    case extensionsDisabled(pid_t)
+    case bindingMissing(pid_t)
+}
+
+final class ChatGPTInjectionMonitor {
+    private static let gracePeriod: TimeInterval = 6
+
+    private let expectedBinding: () -> StoredBinding?
+    private let failureHandler: (ChatGPTInjectionFailure) -> Void
+    private var notifiedProcessIdentifiers = Set<pid_t>()
+    private var timer: Timer?
+
+    init(
+        expectedBinding: @escaping () -> StoredBinding?,
+        failureHandler: @escaping (ChatGPTInjectionFailure) -> Void
+    ) {
+        self.expectedBinding = expectedBinding
+        self.failureHandler = failureHandler
+    }
+
+    func start() {
+        let timer = Timer(
+            timeInterval: 1,
+            target: self,
+            selector: #selector(refresh),
+            userInfo: nil,
+            repeats: true
+        )
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        refresh()
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    @objc
+    private func refresh() {
+        let applications = ChatGPTRuntime.runningApplications
+        let activeProcessIdentifiers = Set(
+            applications.map(\.processIdentifier)
+        )
+        notifiedProcessIdentifiers.formIntersection(activeProcessIdentifiers)
+
+        for application in applications {
+            let processIdentifier = application.processIdentifier
+            guard
+                !notifiedProcessIdentifiers.contains(processIdentifier),
+                !ChatGPTRuntime.extensionsEnabled(for: application),
+                let launchDate = application.launchDate,
+                Date().timeIntervalSince(launchDate) >= Self.gracePeriod
+            else {
+                continue
+            }
+
+            notifiedProcessIdentifiers.insert(processIdentifier)
+            let events = ChatGPTBridgeLog.events(
+                at: ChatGPTRuntime.bridgeLogURL(for: application)
+            )
+            let bindingMatches = application.bundleURL.flatMap { url in
+                expectedBinding().map {
+                    ChatGPTLauncher.bindingMatches(
+                        applicationURL: url,
+                        binding: $0
+                    )
+                }
+            } ?? false
+            if !bindingMatches || events.contains("bindings-missing") {
+                failureHandler(.bindingMissing(processIdentifier))
+            } else {
+                failureHandler(.extensionsDisabled(processIdentifier))
+            }
+        }
     }
 }
 

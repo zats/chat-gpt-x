@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -9,15 +10,20 @@ enum ChatGPTLaunchMode {
 
 struct ChatGPTLauncher {
     static let chatGPTBundleIdentifier = "com.openai.codex"
-    private static let bridgeRelativePath = "bridge/main.cjs"
     private static let launchConfigurationEnvironmentKey =
         "CHATGPTX_LAUNCH_CONFIGURATION"
+    private static let versionsLockEnvironmentKey =
+        "CHATGPTX_VERSIONS_LOCK"
     private static let restartCountdown = 10
     private static let quitTimeout: TimeInterval = 10
+
+    let componentStore: PreparedComponentStore
 
     func launch(
         mode: ChatGPTLaunchMode = .normal,
         arguments: [String] = [],
+        localExtensionURLs: [URL] = [],
+        forceRestart: Bool = false,
         applicationURL: URL? = nil
     ) async throws {
         let activity = ProcessInfo.processInfo.beginActivity(
@@ -40,30 +46,59 @@ struct ChatGPTLauncher {
             throw LaunchError.chatGPTExecutableMissing(executableURL)
         }
 
-        guard let bridgeURL = Bundle.main.resourceURL?
-            .appendingPathComponent(Self.bridgeRelativePath),
-            FileManager.default.fileExists(atPath: bridgeURL.path) else {
+        guard
+            let installedVersion = chatGPTBundle.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String,
+            !installedVersion.isEmpty
+        else {
+            throw LaunchError.chatGPTVersionMissing
+        }
+        guard installedVersion == componentStore.versions.binding.chatgpt else {
+            throw LaunchError.bindingMissing(
+                installed: installedVersion,
+                available: componentStore.versions.binding.chatgpt
+            )
+        }
+        guard Self.bindingMatches(
+            applicationURL: resolvedApplicationURL,
+            binding: componentStore.versions.binding
+        ) else {
+            throw LaunchError.bindingBuildMismatch(installedVersion)
+        }
+
+        let bridgeURL = componentStore.rootURL
+            .appendingPathComponent(
+                componentStore.versions.chatgptApi.path,
+                isDirectory: true
+            )
+            .appendingPathComponent("bridge/main.cjs")
+        guard FileManager.default.fileExists(atPath: bridgeURL.path) else {
             throw LaunchError.bridgeMissing
         }
 
-        if mode == .normal,
+        if mode == .normal, localExtensionURLs.isEmpty, !forceRestart,
             ChatGPTRuntime.activateRunningApplicationWithExtensions() {
             return
         }
 
-        if mode == .normal, Self.isChatGPTRunning,
+        if mode == .normal, !forceRestart, Self.isChatGPTRunning,
             !RestartPrompt(seconds: Self.restartCountdown).run() {
             return
         }
 
         try await quitRunningChatGPT()
 
-        let launchConfigurationURL = try Self.launchConfiguration(for: mode)
+        let launchConfigurationURL = try launchConfiguration(
+            for: mode,
+            localExtensionURLs: localExtensionURLs
+        )
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.arguments = arguments
         configuration.environment = Self.environment(
             requiring: bridgeURL,
-            launchConfigurationURL: launchConfigurationURL
+            launchConfigurationURL: launchConfigurationURL,
+            versionsLockURL: componentStore.versionsLockURL
         )
         configuration.createsNewApplicationInstance = true
 
@@ -141,6 +176,32 @@ struct ChatGPTLauncher {
         return candidate
     }
 
+    static func applicationVersion(at url: URL) -> String? {
+        Bundle(url: url)?.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String
+    }
+
+    static func bindingMatches(
+        applicationURL: URL,
+        binding: StoredBinding
+    ) -> Bool {
+        guard applicationVersion(at: applicationURL) == binding.chatgpt else {
+            return false
+        }
+        let asarURL = applicationURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("app.asar")
+        guard let data = try? Data(contentsOf: asarURL) else {
+            return false
+        }
+        let digest = SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return digest == binding.asarSha256
+    }
+
     private static func isChatGPTBundle(_ url: URL) -> Bool {
         guard let bundle = Bundle(url: url),
             bundle.bundleIdentifier == chatGPTBundleIdentifier,
@@ -154,10 +215,63 @@ struct ChatGPTLauncher {
         Darwin.kill(processIdentifier, 0) == 0 || errno != ESRCH
     }
 
-    private static func launchConfiguration(
-        for mode: ChatGPTLaunchMode
+    private func launchConfiguration(
+        for mode: ChatGPTLaunchMode,
+        localExtensionURLs: [URL]
     ) throws -> URL? {
-        guard mode == .apiTest else { return nil }
+        var localExtensions = try localExtensionURLs.map {
+            try LocalExtensionResolver.resolve(
+                $0,
+                chatgptVersion: componentStore.versions.binding.chatgpt,
+                chatgptAPIVersion: componentStore.versions.chatgptApi.version
+            )
+        }
+
+        let selectedExtensions: [LaunchExtension]
+        if mode == .apiTest {
+            localExtensions = localExtensions.filter {
+                $0.id == "api-test-suite"
+            }
+            if let apiTestExtension = localExtensions.last {
+                selectedExtensions = [apiTestExtension]
+            } else {
+                guard let resourcesURL = Bundle.main.resourceURL else {
+                    throw LaunchError.bridgeMissing
+                }
+                let bundledAPIExtensionURL = resourcesURL
+                    .appendingPathComponent(
+                        "component-seed/api-test-suite",
+                        isDirectory: true
+                    )
+                selectedExtensions = [
+                    try LocalExtensionResolver.resolve(
+                        bundledAPIExtensionURL,
+                        chatgptVersion: componentStore.versions.binding.chatgpt,
+                        chatgptAPIVersion:
+                            componentStore.versions.chatgptApi.version
+                    )
+                ]
+            }
+        } else {
+            guard !localExtensions.isEmpty else { return nil }
+            selectedExtensions = merge(
+                installedExtensions: componentStore.versions.extensions
+                    .filter(\.enabled)
+                    .map {
+                    LaunchExtension(
+                        id: $0.id,
+                        path: componentStore.rootURL
+                            .appendingPathComponent(
+                                $0.path,
+                                isDirectory: true
+                            )
+                            .appendingPathComponent("contents/main.js")
+                            .path
+                    )
+                },
+                localExtensions: localExtensions
+            )
+        }
 
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ChatGPTX", isDirectory: true)
@@ -170,8 +284,11 @@ struct ChatGPTLauncher {
         let configurationURL = directoryURL.appendingPathComponent(
             "launch-\(UUID().uuidString).json"
         )
-        let data = try JSONSerialization.data(
-            withJSONObject: ["extensions": ["api-test-suite"]]
+        let data = try JSONEncoder().encode(
+            LaunchConfiguration(
+                schemaVersion: 1,
+                extensions: selectedExtensions
+            )
         )
         try data.write(to: configurationURL, options: .atomic)
         try FileManager.default.setAttributes(
@@ -181,9 +298,27 @@ struct ChatGPTLauncher {
         return configurationURL
     }
 
+    private func merge(
+        installedExtensions: [LaunchExtension],
+        localExtensions: [LaunchExtension]
+    ) -> [LaunchExtension] {
+        var merged = installedExtensions
+        for extensionComponent in localExtensions {
+            if let index = merged.firstIndex(where: {
+                $0.id == extensionComponent.id
+            }) {
+                merged[index] = extensionComponent
+            } else {
+                merged.append(extensionComponent)
+            }
+        }
+        return merged
+    }
+
     private static func environment(
         requiring bridgeURL: URL,
-        launchConfigurationURL: URL?
+        launchConfigurationURL: URL?,
+        versionsLockURL: URL
     ) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let requireOption = "--require \(quoteNodeOption(bridgeURL.path))"
@@ -198,6 +333,7 @@ struct ChatGPTLauncher {
             environment[launchConfigurationEnvironmentKey] =
                 launchConfigurationURL.path
         }
+        environment[versionsLockEnvironmentKey] = versionsLockURL.path
 
         return environment
     }
@@ -208,6 +344,11 @@ struct ChatGPTLauncher {
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
     }
+}
+
+private struct LaunchConfiguration: Encodable {
+    let schemaVersion: Int
+    let extensions: [LaunchExtension]
 }
 
 private final class RestartPrompt {
@@ -271,6 +412,9 @@ private final class RestartPrompt {
 private enum LaunchError: LocalizedError {
     case chatGPTNotInstalled
     case chatGPTExecutableMissing(URL)
+    case chatGPTVersionMissing
+    case bindingMissing(installed: String, available: String)
+    case bindingBuildMismatch(String)
     case bridgeMissing
     case chatGPTWouldNotQuit
     case chatGPTQuitTimedOut
@@ -282,6 +426,12 @@ private enum LaunchError: LocalizedError {
             "ChatGPT.app is not installed."
         case .chatGPTExecutableMissing(let url):
             "The ChatGPT executable is missing at \(url.path)."
+        case .chatGPTVersionMissing:
+            "The installed ChatGPT version could not be determined."
+        case .bindingMissing(let installed, let available):
+            "ChatGPT \(installed) is installed, but the active binding supports \(available)."
+        case .bindingBuildMismatch(let version):
+            "The active binding does not match the installed ChatGPT \(version) build."
         case .bridgeMissing:
             "The platform bridge is missing from ChatGPTX."
         case .chatGPTWouldNotQuit:

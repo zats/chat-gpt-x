@@ -3,8 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CODEX_PATHS="$SCRIPT_DIR/../platform/runtime/codex-paths.cjs"
 CANONICAL_MAIN="contents/main.js"
+REQUIRED_BUN_VERSION="1.3.14"
 
 command -v bun >/dev/null || {
   echo "bun is required: brew install oven-sh/bun/bun" >&2
@@ -14,9 +14,12 @@ command -v jq >/dev/null || {
   echo "jq is required: brew install jq" >&2
   exit 1
 }
+[[ "$(bun --version)" == "$REQUIRED_BUN_VERSION" ]] || {
+  echo "bun $REQUIRED_BUN_VERSION is required" >&2
+  exit 1
+}
 
-INSTALL_ROOT="$(bun "$CODEX_PATHS" extensions)"
-GLOBAL_SETTINGS_FILE="$INSTALL_ROOT/settings.json"
+OUTPUT_ROOT="${CHATGPTX_EXTENSION_BUILD_DIR:-${TMPDIR:-/tmp}/ChatGPTX/extension-builds}"
 
 BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/chatgptx-extensions.XXXXXX")"
 cleanup() {
@@ -24,14 +27,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p "$INSTALL_ROOT"
-INSTALL_ROOT="$(cd "$INSTALL_ROOT" && pwd -P)"
-GLOBAL_SETTINGS_FILE="$INSTALL_ROOT/settings.json"
-
-if [[ ! -f "$GLOBAL_SETTINGS_FILE" ]]; then
-  jq -n '{extensions: []}' > "$GLOBAL_SETTINGS_FILE"
-  chmod 600 "$GLOBAL_SETTINGS_FILE"
-fi
+mkdir -p "$OUTPUT_ROOT"
+OUTPUT_ROOT="$(cd "$OUTPUT_ROOT" && pwd -P)"
 
 manifests=()
 if (( $# == 0 )); then
@@ -69,40 +66,17 @@ for manifest in "${manifests[@]}"; do
   }
 
   built_main="$BUILD_ROOT/$extension_id/main.js"
-  installed_dir="$INSTALL_ROOT/$extension_id"
-  installed_main="$installed_dir/$CANONICAL_MAIN"
-  default_enabled=true
-  [[ "$extension_id" == "api-test-suite" ]] && default_enabled=false
+  extension_build_dir="$OUTPUT_ROOT/$extension_id"
+  extension_main_output="$extension_build_dir/$CANONICAL_MAIN"
 
-  mkdir -p "$(dirname "$built_main")" "$(dirname "$installed_main")"
+  mkdir -p "$(dirname "$built_main")" "$(dirname "$extension_main_output")"
   bun build \
     "$extension_source" \
     --target=browser \
     --format=cjs \
     --outfile="$built_main"
-  cp "$built_main" "$installed_main"
-  cp "$manifest" "$installed_dir/package.json"
-  rm -f "$installed_dir/$extension_id.js"
+  cp "$built_main" "$extension_main_output"
+  cp "$manifest" "$extension_build_dir/package.json"
 
-  updated_settings="$(mktemp "$BUILD_ROOT/settings.XXXXXX")"
-  jq \
-    --arg id "$extension_id" \
-    --arg path "$installed_main" \
-    --argjson defaultEnabled "$default_enabled" \
-    '
-      .extensions = (
-        (.extensions // []) as $extensions
-        | if any($extensions[]; .id == $id) then
-            $extensions
-            | map(if .id == $id then .path = $path else . end)
-          else
-            $extensions + [{ id: $id, enabled: $defaultEnabled, path: $path }]
-          end
-      )
-    ' \
-    "$GLOBAL_SETTINGS_FILE" > "$updated_settings"
-  chmod 600 "$updated_settings"
-  mv "$updated_settings" "$GLOBAL_SETTINGS_FILE"
-
-  echo "$extension_id -> $installed_main"
+  echo "$extension_id -> $extension_main_output"
 done
