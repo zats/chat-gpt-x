@@ -85,7 +85,7 @@ jobs:
           git add updates/latest.json
           git commit -m "Refresh component archive hashes"
           deploy_key="$RUNNER_TEMP/pr-update-deploy-key"
-          printf '%s' "$PR_UPDATE_DEPLOY_KEY" > "$deploy_key"
+          printf '%s\n' "$PR_UPDATE_DEPLOY_KEY" > "$deploy_key"
           chmod 600 "$deploy_key"
           export GIT_SSH_COMMAND="ssh -i $deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
           git remote set-url origin "git@github.com:$GITHUB_REPOSITORY.git"
