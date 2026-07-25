@@ -68,7 +68,12 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_UPDATE_DEPLOY_KEY: ${{ secrets.CHATGPTX_PR_UPDATE_DEPLOY_KEY }}
         run: |
+          [[ -n "$PR_UPDATE_DEPLOY_KEY" ]] || {
+            echo "CHATGPTX_PR_UPDATE_DEPLOY_KEY is required" >&2
+            exit 1
+          }
           echo "updated=false" >> "$GITHUB_OUTPUT"
           scripts/refresh-update-index-hashes.sh "$BASE_SHA"
           git diff --check
@@ -79,6 +84,11 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add updates/latest.json
           git commit -m "Refresh component archive hashes"
+          deploy_key="$RUNNER_TEMP/pr-update-deploy-key"
+          printf '%s' "$PR_UPDATE_DEPLOY_KEY" > "$deploy_key"
+          chmod 600 "$deploy_key"
+          export GIT_SSH_COMMAND="ssh -i $deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git remote set-url origin "git@github.com:$GITHUB_REPOSITORY.git"
           git push origin "HEAD:$HEAD_BRANCH"
           echo "updated=true" >> "$GITHUB_OUTPUT"
 
@@ -102,6 +112,8 @@ jobs:
       needs.refresh-component-hashes.result == 'success' &&
       needs.refresh-component-hashes.outputs.updated != 'true'
     runs-on: ubuntu-latest
+    outputs:
+      has_components: ${{ steps.plan.outputs.has_components }}
     steps:
       - name: Check out component source
         uses: actions/checkout@v4
@@ -115,6 +127,7 @@ jobs:
         with:
           bun-version: 1.3.14
       - name: Validate affected components
+        id: plan
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -124,6 +137,13 @@ jobs:
           node scripts/build-component-releases.mjs \
             "$RUNNER_TEMP/component-releases.json" \
             "$RUNNER_TEMP/component-release-artifacts"
+          echo "has_components=$(
+            jq -r '
+              (.chatgptApi != null) or
+              (.bindings | length > 0) or
+              (.extensions | length > 0)
+            ' "$RUNNER_TEMP/component-releases.json"
+          )" >> "$GITHUB_OUTPUT"
           jq \
             '{generation, chatgptApi, bindings, extensions}' \
             "$RUNNER_TEMP/component-releases.json"
@@ -131,7 +151,8 @@ jobs:
   publish-component-releases:
     if: >-
       github.event_name == 'push' &&
-      github.ref_name == github.event.repository.default_branch
+      github.ref_name == github.event.repository.default_branch &&
+      needs.component-release-plan.outputs.has_components == 'true'
     needs:
       - test
       - component-release-plan
