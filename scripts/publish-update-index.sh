@@ -93,4 +93,17 @@ gh release download "$INDEX_RELEASE" \
   --pattern "$(basename "$INDEX_FILE")" \
   --dir "$published_root"
 cmp "$INDEX_FILE" "$published_root/$(basename "$INDEX_FILE")"
+
+published_sha="$(
+  gh api \
+    --method PATCH \
+    "repos/$REPOSITORY/git/refs/tags/$INDEX_RELEASE" \
+    -f sha="$MODE" \
+    -F force=true \
+    --jq '.object.sha'
+)"
+[[ "$published_sha" == "$MODE" ]] || {
+  echo "$INDEX_RELEASE tag does not point to $MODE" >&2
+  exit 1
+}
 echo "Published update index generation $generation"
