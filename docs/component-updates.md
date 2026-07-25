@@ -5,11 +5,11 @@
 ### Milestone 1
 
 - [x] Publish the update index and component releases
-- [ ] Build atomic component storage under `~/.codex/extensions`
-- [ ] Load platform components and extensions from snapshots
-- [ ] Support local launch-scoped extensions and `--test-api`
-- [ ] Add manual updates, restart activation, and status notifications
-- [ ] Remove legacy loading and release fixtures
+- [x] Build atomic component storage under `~/.codex/extensions`
+- [x] Load platform components and extensions from a versions lock
+- [x] Support local launch-scoped extensions and `--test-api`
+- [x] Add manual updates, restart activation, and status notifications
+- [x] Remove legacy loading and release fixtures
 
 ### Milestone 2
 
@@ -18,7 +18,7 @@
 - [ ] Support live development reload
 - [ ] Validate lifecycle behavior across renderers and rollback failures
 
-Status: proposed
+Status: milestone 1 complete
 
 ## Scope
 
@@ -33,8 +33,9 @@ Launcher binary updates require a separate mechanism.
 ## Milestones
 
 Milestone 1 delivers the update index, component store, manual updater,
-snapshot-based injection, launch-scoped local extensions, and disabled-injection
-notifications. Installed changes activate on the next ChatGPT launch.
+versions-locked injection, launch-scoped development extensions, and
+disabled-injection notifications. Installed changes activate on the next
+ChatGPT launch.
 
 Milestone 2 adds runtime extension loading, unloading, replacement, and local
 development reload. It ships after milestone 1.
@@ -54,7 +55,9 @@ Release publication is fully automated:
   release, and index publication.
 - A merged public-API or public-extension pull request drives validation,
   component release, and index publication.
-- No component requires manual GitHub Release or index publication.
+- CI computes deterministic archive hashes on the pull request, commits the
+  updated index, then builds every archive, checksum, GitHub Release, and stable
+  index update. No component release has an operator step.
 
 The index uses schema version 2:
 
@@ -103,7 +106,8 @@ script tests create synthetic fixtures in temporary directories.
 
 Bindings are keyed by ChatGPT version so a correction can be published for any
 supported ChatGPT build. API versions are keyed independently because installed
-bindings may require different API versions.
+bindings may require different API versions. Downgrades have no dedicated
+behavior or compatibility guarantee.
 
 ## Component store
 
@@ -115,18 +119,19 @@ Every installed component lives under `~/.codex/extensions`:
     chatgpt-api/<api-version>/
     bindings/<chatgpt-version>/<binding-version>/
     extensions/<extension-id>/<extension-version>/
-  snapshots/<generation>-<uuid>.json
-  downloads/
   state/<extension-id>/
-  current.json
+  versions-lock.json
   settings.json
 ```
 
 `CODEX_HOME` changes the `~/.codex` root for development and CI.
 
 Component directories are immutable. Extension state is stored separately from
-extension code. `settings.json` contains extension IDs, enablement, and order;
-it contains no executable paths.
+extension code. `settings.json` contains user-selected IDs, enablement, and
+order; it contains no executable paths. The updater reads it without mutation.
+Compatible extensions absent from settings use enabled-by-default virtual
+entries. Development builds remain outside the component store and enter a
+launch only through an explicit `--extension` path.
 
 ## Installation transaction
 
@@ -136,30 +141,29 @@ An update runs as one transaction:
 2. Reject an older generation.
 3. Select the binding for the installed ChatGPT version.
 4. Select compatible extension versions.
-5. Download missing archives into `downloads/`.
+5. Create `downloads/` for one missing archive.
 6. Verify each SHA-256 and archive layout.
 7. Extract into new immutable component directories.
-8. Write an immutable snapshot containing exact component paths and extension
-   order.
-9. Atomically replace `current.json` with the new snapshot reference.
+8. Remove `downloads/` and atomically replace `versions-lock.json` with exact
+   component paths and extension order.
 
-Failures before step 9 preserve the active snapshot. Cleanup removes abandoned
-downloads and unreferenced components while ChatGPT is stopped.
+Failures before step 8 preserve the active versions lock. A generation-only
+index change updates the lock without requesting a ChatGPT restart.
 
 ## Startup and injection
 
-The launcher resolves `current.json`, selects the installed ChatGPT binding,
+The launcher resolves `versions-lock.json`, selects the installed ChatGPT binding,
 and launches ChatGPT with:
 
 - `NODE_OPTIONS` requiring the selected API bridge
-- `CHATGPTX_SNAPSHOT` pointing to the immutable snapshot
+- `CHATGPTX_VERSIONS_LOCK` pointing to the versions lock
 
 The bridge resolves its runtime, binding, and extensions exclusively through
-that snapshot. A running ChatGPT process retains the snapshot it launched with.
-Milestone 1 activates updates on the next ChatGPT launch.
+that lock. A running ChatGPT process retains the locked versions it launched
+with. Milestone 1 activates updates on the next ChatGPT launch.
 
-The application imports bundled seed components into the store when no current
-snapshot exists. This supports first launch without network access.
+The application imports bundled seed components into the store when no versions
+lock exists. This supports first launch without network access.
 
 ## Manual update UI
 
@@ -202,8 +206,9 @@ Shared lifecycle helpers move into platform infrastructure only after at least
 two extensions need the same implementation.
 
 The main-process bridge owns the desired extension set, configured order, source
-hashes, and active storage authorization. It observes `current.json` and local
-development entry points. When the active API and binding remain unchanged, it
+hashes, and active storage authorization. It observes `versions-lock.json` and
+explicit development extension paths. When the active API and binding remain
+unchanged, it
 reconciles the complete enabled extension set:
 
 1. Evaluate candidate modules without activation.
@@ -233,14 +238,15 @@ It writes resolved IDs and paths to a mode-`0600` ephemeral launch
 configuration. These entries:
 
 - Override an installed extension with the same ID for that launch
-- Leave `current.json` and persistent settings unchanged
+- Leave `versions-lock.json` and persistent settings unchanged
 - Participate in the same compatibility checks
 - Reload after restart in milestone 1
 - Reload when their compiled entry point changes in milestone 2
 
 `--test-api` selects the locally built `api-test-suite` through this mechanism
-and disables every other extension for that launch. CI and development scripts
-must build the requested local extension before launching.
+and disables every other extension for that launch. The packaged copy is used
+when no explicit `api-test-suite` path is provided. CI builds the suite locally
+and passes its path through `--extension`.
 
 ## Disabled-extension detection
 

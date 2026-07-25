@@ -25,7 +25,7 @@ updates/
   latest.json                   # schema-v2 component catalog, release tags, compatibility, and hashes
 ```
 
-`src/extensions/build.sh [<extension-id> ...]` is the local build and installation entry point. With no ids it builds all extensions. Each manifest declares `"main": "contents/main.js"`, its semantic `version`, and `compatibility.chatgpt` plus `compatibility.chatgptApi` ranges. The script compiles `<extension-id>.ts` as browser-targeted CommonJS and installs the bundle and manifest in the canonical runtime layout below. The shared `resolveCodexHome()` utility defines Codex home from `CODEX_HOME`, defaulting to `$HOME/.codex`.
+`src/extensions/build.sh [<extension-id> ...]` is the local build entry point. With no ids it builds all extensions. Each manifest declares `"main": "contents/main.js"`, its semantic `version`, and `compatibility.chatgpt` plus `compatibility.chatgptApi` ranges. The script compiles `<extension-id>.ts` as browser-targeted CommonJS under `${TMPDIR}/ChatGPTX/extension-builds/`; `CHATGPTX_EXTENSION_BUILD_DIR` overrides that root. Development builds enter a launch only through an explicit `--extension` path.
 
 The bindings directory name is the app's version (`CFBundleShortVersionString`). Its manifest owns a semantic `version` and pins exact `chatgpt` and `chatgptApi` versions. New ChatGPT versions start at binding version `1.0.0`; corrections increment it. `bindings/manifest.json` points to the newest versioned directory and its exact Sparkle enclosure URL. After validating extensions against a new ChatGPT build, expand their `compatibility.chatgpt` ranges and increment their versions.
 
@@ -43,13 +43,13 @@ GitHub Releases retain versioned contents. CI then verifies every release and pu
 
 ```
 <Codex home>/extensions/
-  settings.json                 # global extension enablement, load order, and canonical bundle paths
-  <extension-id>/
-    package.json                # installed manifest
-    contents/
-      main.js                   # built extension entry point
-    settings.json               # extension-owned persistent settings
-    ...                         # other extension-owned data, scratch, and caches
+  components/
+    chatgpt-api/<api-version>/
+    bindings/<chatgpt-version>/<binding-version>/
+    extensions/<extension-id>/<extension-version>/
+  state/<extension-id>/         # extension-owned persistent state
+  versions-lock.json            # exact active component paths and order
+  settings.json                 # global extension enablement and load order
 ```
 
 Extension **load order** is defined by the platform (settings), and is the ordering guarantee referenced by the multi-consumer API semantics (transformer chains and callback invocation order).

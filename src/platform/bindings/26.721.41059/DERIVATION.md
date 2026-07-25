@@ -118,3 +118,11 @@ Results:
 - Authentication startup failure: sign-in initializer, URL decoration, or browser dispatch changed.
 - Stale identity after replacement: app-server message bus, restart/initialized messages, account query key, auth-nonce hook, or provider boundary changed.
 - Header or picker mismatch: header region topology, remote action surface classes, theme root classes, React DOM root, or native picker export changed.
+
+## Binding 1.0.1
+
+The ChatGPT integration is unchanged. This correction targets ChatGPT API
+`1.0.3`, whose launcher/runtime packaging loads the bridge, this binding, and
+extensions from one immutable component snapshot. Extension storage moved to
+`<Codex home>/extensions/state/<extension-id>/`; executable paths no longer
+come from mutable settings.
