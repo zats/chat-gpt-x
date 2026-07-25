@@ -8,7 +8,7 @@ enum ChatGPTLaunchMode {
 }
 
 struct ChatGPTLauncher {
-    private static let chatGPTBundleIdentifier = "com.openai.codex"
+    static let chatGPTBundleIdentifier = "com.openai.codex"
     private static let bridgeRelativePath = "bridge/main.cjs"
     private static let launchConfigurationEnvironmentKey =
         "CHATGPTX_LAUNCH_CONFIGURATION"
@@ -29,17 +29,11 @@ struct ChatGPTLauncher {
         let workspace = NSWorkspace.shared
 
         guard let resolvedApplicationURL = applicationURL
-            ?? Self.installedChatGPTURL(workspace: workspace),
+            ?? Self.installedApplicationURL(workspace: workspace),
             Self.isChatGPTBundle(resolvedApplicationURL),
             let chatGPTBundle = Bundle(url: resolvedApplicationURL),
             let executableURL = chatGPTBundle.executableURL else {
             throw LaunchError.chatGPTNotInstalled
-        }
-
-        guard let chatGPTVersion = chatGPTBundle.object(
-            forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String else {
-            throw LaunchError.chatGPTVersionMissing
         }
 
         guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
@@ -50,6 +44,11 @@ struct ChatGPTLauncher {
             .appendingPathComponent(Self.bridgeRelativePath),
             FileManager.default.fileExists(atPath: bridgeURL.path) else {
             throw LaunchError.bridgeMissing
+        }
+
+        if mode == .normal,
+            ChatGPTRuntime.activateRunningApplicationWithExtensions() {
+            return
         }
 
         if mode == .normal, Self.isChatGPTRunning,
@@ -80,9 +79,6 @@ struct ChatGPTLauncher {
             throw LaunchError.applicationLaunchFailed(error)
         }
 
-        if !Self.supportsChatGPT(version: chatGPTVersion) {
-            UnsupportedVersionPrompt(version: chatGPTVersion).run()
-        }
     }
 
     private func quitRunningChatGPT() async throws {
@@ -113,7 +109,7 @@ struct ChatGPTLauncher {
         ).isEmpty
     }
 
-    private static func installedChatGPTURL(workspace: NSWorkspace) -> URL? {
+    static func installedApplicationURL(workspace: NSWorkspace) -> URL? {
         let fileManager = FileManager.default
         let domains: [FileManager.SearchPathDomainMask] = [
             .localDomainMask,
@@ -156,16 +152,6 @@ struct ChatGPTLauncher {
 
     private static func isProcessRunning(_ processIdentifier: pid_t) -> Bool {
         Darwin.kill(processIdentifier, 0) == 0 || errno != ESRCH
-    }
-
-    private static func supportsChatGPT(version: String) -> Bool {
-        guard let resourcesURL = Bundle.main.resourceURL else { return false }
-
-        let bindingURL = resourcesURL
-            .appendingPathComponent("bindings", isDirectory: true)
-            .appendingPathComponent(version, isDirectory: true)
-            .appendingPathComponent("host.js")
-        return FileManager.default.fileExists(atPath: bindingURL.path)
     }
 
     private static func launchConfiguration(
@@ -221,27 +207,6 @@ struct ChatGPTLauncher {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
-    }
-}
-
-private final class UnsupportedVersionPrompt {
-    private let alert = NSAlert()
-
-    init(version: String) {
-        alert.alertStyle = .warning
-        alert.messageText = "ChatGPT extensions aren’t available"
-        alert.informativeText =
-            "ChatGPT \(version) isn’t supported by this version of ChatGPTX, "
-            + "so extensions couldn’t be enabled. ChatGPT will remain open."
-        alert.addButton(withTitle: "OK")
-    }
-
-    func run() {
-        alert.window.level = .screenSaver
-        alert.window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        alert.window.makeKeyAndOrderFront(nil)
-        alert.runModal()
     }
 }
 
@@ -305,7 +270,6 @@ private final class RestartPrompt {
 
 private enum LaunchError: LocalizedError {
     case chatGPTNotInstalled
-    case chatGPTVersionMissing
     case chatGPTExecutableMissing(URL)
     case bridgeMissing
     case chatGPTWouldNotQuit
@@ -316,8 +280,6 @@ private enum LaunchError: LocalizedError {
         switch self {
         case .chatGPTNotInstalled:
             "ChatGPT.app is not installed."
-        case .chatGPTVersionMissing:
-            "The installed ChatGPT version could not be determined."
         case .chatGPTExecutableMissing(let url):
             "The ChatGPT executable is missing at \(url.path)."
         case .bridgeMissing:

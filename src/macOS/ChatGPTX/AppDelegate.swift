@@ -5,7 +5,13 @@ import Darwin
 enum ChatGPTXApplication {
     static func main() {
         let application = NSApplication.shared
-        let delegate = AppDelegate()
+        let options = LaunchOptions(
+            arguments: Array(CommandLine.arguments.dropFirst())
+        )
+        application.setActivationPolicy(
+            options.isAPITest ? .prohibited : .regular
+        )
+        let delegate = AppDelegate(options: options)
 
         application.delegate = delegate
         application.run()
@@ -13,39 +19,78 @@ enum ChatGPTXApplication {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let options: LaunchOptions
     private var launchTask: Task<Void, Never>?
+    private var windowController: LauncherWindowController?
+
+    init(options: LaunchOptions) {
+        self.options = options
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let arguments = Array(CommandLine.arguments.dropFirst())
-        let isAPITest = arguments.contains("--test-api")
-        let chatGPTAppArgument = arguments.first {
-            $0.hasPrefix("--chatgpt-app=")
+        if options.isAPITest {
+            runAPITest()
+            return
         }
-        let chatGPTAppURL = chatGPTAppArgument.map {
-            URL(fileURLWithPath: String($0.dropFirst("--chatgpt-app=".count)))
-        }
-        let chatGPTArguments = isAPITest
-            ? arguments.filter {
-                $0 != "--test-api" && !$0.hasPrefix("--chatgpt-app=")
-            }
-            : []
 
+        installMainMenu()
+        let windowController = LauncherWindowController(
+            applicationURL: options.applicationURL
+        )
+        windowController.onOpenChatGPT = { [weak self] in
+            self?.openChatGPT()
+        }
+        self.windowController = windowController
+        windowController.showWindow(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        if !flag {
+            windowController?.showWindow(nil)
+        }
+        return true
+    }
+
+    private func runAPITest() {
         launchTask = Task {
             do {
-                let mode: ChatGPTLaunchMode = isAPITest ? .apiTest : .normal
                 try await ChatGPTLauncher().launch(
-                    mode: mode,
-                    arguments: chatGPTArguments,
-                    applicationURL: chatGPTAppURL
+                    mode: .apiTest,
+                    arguments: options.chatGPTArguments,
+                    applicationURL: options.applicationURL
                 )
                 NSApplication.shared.terminate(nil)
             } catch {
-                if isAPITest {
-                    FileHandle.standardError.write(
-                        Data("\(error.localizedDescription)\n".utf8)
-                    )
-                    Darwin.exit(EXIT_FAILURE)
-                }
+                FileHandle.standardError.write(
+                    Data("\(error.localizedDescription)\n".utf8)
+                )
+                Darwin.exit(EXIT_FAILURE)
+            }
+        }
+    }
+
+    private func openChatGPT() {
+        guard launchTask == nil else { return }
+        windowController?.setLaunching(true)
+
+        launchTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                launchTask = nil
+                windowController?.setLaunching(false)
+                windowController?.refreshStatus()
+            }
+
+            do {
+                try await ChatGPTLauncher().launch(
+                    mode: .normal,
+                    applicationURL: options.applicationURL
+                )
+            } catch {
                 showLaunchError(error)
             }
         }
@@ -56,10 +101,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.alertStyle = .critical
         alert.messageText = "ChatGPTX couldn’t launch ChatGPT"
         alert.informativeText = error.localizedDescription
-        alert.addButton(withTitle: "Quit")
+        alert.addButton(withTitle: "OK")
 
         NSApplication.shared.activate(ignoringOtherApps: true)
-        alert.runModal()
-        NSApplication.shared.terminate(nil)
+        if let window = windowController?.window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    private func installMainMenu() {
+        let mainMenu = NSMenu()
+
+        let applicationItem = NSMenuItem()
+        mainMenu.addItem(applicationItem)
+        let applicationMenu = NSMenu(title: "ChatGPTX")
+        applicationItem.submenu = applicationMenu
+        applicationMenu.addItem(
+            withTitle: "About ChatGPTX",
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: ""
+        )
+        applicationMenu.addItem(.separator())
+        applicationMenu.addItem(
+            withTitle: "Hide ChatGPTX",
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: "h"
+        )
+        applicationMenu.addItem(
+            withTitle: "Quit ChatGPTX",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+
+        let windowItem = NSMenuItem()
+        mainMenu.addItem(windowItem)
+        let windowMenu = NSMenu(title: "Window")
+        windowItem.submenu = windowMenu
+        windowMenu.addItem(
+            withTitle: "Minimize",
+            action: #selector(NSWindow.performMiniaturize(_:)),
+            keyEquivalent: "m"
+        )
+        windowMenu.addItem(
+            withTitle: "Bring All to Front",
+            action: #selector(NSApplication.arrangeInFront(_:)),
+            keyEquivalent: ""
+        )
+        NSApplication.shared.windowsMenu = windowMenu
+        NSApplication.shared.mainMenu = mainMenu
     }
 }

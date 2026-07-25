@@ -3,7 +3,7 @@ name: ChatGPTX
 options:
   createIntermediateGroups: true
   deploymentTarget:
-    macOS: "14.0"
+    macOS: "26.0"
 
 settings:
   base:
@@ -31,6 +31,5 @@ targets:
         PRODUCT_NAME: ChatGPTX
         GENERATE_INFOPLIST_FILE: true
         INFOPLIST_KEY_CFBundleDisplayName: ChatGPTX
-        INFOPLIST_KEY_LSUIElement: true
         ENABLE_HARDENED_RUNTIME: true
         CODE_SIGN_STYLE: Automatic
