@@ -23,8 +23,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 mkdir -p "$BUILD_ROOT/generated" "$OUTPUT_DIR"
+APP_PATH="$OUTPUT_DIR/ChatGPTX.app"
+rm -rf "$APP_PATH"
 ln -s "$REPO_ROOT/src/platform" "$BUILD_ROOT/platform"
 ln -s "$MACOS_DIR/ChatGPTX" "$BUILD_ROOT/generated/ChatGPTX"
+ln -s "$MACOS_DIR/scripts" "$BUILD_ROOT/generated/scripts"
 
 xcodegen generate \
   --spec "$MACOS_DIR/project.yaml" \
@@ -37,12 +40,10 @@ xcodebuild \
   -configuration "$CONFIGURATION" \
   -derivedDataPath "$BUILD_ROOT/DerivedData" \
   CONFIGURATION_BUILD_DIR="$OUTPUT_DIR" \
+  CHATGPTX_REPO_ROOT="$REPO_ROOT" \
   build
 
-APP_PATH="$OUTPUT_DIR/ChatGPTX.app"
 [[ -d "$APP_PATH" ]] || {
   echo "build succeeded without producing $APP_PATH" >&2
   exit 1
 }
-
-"$REPO_ROOT/src/extensions/build.sh"

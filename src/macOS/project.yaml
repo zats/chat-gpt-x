@@ -16,15 +16,6 @@ targets:
     platform: macOS
     sources:
       - path: ChatGPTX
-      - path: ../platform/bridge
-        type: folder
-        buildPhase: resources
-      - path: ../platform/runtime
-        type: folder
-        buildPhase: resources
-      - path: ../platform/bindings
-        type: folder
-        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chatgptx.launcher
@@ -33,3 +24,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: ChatGPTX
         ENABLE_HARDENED_RUNTIME: true
         CODE_SIGN_STYLE: Automatic
+    postBuildScripts:
+      - name: Embed component seed
+        script: '"$PROJECT_DIR/scripts/embed-component-seed.sh"'
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/component-seed"

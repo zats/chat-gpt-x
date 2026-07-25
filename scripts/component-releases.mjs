@@ -98,7 +98,16 @@ export function createReleasePlan({
   });
 
   const publicAffectedExtensionIds = [...affected.extensions]
-    .filter((id) => extensionManifests.get(id)?.private !== true)
+    .filter((id) => {
+      const manifest = extensionManifests.get(id);
+      if (manifest) return manifest.private !== true;
+      const previous = readJsonAtRevision(
+        root,
+        base,
+        `src/extensions/${id}/package.json`,
+      );
+      return previous?.private !== true;
+    })
     .sort();
   const hasPublishedComponentChanges =
     affected.chatgptApi ||
@@ -172,7 +181,15 @@ export function createReleasePlan({
 
   for (const id of [...affected.extensions].sort()) {
     const manifest = extensionManifests.get(id);
-    if (!manifest) throw new Error(`Missing extension ${id}`);
+    if (!manifest) {
+      const previous = readJsonAtRevision(
+        root,
+        base,
+        `src/extensions/${id}/package.json`,
+      );
+      if (previous?.private === true) continue;
+      throw new Error(`Missing extension ${id}`);
+    }
     if (!bootstrap) {
       const previous = readJsonAtRevision(
         root,

@@ -7,45 +7,61 @@ const path = require("node:path");
 const test = require("node:test");
 const { readExtensionEntries } = require("./extension-launch-config.cjs");
 
-test("launch configuration selects only the requested extension", () => {
+const versions = {
+  extensions: [
+    {
+      id: "thread-colors",
+      enabled: true,
+      path: "components/extensions/thread-colors/0.1.1",
+    },
+  ],
+};
+
+test("locked extensions are resolved in locked order", () => {
+  const extensionsDirectory = "/tmp/codex/extensions";
+  assert.deepEqual(
+    readExtensionEntries({
+      versions,
+      extensionsDirectory,
+    }),
+    [
+      {
+        id: "thread-colors",
+        enabled: true,
+        path: path.join(
+          extensionsDirectory,
+          "components/extensions/thread-colors/0.1.1/contents/main.js",
+        ),
+      },
+    ],
+  );
+});
+
+test("launch configuration replaces the complete extension set", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "chatgptx-launch-config."));
   const configurationFile = path.join(root, "launch.json");
-  const settingsFile = path.join(root, "settings.json");
-  const extensionsDirectory = path.join(root, "extensions");
+  const extensionPath = path.join(root, "api-test-suite/contents/main.js");
 
   try {
     fs.writeFileSync(
       configurationFile,
-      JSON.stringify({ extensions: ["api-test-suite"] }),
-    );
-    fs.writeFileSync(
-      settingsFile,
       JSON.stringify({
-        extensions: [
-          {
-            id: "thread-colors",
-            enabled: true,
-            path: "/ignored/thread-colors.js",
-          },
-        ],
+        schemaVersion: 1,
+        extensions: [{ id: "api-test-suite", path: extensionPath }],
       }),
     );
 
     assert.deepEqual(
       readExtensionEntries({
         configurationFile,
-        settingsFile,
-        extensionsDirectory,
+        versions,
+        extensionsDirectory: path.join(root, "extensions"),
       }),
       [
         {
           id: "api-test-suite",
           enabled: true,
-          path: path.join(
-            extensionsDirectory,
-            "api-test-suite",
-            "contents/main.js",
-          ),
+          path: extensionPath,
         },
       ],
     );
@@ -55,31 +71,18 @@ test("launch configuration selects only the requested extension", () => {
   }
 });
 
-test("invalid launch configuration does not use persistent settings", () => {
+test("invalid launch configuration is rejected and consumed", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "chatgptx-launch-config."));
   const configurationFile = path.join(root, "launch.json");
-  const settingsFile = path.join(root, "settings.json");
 
   try {
     fs.writeFileSync(configurationFile, JSON.stringify({ extensions: null }));
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify({
-        extensions: [
-          {
-            id: "thread-colors",
-            enabled: true,
-            path: "/thread-colors.js",
-          },
-        ],
-      }),
-    );
 
     assert.throws(
       () =>
         readExtensionEntries({
           configurationFile,
-          settingsFile,
+          versions,
           extensionsDirectory: path.join(root, "extensions"),
         }),
       /Invalid ChatGPTX launch configuration/,

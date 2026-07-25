@@ -7,13 +7,11 @@
  * renderer contexts).
  *
  * Responsibilities:
- *  - pick the bindings directory matching the app's own version
- *    (src/platform/bindings/<app.getVersion()>/); if none exists, log and
- *    stay inert (bindings are stale)
+ *  - load the exact API, binding, and extension set selected by the launch
+ *    versions lock
  *  - inject the binding host into app windows (webContents.executeJavaScript
  *    is privileged and bypasses the page CSP)
- *  - load enabled extensions from the resolved Codex home
- *    (in settings order = load order) and activate them through the host
+ *  - activate locked extensions in order through the host
  *  - report api-test-suite results in separate files per launch and renderer
  *
  * Logs JSON lines beneath the resolved Codex home.
@@ -39,12 +37,11 @@ function init() {
     readExtensionEntries,
   } = require("../runtime/extension-launch-config.cjs");
 
-  const PLATFORM_ROOT = path.join(__dirname, "..");
   const CODEX_HOME = resolveCodexHome();
   const STATE_DIR = resolveExtensionsDirectory();
   const LOG_DIR = path.join(STATE_DIR, "log");
   const LOG_FILE = path.join(LOG_DIR, `bridge-${process.pid}.log`);
-  const SETTINGS_FILE = path.join(STATE_DIR, "settings.json");
+  const VERSIONS_LOCK_FILE = process.env.CHATGPTX_VERSIONS_LOCK;
   const LAUNCH_CONFIGURATION_FILE =
     process.env.CHATGPTX_LAUNCH_CONFIGURATION;
   const RESULTS_DIR = path.join(LOG_DIR, "test-results", String(process.pid));
@@ -69,6 +66,71 @@ function init() {
     node: process.version,
   });
 
+  let versions;
+  try {
+    if (!VERSIONS_LOCK_FILE) {
+      throw new Error("CHATGPTX_VERSIONS_LOCK is required");
+    }
+    versions = JSON.parse(fs.readFileSync(VERSIONS_LOCK_FILE, "utf8"));
+    validateVersionsLock(versions);
+    log("versions-lock-loaded", {
+      generation: versions.generation,
+      file: VERSIONS_LOCK_FILE,
+    });
+  } catch (error) {
+    log("versions-lock-invalid", { error: String(error) });
+    return;
+  }
+
+  function componentPath(relativePath) {
+    if (
+      typeof relativePath !== "string" ||
+      path.isAbsolute(relativePath) ||
+      relativePath.split(/[\\/]/).includes("..")
+    ) {
+      throw new Error(`Invalid component path: ${String(relativePath)}`);
+    }
+    const resolved = path.resolve(STATE_DIR, relativePath);
+    if (!resolved.startsWith(path.resolve(STATE_DIR) + path.sep)) {
+      throw new Error(`Component path escapes the store: ${relativePath}`);
+    }
+    return resolved;
+  }
+
+  function validateVersionsLock(value) {
+    if (
+      !value ||
+      value.schemaVersion !== 1 ||
+      !Number.isSafeInteger(value.generation) ||
+      value.generation < 1 ||
+      typeof value.chatgptApi?.version !== "string" ||
+      typeof value.chatgptApi?.path !== "string" ||
+      typeof value.binding?.chatgpt !== "string" ||
+      typeof value.binding?.version !== "string" ||
+      value.binding?.chatgptApi !== value.chatgptApi.version ||
+      typeof value.binding?.path !== "string" ||
+      !Array.isArray(value.extensions)
+    ) {
+      throw new Error("Invalid component versions lock");
+    }
+    componentPath(value.chatgptApi.path);
+    componentPath(value.binding.path);
+    const ids = new Set();
+    for (const extension of value.extensions) {
+      if (
+        typeof extension?.id !== "string" ||
+        !/^[a-z0-9][a-z0-9._-]*$/i.test(extension.id) ||
+        ids.has(extension.id) ||
+        typeof extension?.path !== "string" ||
+        typeof extension?.enabled !== "boolean"
+      ) {
+        throw new Error("Invalid locked extension");
+      }
+      ids.add(extension.id);
+      componentPath(extension.path);
+    }
+  }
+
   const Module = require("node:module");
   const originalLoad = Module._load;
   let electronWrapper;
@@ -85,19 +147,32 @@ function init() {
     return electronWrapper ?? loaded;
   };
 
-  function injectIntoContents(contents, hostSource, extensions) {
+  async function injectIntoContents(contents, hostSource, extensions) {
     const url = contents.getURL();
     if (!url.startsWith("app:")) return;
-    contents.executeJavaScript(hostSource).catch((error) => {
+    try {
+      await contents.executeJavaScript(hostSource);
+      const hostReady = await contents.executeJavaScript(
+        "Boolean(window.__CGPTX_HOST__)",
+      );
+      if (!hostReady) throw new Error("ChatGPTX host did not initialize");
+    } catch (error) {
       log("host-injection-failed", { error: String(error) });
-    });
+      return;
+    }
     for (const extension of extensions) {
-      contents.executeJavaScript(extension.wrapped).catch((error) => {
+      try {
+        const activated = await contents.executeJavaScript(extension.wrapped);
+        if (activated !== true) {
+          throw new Error("Extension did not activate");
+        }
+      } catch (error) {
         log("extension-injection-failed", {
           id: extension.id,
           error: String(error),
         });
-      });
+        return;
+      }
     }
     log("injected", { url, extensions: extensions.map((e) => e.id) });
   }
@@ -108,36 +183,37 @@ function init() {
     if (!app || !BrowserWindow) return undefined;
 
     const version = app.getVersion();
-    const hostFile = path.join(
-      PLATFORM_ROOT,
-      "bindings",
-      version,
-      "host.js",
-    );
+    const hostFile = path.join(componentPath(versions.binding.path), "host.js");
     let hostSource = null;
-    try {
-      hostSource = fs.readFileSync(hostFile, "utf8");
-      log("bindings-found", { version, hostFile });
-    } catch {
+    if (version !== versions.binding.chatgpt) {
       log("bindings-missing", { version, hostFile });
+    } else {
+      try {
+        hostSource = fs.readFileSync(hostFile, "utf8");
+        log("bindings-found", { version, hostFile });
+      } catch {
+        log("bindings-missing", { version, hostFile });
+      }
     }
 
-    const extensions = readExtensionEntries({
+    const extensionEntries = readExtensionEntries({
       configurationFile: LAUNCH_CONFIGURATION_FILE,
-      settingsFile: SETTINGS_FILE,
+      versions,
       extensionsDirectory: STATE_DIR,
-    })
+    });
+    const extensions = extensionEntries
       .filter((entry) => entry && entry.enabled && entry.id && entry.path)
       .map((entry) => {
         try {
           const code = fs.readFileSync(entry.path, "utf8");
+          log("extension-loaded", { id: entry.id, path: entry.path });
           return {
             id: entry.id,
             wrapped:
               ";(() => { const module = { exports: {} }; const exports = module.exports; try {\n" +
               code +
               `\nwindow.__CGPTX_HOST__?.registerExtension(${JSON.stringify(entry.id)}, module.exports);` +
-              `\n} catch (e) { console.error("[cgptx-bridge] extension ${entry.id} failed to load", e); } })();`,
+              `\nreturn true; } catch (e) { console.error("[cgptx-bridge] extension ${entry.id} failed to load", e); return false; } })();`,
           };
         } catch (error) {
           log("extension-unreadable", { id: entry.id, error: String(error) });
@@ -161,7 +237,7 @@ function init() {
       ) {
         throw new Error("Unknown extension storage scope");
       }
-      return path.join(STATE_DIR, extensionId);
+      return path.join(STATE_DIR, "state", extensionId);
     }
 
     function scopedPath(extensionId, relativePath) {
@@ -284,9 +360,9 @@ function init() {
       const attach = (contents) => {
         if (contents.__cgptxAttached) return;
         contents.__cgptxAttached = true;
-        contents.on("dom-ready", () =>
-          injectIntoContents(contents, hostSource, extensions),
-        );
+        contents.on("dom-ready", () => {
+          void injectIntoContents(contents, hostSource, extensions);
+        });
       };
       webContents.getAllWebContents().forEach(attach);
       app.on("web-contents-created", (_event, contents) => attach(contents));
