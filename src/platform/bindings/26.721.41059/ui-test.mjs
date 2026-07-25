@@ -1814,14 +1814,13 @@ async function selectThreadByKind(kind) {
   );
 }
 
+await waitFor('globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true', 90000);
 let selectedThreadId = selectThreadId;
 if (selectThreadKind) {
   selectedThreadId = await selectThreadByKind(selectThreadKind);
 } else if (selectedThreadId) {
   await selectThread(selectedThreadId);
 }
-await waitFor('globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true', 90000);
-if (selectedThreadId) await selectThread(selectedThreadId);
 const semanticResults = await evaluate('globalThis.__CGPTX_TEST_RESULTS__');
 const failedSemantic = semanticResults.filter((result) => !result.pass);
 if (failedSemantic.length > 0) {
