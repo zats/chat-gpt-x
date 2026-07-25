@@ -53,6 +53,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
       - name: Validate affected components
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -60,6 +63,9 @@ jobs:
         run: |
           node scripts/component-releases.mjs "$BASE_SHA" "$HEAD_SHA" \
             > "$RUNNER_TEMP/component-releases.json"
+          node scripts/build-component-releases.mjs \
+            "$RUNNER_TEMP/component-releases.json" \
+            "$RUNNER_TEMP/component-release-artifacts"
           jq \
             '{generation, chatgptApi, bindings, extensions}' \
             "$RUNNER_TEMP/component-releases.json"
@@ -84,6 +90,8 @@ jobs:
         with:
           node-version: 22
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
       - name: Build release artifacts
         env:
           BASE_SHA: ${{ github.event.before }}
@@ -101,4 +109,11 @@ jobs:
         run: >-
           scripts/publish-component-releases.sh
           "$RUNNER_TEMP/component-release-artifacts/artifacts.json"
+          "$GITHUB_SHA"
+      - name: Publish verified update index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          scripts/publish-update-index.sh
+          updates/latest.json
           "$GITHUB_SHA"

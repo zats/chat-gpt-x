@@ -203,6 +203,8 @@ jobs:
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
 
       - uses: actions/setup-node@v4
         with:
@@ -338,7 +340,7 @@ jobs:
           Exact Sparkle URL: $DOWNLOAD_URL
           Version-watcher issue: #$ISSUE_NUMBER
 
-          Follow the skill's entire completion gate. Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, extension source files, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. After the live suites pass, increment each validated extension version and expand its compatibility.chatgpt range in package.json. Update src/platform/bindings/manifest.json and updates/latest.json. Increment the update generation once and use predictable release tags.
+          Follow the skill's entire completion gate. Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, extension source files, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. After the live suites pass, increment each validated public extension version and expand its compatibility.chatgpt range in package.json. Update src/platform/bindings/manifest.json and the schema-v2 maps in updates/latest.json. Increment the update generation once, preserve every existing API and binding entry, add the new binding by ChatGPT version, and use predictable release tags. Set new sha256 fields to 64 zeroes; the workflow replaces them with deterministic archive hashes before validation.
 
           The authenticated test accounts are available only as opaque files:
           - $AUTH_ROOT/primary.json
@@ -368,6 +370,12 @@ jobs:
           agent_exit_code="${PIPESTATUS[0]}"
           set -e
           echo "exit-code=$agent_exit_code" >> "$GITHUB_OUTPUT"
+
+      - name: Finalize update index hashes
+        if: steps.agent.outputs.exit-code == '0'
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: scripts/refresh-update-index-hashes.sh "$BASE_SHA"
 
       - name: Validate agent change scope
         id: scope
@@ -545,6 +553,14 @@ jobs:
           name: ${{ needs.generate.outputs.patch-artifact }}
           path: ${{ runner.temp }}/binding-patch
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
       - name: Commit binding and attempt rebase
         id: binding
         env:
@@ -581,11 +597,6 @@ jobs:
           done < <(git ls-files --stage) \
             > "$RUNNER_TEMP/rebase-index-before.txt"
           echo "conflicted=true" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-node@v4
-        if: steps.binding.outputs.conflicted == 'true'
-        with:
-          node-version: 22
 
       - name: Download refreshed authentication handoff
         if: steps.binding.outputs.conflicted == 'true'
@@ -659,7 +670,7 @@ jobs:
           Conflicted files:
           $conflicts
 
-          Preserve the current main changes and the generated binding changes. Follow the repository versioning and update-manifest invariants. For an extension manifest whose compatibility range expands, increment from the current main version. Increment updates/latest.json generation exactly once from current main and keep every release entry aligned with its component manifest.
+          Preserve the current main changes and the generated binding changes. Follow the repository versioning and update-manifest invariants. For a public extension manifest whose compatibility range expands, increment from the current main version. Preserve the schema-v2 maps and every existing API and binding entry. Increment updates/latest.json generation exactly once from current main, add the new binding by ChatGPT version, and keep every release entry aligned with its component manifest. A changed release may use 64 zeroes for sha256 because the workflow computes its deterministic archive hash after the rebase.
 
           Modify only the conflicted files listed above. Do not stage files, commit, continue or abort the rebase, push, inspect authentication, weaken validation, or modify any non-conflicted file. Remove every conflict marker and run git diff --check. Finish only when the conflicted files contain the complete resolution.
           PROMPT
@@ -760,6 +771,12 @@ jobs:
             [[ -z "$(git diff --name-only --diff-filter=U)" ]]
             git diff --cached --check
             GIT_EDITOR=true git rebase --continue
+          fi
+
+          scripts/refresh-update-index-hashes.sh "$LATEST_MAIN_SHA"
+          if ! git diff --quiet -- updates/latest.json; then
+            git add updates/latest.json
+            git commit --amend --no-edit
           fi
 
           git diff --check "$LATEST_MAIN_SHA"

@@ -1,32 +1,79 @@
 {
-  "schemaVersion": 1,
-  "generation": 9,
-  "chatgptApi": {
-    "version": "1.0.2",
-    "release": "chatgpt-api-v1.0.2"
+  "schemaVersion": 2,
+  "generation": 10,
+  "releaseBaseURL": "https://github.com/zats/chat-gpt-x/releases/download",
+  "chatgptApis": {
+    "1.0.0": {
+      "release": "chatgpt-api-v1.0.0",
+      "sha256": "d883a506485e19f6baca745a916f06566c7419aa93a2a11879934edfdf6451d5"
+    },
+    "1.0.2": {
+      "release": "chatgpt-api-v1.0.2",
+      "sha256": "dfd30dfe193c2740de87fc174a2483931f8e7d205253c4a357eabdc5dee559e0"
+    }
   },
-  "binding": {
-    "version": "1.0.0",
-    "chatgpt": "26.721.41059",
-    "chatgptApi": "1.0.2",
-    "release": "binding-26.721.41059-v1.0.0"
+  "bindings": {
+    "26.715.52143": {
+      "version": "1.0.0",
+      "chatgptApi": "1.0.0",
+      "release": "binding-26.715.52143-v1.0.0",
+      "sha256": "417f6f07e50e74db35657f8c8a955054407381669f7057a511d56e4428004934"
+    },
+    "26.715.61943": {
+      "version": "1.0.0",
+      "chatgptApi": "1.0.0",
+      "release": "binding-26.715.61943-v1.0.0",
+      "sha256": "d4e03345f9d73e9b1520af30127006f5e6071c5c4805abc36df27ac6ede10966"
+    },
+    "26.715.70719": {
+      "version": "1.0.0",
+      "chatgptApi": "1.0.0",
+      "release": "binding-26.715.70719-v1.0.0",
+      "sha256": "4a1715be7b5c8d4ab4a50a51f54ec5575806b60964c2c92644daf055c0f593ee"
+    },
+    "26.715.72359": {
+      "version": "1.0.0",
+      "chatgptApi": "1.0.0",
+      "release": "binding-26.715.72359-v1.0.0",
+      "sha256": "5e972782e778958fde4631bf4c813ca8833220e28659377e8fb5fa7071f2a044"
+    },
+    "26.721.30844": {
+      "version": "1.0.0",
+      "chatgptApi": "1.0.0",
+      "release": "binding-26.721.30844-v1.0.0",
+      "sha256": "f4d5958d803137eb9ec7a99a2c84b442047e5f175756e684d4d250ba7540ca42"
+    },
+    "26.721.31836": {
+      "version": "1.0.3",
+      "chatgptApi": "1.0.2",
+      "release": "binding-26.721.31836-v1.0.3",
+      "sha256": "6afe657f5764f41222e3ee13f0824656febdda5a7e7c8adee4d42aef5c9bcacc"
+    },
+    "26.721.41059": {
+      "version": "1.0.0",
+      "chatgptApi": "1.0.2",
+      "release": "binding-26.721.41059-v1.0.0",
+      "sha256": "1f13b304602f46fa8c3073411d0d3b1fcb879a35c40b1233b0dc921dedf3f468"
+    }
   },
   "extensions": {
-    "api-test-suite": {
-      "version": "0.0.4",
-      "release": "extension-api-test-suite-v0.0.4"
-    },
     "multiple-accounts": {
       "version": "0.1.1",
-      "release": "extension-multiple-accounts-v0.1.1"
-    },
-    "release-test-fixture": {
-      "version": "0.0.5",
-      "release": "extension-release-test-fixture-v0.0.5"
+      "compatibility": {
+        "chatgpt": ">=26.715.52143 <=26.721.41059",
+        "chatgptApi": "^1.0.0"
+      },
+      "release": "extension-multiple-accounts-v0.1.1",
+      "sha256": "0390d39068ec57e9ca312b6a261ada92d91f9d88c4f87ce917aa1597ccf15a2f"
     },
     "thread-colors": {
       "version": "0.1.1",
-      "release": "extension-thread-colors-v0.1.1"
+      "compatibility": {
+        "chatgpt": ">=26.715.52143 <=26.721.41059",
+        "chatgptApi": "^1.0.0"
+      },
+      "release": "extension-thread-colors-v0.1.1",
+      "sha256": "46fb252a3ac758e9f89cf75db4a07639bcc992d4478403b65cabe558100c9cad"
     }
   }
 }

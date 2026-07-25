@@ -40,11 +40,7 @@ export function releaseTag(component) {
 }
 
 export function isBootstrap(previousLatest, plannerExisted) {
-  return (
-    !plannerExisted ||
-    previousLatest === null ||
-    typeof previousLatest.chatgptApi?.release !== "string"
-  );
+  return !plannerExisted || previousLatest === null;
 }
 
 export function classifyPath(filePath) {
@@ -90,22 +86,35 @@ export function createReleasePlan({
     revisionHasPath(root, base, "scripts/component-releases.mjs"),
   );
   if (bootstrap) markAllComponentsAffected(affected, root);
-  const hasComponentChanges =
-    affected.chatgptApi ||
-    affected.bindings.size > 0 ||
-    affected.extensions.size > 0;
-
-  validateGeneration({
-    affected: hasComponentChanges,
-    bootstrap,
-    changedPaths,
-    latest,
-    previousLatest,
-  });
 
   const platform = readJson(root, "src/platform/manifest.json");
   requireVersion(platform.version, "src/platform/manifest.json version");
-  validateLatestApi(latest, platform.version);
+  const bindingManifests = readBindingManifests(root);
+  const extensionManifests = readExtensionManifests(root);
+  validateUpdateIndex(latest, {
+    platform,
+    bindingManifests,
+    extensionManifests,
+  });
+
+  const publicAffectedExtensionIds = [...affected.extensions]
+    .filter((id) => extensionManifests.get(id)?.private !== true)
+    .sort();
+  const hasPublishedComponentChanges =
+    affected.chatgptApi ||
+    affected.bindings.size > 0 ||
+    publicAffectedExtensionIds.length > 0;
+  const indexMigration =
+    !bootstrap && previousLatest?.schemaVersion !== latest.schemaVersion;
+
+  validateGeneration({
+    affected: hasPublishedComponentChanges,
+    bootstrap,
+    changedPaths,
+    indexMigration,
+    latest,
+    previousLatest,
+  });
 
   if (affected.chatgptApi && !bootstrap) {
     const previous = readJsonAtRevision(
@@ -117,7 +126,6 @@ export function createReleasePlan({
     requireIncrement(previous.version, platform.version, "ChatGPT API");
   }
 
-  const bindingManifests = readBindingManifests(root);
   const pinned = readJson(root, "src/platform/bindings/manifest.json");
   requireChatGPT(pinned.chatgpt, "pinned ChatGPT version");
   const pinnedBinding = bindingManifests.get(pinned.chatgpt);
@@ -158,19 +166,11 @@ export function createReleasePlan({
         chatgpt,
         version: manifest.version,
         chatgptApi: manifest.chatgptApi,
-        release: releaseTag({
-          kind: "binding",
-          chatgpt,
-          version: manifest.version,
-        }),
+        ...latest.bindings[chatgpt],
       };
     });
 
-  validateLatestBinding(latest, bindingManifests, bindings);
-
-  const extensionManifests = readExtensionManifests(root);
-  validateLatestExtensions(latest, extensionManifests);
-  const extensions = [...affected.extensions].sort().map((id) => {
+  for (const id of [...affected.extensions].sort()) {
     const manifest = extensionManifests.get(id);
     if (!manifest) throw new Error(`Missing extension ${id}`);
     if (!bootstrap) {
@@ -188,15 +188,15 @@ export function createReleasePlan({
         );
       }
     }
+  }
+
+  const extensions = publicAffectedExtensionIds.map((id) => {
+    const manifest = extensionManifests.get(id);
     return {
       kind: "extension",
       id,
       version: manifest.version,
-      release: releaseTag({
-        kind: "extension",
-        id,
-        version: manifest.version,
-      }),
+      ...latest.extensions[id],
     };
   });
 
@@ -214,7 +214,7 @@ export function createReleasePlan({
   }
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generation: latest.generation,
     base,
     head,
@@ -223,10 +223,7 @@ export function createReleasePlan({
       ? {
           kind: "chatgptApi",
           version: platform.version,
-          release: releaseTag({
-            kind: "chatgptApi",
-            version: platform.version,
-          }),
+          ...latest.chatgptApis[platform.version],
         }
       : null,
     bindings,
@@ -383,6 +380,7 @@ function validateGeneration({
   affected,
   bootstrap,
   changedPaths,
+  indexMigration,
   latest,
   previousLatest,
 }) {
@@ -390,15 +388,16 @@ function validateGeneration({
     throw new Error("updates/latest.json generation must be a positive integer");
   }
   const latestChanged = changedPaths.includes("updates/latest.json");
-  if (affected && !latestChanged && !bootstrap) {
+  const requiresIndexChange = affected || indexMigration;
+  if (requiresIndexChange && !latestChanged && !bootstrap) {
     throw new Error("Component changes must update updates/latest.json");
   }
-  if (!affected && latestChanged) {
+  if (!requiresIndexChange && latestChanged && !bootstrap) {
     throw new Error(
       "updates/latest.json changed without an API, binding, or extension change",
     );
   }
-  if (affected && !bootstrap) {
+  if (requiresIndexChange && !bootstrap) {
     const expected = previousLatest.generation + 1;
     if (latest.generation !== expected) {
       throw new Error(
@@ -406,14 +405,6 @@ function validateGeneration({
       );
     }
   }
-}
-
-function validateLatestApi(latest, version) {
-  const expected = {
-    version,
-    release: releaseTag({ kind: "chatgptApi", version }),
-  };
-  requireExactObject(latest.chatgptApi, expected, "latest ChatGPT API");
 }
 
 function readBindingManifests(root) {
@@ -437,43 +428,6 @@ function readBindingManifests(root) {
     manifests.set(entry.name, manifest);
   }
   return manifests;
-}
-
-function validateLatestBinding(latest, manifests, affected) {
-  const entry = latest.binding;
-  requireVersion(entry?.version, "latest binding version");
-  requireChatGPT(entry?.chatgpt, "latest binding ChatGPT version");
-  requireVersion(entry?.chatgptApi, "latest binding ChatGPT API version");
-  const manifest = manifests.get(entry.chatgpt);
-  if (
-    !manifest ||
-    manifest.version !== entry.version ||
-    manifest.chatgptApi !== entry.chatgptApi
-  ) {
-    throw new Error("updates/latest.json binding does not match its manifest");
-  }
-  const expectedRelease = releaseTag({
-    kind: "binding",
-    chatgpt: entry.chatgpt,
-    version: entry.version,
-  });
-  if (entry.release !== expectedRelease) {
-    throw new Error(
-      `updates/latest.json binding release must be ${expectedRelease}`,
-    );
-  }
-  if (
-    affected.length > 0 &&
-    !affected.some(
-      (binding) =>
-        binding.chatgpt === entry.chatgpt &&
-        binding.version === entry.version,
-    )
-  ) {
-    throw new Error(
-      "updates/latest.json binding must identify an affected binding",
-    );
-  }
 }
 
 function readExtensionManifests(root) {
@@ -504,41 +458,151 @@ function readExtensionManifests(root) {
   return manifests;
 }
 
-function validateLatestExtensions(latest, manifests) {
-  const entries = latest.extensions;
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
-    throw new Error("updates/latest.json extensions must be an object");
+export function validateUpdateIndex(
+  latest,
+  { platform, bindingManifests, extensionManifests },
+) {
+  requireExactKeys(
+    latest,
+    [
+      "schemaVersion",
+      "generation",
+      "releaseBaseURL",
+      "chatgptApis",
+      "bindings",
+      "extensions",
+    ],
+    "updates/latest.json",
+  );
+  if (latest.schemaVersion !== 2) {
+    throw new Error("updates/latest.json schemaVersion must be 2");
   }
-  const expectedIds = [...manifests.keys()].sort();
-  const actualIds = Object.keys(entries).sort();
-  if (JSON.stringify(actualIds) !== JSON.stringify(expectedIds)) {
-    throw new Error(
-      "updates/latest.json extensions must contain every extension exactly once",
+  if (
+    latest.releaseBaseURL !==
+    "https://github.com/zats/chat-gpt-x/releases/download"
+  ) {
+    throw new Error("updates/latest.json releaseBaseURL is invalid");
+  }
+
+  const requiredApiVersions = new Set([platform.version]);
+  for (const manifest of bindingManifests.values()) {
+    requiredApiVersions.add(manifest.chatgptApi);
+  }
+  requireExactIds(
+    latest.chatgptApis,
+    [...requiredApiVersions],
+    "ChatGPT API",
+  );
+  for (const version of requiredApiVersions) {
+    requireVersion(version, `ChatGPT API ${version} version`);
+    validateReleaseEntry(
+      latest.chatgptApis[version],
+      releaseTag({ kind: "chatgptApi", version }),
+      `ChatGPT API ${version}`,
     );
   }
-  for (const id of expectedIds) {
-    const version = manifests.get(id).version;
+
+  requireExactIds(
+    latest.bindings,
+    [...bindingManifests.keys()],
+    "binding",
+  );
+  for (const [chatgpt, manifest] of bindingManifests) {
+    const entry = latest.bindings[chatgpt];
+    requireExactKeys(
+      entry,
+      ["version", "chatgptApi", "release", "sha256"],
+      `binding ${chatgpt}`,
+    );
+    if (
+      entry.version !== manifest.version ||
+      entry.chatgptApi !== manifest.chatgptApi
+    ) {
+      throw new Error(`updates/latest.json binding ${chatgpt} is stale`);
+    }
+    validateReleaseEntry(
+      entry,
+      releaseTag({
+        kind: "binding",
+        chatgpt,
+        version: manifest.version,
+      }),
+      `binding ${chatgpt}`,
+      false,
+    );
+  }
+
+  const publicExtensions = [...extensionManifests]
+    .filter(([, manifest]) => manifest.private !== true)
+    .sort(([left], [right]) => left.localeCompare(right));
+  requireExactIds(
+    latest.extensions,
+    publicExtensions.map(([id]) => id),
+    "public extension",
+  );
+  for (const [id, manifest] of publicExtensions) {
+    const entry = latest.extensions[id];
+    requireExactKeys(
+      entry,
+      ["version", "compatibility", "release", "sha256"],
+      `extension ${id}`,
+    );
+    if (entry.version !== manifest.version) {
+      throw new Error(`updates/latest.json extension ${id} is stale`);
+    }
     requireExactObject(
-      entries[id],
-      {
-        version,
-        release: releaseTag({ kind: "extension", id, version }),
-      },
-      `latest extension ${id}`,
+      entry.compatibility,
+      manifest.compatibility,
+      `extension ${id} compatibility`,
+    );
+    validateReleaseEntry(
+      entry,
+      releaseTag({ kind: "extension", id, version: manifest.version }),
+      `extension ${id}`,
+      false,
     );
   }
 }
 
-function requireExactObject(actual, expected, label) {
+function validateReleaseEntry(entry, expectedRelease, label, exact = true) {
+  if (exact) {
+    requireExactKeys(entry, ["release", "sha256"], label);
+  }
+  if (entry.release !== expectedRelease) {
+    throw new Error(`${label} release must be ${expectedRelease}`);
+  }
+  if (!/^[0-9a-f]{64}$/.test(entry.sha256 ?? "")) {
+    throw new Error(`${label} sha256 must be 64 lowercase hexadecimal digits`);
+  }
+}
+
+function requireExactIds(actual, expectedIds, label) {
+  if (!actual || typeof actual !== "object" || Array.isArray(actual)) {
+    throw new Error(`updates/latest.json ${label} entries must be an object`);
+  }
+  const actualIds = Object.keys(actual).sort();
+  const sortedExpectedIds = [...expectedIds].sort();
+  if (JSON.stringify(actualIds) !== JSON.stringify(sortedExpectedIds)) {
+    throw new Error(
+      `updates/latest.json must contain every ${label} exactly once`,
+    );
+  }
+}
+
+function requireExactKeys(actual, expectedKeys, label) {
   if (
     !actual ||
     typeof actual !== "object" ||
     Array.isArray(actual) ||
     JSON.stringify(Object.keys(actual).sort()) !==
-      JSON.stringify(Object.keys(expected).sort())
+      JSON.stringify([...expectedKeys].sort())
   ) {
     throw new Error(`${label} has unexpected fields`);
   }
+}
+
+function requireExactObject(actual, expected, label) {
+  requireExactKeys(actual, Object.keys(expected), label);
   for (const [key, value] of Object.entries(expected)) {
     if (actual[key] !== value) {
       throw new Error(`${label} ${key} must be ${value}`);

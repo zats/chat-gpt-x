@@ -1,7 +1,8 @@
 {
   "id": "release-test-fixture",
   "name": "Release Test Fixture",
-  "version": "0.0.5",
+  "version": "0.0.6",
+  "private": true,
   "description": "Internal no-op extension used to validate extension creation and update releases.",
   "main": "contents/main.js",
   "compatibility": {

@@ -6,6 +6,7 @@ import {
   compareVersions,
   isBootstrap,
   releaseTag,
+  validateUpdateIndex,
 } from "./component-releases.mjs";
 
 test("classifies predictable component paths", () => {
@@ -76,4 +77,100 @@ test("bootstraps when the release planner did not exist at the base", () => {
   assert.equal(isBootstrap(released, false), true);
   assert.equal(isBootstrap(released, true), false);
   assert.equal(isBootstrap(null, true), true);
+});
+
+test("validates the schema-v2 public component index", () => {
+  const bindingManifests = new Map([
+    [
+      "26.721.41059",
+      {
+        version: "1.0.0",
+        chatgpt: "26.721.41059",
+        chatgptApi: "1.0.2",
+      },
+    ],
+  ]);
+  const extensionManifests = new Map([
+    [
+      "api-test-suite",
+      {
+        id: "api-test-suite",
+        version: "0.0.5",
+        private: true,
+        compatibility: {
+          chatgpt: "26.721.41059",
+          chatgptApi: "1.0.2",
+        },
+      },
+    ],
+    [
+      "thread-colors",
+      {
+        id: "thread-colors",
+        version: "0.1.1",
+        compatibility: {
+          chatgpt: "26.721.41059",
+          chatgptApi: "^1.0.0",
+        },
+      },
+    ],
+  ]);
+  const index = {
+    schemaVersion: 2,
+    generation: 10,
+    releaseBaseURL:
+      "https://github.com/zats/chat-gpt-x/releases/download",
+    chatgptApis: {
+      "1.0.2": {
+        release: "chatgpt-api-v1.0.2",
+        sha256: "a".repeat(64),
+      },
+    },
+    bindings: {
+      "26.721.41059": {
+        version: "1.0.0",
+        chatgptApi: "1.0.2",
+        release: "binding-26.721.41059-v1.0.0",
+        sha256: "b".repeat(64),
+      },
+    },
+    extensions: {
+      "thread-colors": {
+        version: "0.1.1",
+        compatibility: {
+          chatgpt: "26.721.41059",
+          chatgptApi: "^1.0.0",
+        },
+        release: "extension-thread-colors-v0.1.1",
+        sha256: "c".repeat(64),
+      },
+    },
+  };
+
+  assert.doesNotThrow(() =>
+    validateUpdateIndex(index, {
+      platform: { version: "1.0.2" },
+      bindingManifests,
+      extensionManifests,
+    }),
+  );
+
+  index.extensions["api-test-suite"] = {
+    version: "0.0.5",
+    compatibility: {
+      chatgpt: "26.721.41059",
+      chatgptApi: "1.0.2",
+    },
+    release: "extension-api-test-suite-v0.0.5",
+    sha256: "d".repeat(64),
+  };
+  assert.throws(
+    () =>
+      validateUpdateIndex(index, {
+        platform: { version: "1.0.2" },
+        bindingManifests,
+        extensionManifests,
+      }),
+    /every public extension exactly once/,
+  );
 });

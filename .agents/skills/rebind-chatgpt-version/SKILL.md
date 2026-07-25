@@ -100,7 +100,7 @@ Validate in this order:
 4. Run the API test extension together with representative shipped extensions to catch composition failures.
 5. Disable the test extension, then verify the normal shipped-extension flow.
 6. When producing a launcher artifact, build Release, verify its signature, compare the packaged binding files with source, and repeat the critical interaction through the packaged bridge.
-7. After the binding passes, update `src/platform/bindings/manifest.json` to the new version and exact Sparkle enclosure URL. For every extension validated on the new build, expand `compatibility.chatgpt` and increment its extension version; keep its source unchanged. Increment `updates/latest.json` generation once, update those extension entries, and point its binding entry at `binding-<chatgpt>-v1.0.0`. Run `node scripts/validate-pinned-chatgpt.mjs` and `node scripts/component-releases.mjs <base-sha> --worktree`.
+7. After the binding passes, update `src/platform/bindings/manifest.json` to the new version and exact Sparkle enclosure URL. For every public extension validated on the new build, expand `compatibility.chatgpt` and increment its extension version; keep its source unchanged. Increment `updates/latest.json` generation once, preserve its existing schema-v2 API and binding maps, add the new binding keyed by ChatGPT version, and update the changed public-extension entries. Set new `sha256` values to 64 zeroes, then run `scripts/refresh-update-index-hashes.sh <base-sha>` and `node scripts/validate-pinned-chatgpt.mjs`.
 
 Treat a result file as current only when the bridge log from the test PID and timestamp records that exact result. Missing, partial, stale, or unauthenticated results fail the run. Never weaken an assertion to obtain green tests.
 
@@ -120,7 +120,7 @@ Keep version-specific facts in this derivation. Do not copy them into this skill
 
 ## Correcting an existing binding
 
-When fixing a faulty binding for the same ChatGPT build, edit that version's existing directory, increment its semantic `version`, and preserve its exact `chatgpt` and `chatgptApi`. Repeat the live completion gate, increment `updates/latest.json` generation, and use release tag `binding-<chatgpt>-v<version>`. GitHub Releases preserve earlier iterations.
+When fixing a faulty binding for the same ChatGPT build, edit that version's existing directory, increment its semantic `version`, and preserve its exact `chatgpt` and `chatgptApi`. Repeat the live completion gate, increment `updates/latest.json` generation, replace that binding-map entry with release tag `binding-<chatgpt>-v<version>`, and refresh its hash with `scripts/refresh-update-index-hashes.sh <base-sha>`. GitHub Releases preserve earlier iterations.
 
 ## Completion gate
 
@@ -128,7 +128,7 @@ Finish only when all conditions hold:
 
 - The new directory and manifest declare binding version `1.0.0` and match the installed ChatGPT version, API version, and app.asar.
 - The current bindings manifest points to the new version and exact download URL, and its validator passes.
-- `updates/latest.json` identifies the new binding release, and the component release plan passes.
+- `updates/latest.json` preserves schema v2, identifies the new binding release by ChatGPT version, contains the deterministic archive hash, and the component release plan passes.
 - Every referenced current-build module exists and its export was verified.
 - The public API, extension source, and all prior binding directories are unchanged.
 - Every validated extension manifest includes the new ChatGPT version and has an incremented version.

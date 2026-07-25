@@ -22,14 +22,14 @@ src/
       ...
     api-test-suite/             # the mechanical e2e test extension — exercises every public API path
 updates/
-  latest.json                   # latest component versions and predictable GitHub Release tags
+  latest.json                   # schema-v2 component catalog, release tags, compatibility, and hashes
 ```
 
 `src/extensions/build.sh [<extension-id> ...]` is the local build and installation entry point. With no ids it builds all extensions. Each manifest declares `"main": "contents/main.js"`, its semantic `version`, and `compatibility.chatgpt` plus `compatibility.chatgptApi` ranges. The script compiles `<extension-id>.ts` as browser-targeted CommonJS and installs the bundle and manifest in the canonical runtime layout below. The shared `resolveCodexHome()` utility defines Codex home from `CODEX_HOME`, defaulting to `$HOME/.codex`.
 
 The bindings directory name is the app's version (`CFBundleShortVersionString`). Its manifest owns a semantic `version` and pins exact `chatgpt` and `chatgptApi` versions. New ChatGPT versions start at binding version `1.0.0`; corrections increment it. `bindings/manifest.json` points to the newest versioned directory and its exact Sparkle enclosure URL. After validating extensions against a new ChatGPT build, expand their `compatibility.chatgpt` ranges and increment their versions.
 
-CI classifies changes by these paths. A pull request that changes the API, a binding directory, an extension directory, or a shared utility must update affected component versions and `updates/latest.json`. After the tested commit reaches `main`, CI builds immutable archives and creates predictable GitHub Releases:
+CI classifies changes by these paths. A pull request that changes the API, a binding directory, a public extension directory, or a shared utility consumed by public extensions must update affected component versions and `updates/latest.json`. Internal extensions declare `"private": true` and stay out of the public index. After the tested commit reaches `main`, CI builds immutable archives and creates predictable GitHub Releases:
 
 ```
 chatgpt-api-v<version>
@@ -37,7 +37,7 @@ binding-<chatgpt>-v<version>
 extension-<id>-v<version>
 ```
 
-GitHub Releases retain versioned contents. Source directories contain the latest implementation.
+GitHub Releases retain versioned contents. CI then verifies every release and publishes the schema-v2 index as `updates/latest.json` on the stable `updates` release. Source directories contain the latest implementation.
 
 ## Runtime state (on the user's machine)
 

@@ -81,6 +81,13 @@ jq -e \
   '.chatgpt == $version and .downloadUrl == $url' \
   "$REPO_ROOT/src/platform/bindings/manifest.json" >/dev/null
 node "$REPO_ROOT/scripts/validate-pinned-chatgpt.mjs"
+release_validation_root="$(
+  mktemp -d "${RUNNER_TEMP:-/tmp}/chatgptx-rebind-releases.XXXXXX"
+)"
+trap 'rm -rf "$release_validation_root"' EXIT
 node "$REPO_ROOT/scripts/component-releases.mjs" \
   "$BASE_SHA" \
-  --worktree >/dev/null
+  --worktree > "$release_validation_root/plan.json"
+node "$REPO_ROOT/scripts/build-component-releases.mjs" \
+  "$release_validation_root/plan.json" \
+  "$release_validation_root/artifacts"
