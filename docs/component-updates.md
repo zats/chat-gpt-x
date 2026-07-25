@@ -4,7 +4,7 @@
 
 ### Milestone 1
 
-- [ ] Publish the update index and component releases
+- [x] Publish the update index and component releases
 - [ ] Build atomic component storage under `~/.codex/extensions`
 - [ ] Load platform components and extensions from snapshots
 - [ ] Support local launch-scoped extensions and `--test-api`
@@ -41,9 +41,20 @@ development reload. It ships after milestone 1.
 
 ## Update index
 
-CI publishes `updates/latest.json` to GitHub after every referenced component
-release is available. The app fetches that published index when the user checks
-for updates.
+CI publishes `updates/latest.json` after every referenced component release is
+available and verified. The app fetches:
+
+```text
+https://github.com/zats/chat-gpt-x/releases/download/updates/latest.json
+```
+
+Release publication is fully automated:
+
+- New ChatGPT detection drives binding generation, validation, merge, component
+  release, and index publication.
+- A merged public-API or public-extension pull request drives validation,
+  component release, and index publication.
+- No component requires manual GitHub Release or index publication.
 
 The index uses schema version 2:
 
