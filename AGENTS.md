@@ -36,7 +36,6 @@ scripts/
 .github/workflows/ci.yml        # pinned-version checks on every main commit and PR
 updates/
   latest.json                   # latest API, binding, and extension releases
-  chatgpt.json                  # latest observed ChatGPT version and support status
 .agents/skills/
   manage-platform-api/          # process skill for any public-API change (required reading)
 ```
@@ -53,7 +52,7 @@ Run the packaged launcher with `--test-api` to restart ChatGPT with only `api-te
 4. **APIs land only as complete vertical slices.** A public API change increments `src/platform/manifest.json`, updates its current binding and mechanical test extension, and passes `api-test-suite` against the live app. `types.d.ts` must never sit ahead of working, validated bindings.
 5. Research is done on extracted copies of the app in temp directories (see the skill's `scripts/extract-app.sh`), cleaned up afterwards — never against the installed app in place, never by modifying its bundle.
 6. Durable knowledge lives in the skill's `references/`; version-specific findings live in `src/platform/bindings/<version>/DERIVATION.md`. Don't mix the two.
-7. Component releases are derived from predictable paths. Changes under the API, a versioned binding directory, or an extension directory increment that component's semantic version and `updates/latest.json` generation in the same pull request. A new binding also increments each extension version whose `compatibility.chatgpt` range is expanded after validation. `updates/chatgpt.json` changes when latest-version support changes. After CI passes on `main`, GitHub Releases publishes immutable `chatgpt-api-v<version>`, `binding-<chatgpt>-v<version>`, and `extension-<id>-v<version>` archives.
+7. Component releases are derived from predictable paths. Changes under the API, a versioned binding directory, or an extension directory increment that component's semantic version and `updates/latest.json` generation in the same pull request. A new binding also increments each extension version whose `compatibility.chatgpt` range is expanded after validation. After CI passes on `main`, GitHub Releases publishes immutable `chatgpt-api-v<version>`, `binding-<chatgpt>-v<version>`, and `extension-<id>-v<version>` archives.
 
 ## Live debugging (CDP)
 

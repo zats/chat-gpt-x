@@ -338,7 +338,7 @@ jobs:
           Exact Sparkle URL: $DOWNLOAD_URL
           Version-watcher issue: #$ISSUE_NUMBER
 
-          Follow the skill's entire completion gate. Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, extension source files, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. After the live suites pass, increment each validated extension version and expand its compatibility.chatgpt range in package.json. Update src/platform/bindings/manifest.json, updates/latest.json, and updates/chatgpt.json. Increment the update generation once and use predictable release tags.
+          Follow the skill's entire completion gate. Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, extension source files, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. After the live suites pass, increment each validated extension version and expand its compatibility.chatgpt range in package.json. Update src/platform/bindings/manifest.json and updates/latest.json. Increment the update generation once and use predictable release tags.
 
           The authenticated test accounts are available only as opaque files:
           - $AUTH_ROOT/primary.json
@@ -393,7 +393,6 @@ jobs:
             src/platform/bindings/manifest.json \
             'src/extensions/*/package.json' \
             updates/latest.json \
-            updates/chatgpt.json \
             > "$DIAGNOSTICS_ROOT/binding.patch"
           [[ -s "$DIAGNOSTICS_ROOT/binding.patch" ]] || {
             echo "scoped binding patch is empty" >&2
@@ -786,7 +785,7 @@ jobs:
           done
           while IFS= read -r changed_path; do
             case "$changed_path" in
-              "$binding_root"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json | updates/chatgpt.json)
+              "$binding_root"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json)
                 ;;
               *)
                 echo "Rebase changed a forbidden path: $changed_path" >&2

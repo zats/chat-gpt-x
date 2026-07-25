@@ -62,7 +62,7 @@ done < <(
 
 for changed_path in "${CHANGED_PATHS[@]}"; do
   case "$changed_path" in
-    "$BINDING_ROOT"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json | updates/chatgpt.json)
+    "$BINDING_ROOT"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json)
       ;;
     *)
       echo "rebind changed a forbidden path: $changed_path" >&2

@@ -167,7 +167,6 @@ export function createReleasePlan({
     });
 
   validateLatestBinding(latest, bindingManifests, bindings);
-  validateChatGPTSupport(root, bindingManifests);
 
   const extensionManifests = readExtensionManifests(root);
   validateLatestExtensions(latest, extensionManifests);
@@ -475,38 +474,6 @@ function validateLatestBinding(latest, manifests, affected) {
       "updates/latest.json binding must identify an affected binding",
     );
   }
-}
-
-function validateChatGPTSupport(root, manifests) {
-  const support = readJson(root, "updates/chatgpt.json");
-  requireChatGPT(support.chatgpt, "updates/chatgpt.json chatgpt");
-  if (typeof support.supported !== "boolean") {
-    throw new Error("updates/chatgpt.json supported must be boolean");
-  }
-  if (!support.supported) {
-    if ("binding" in support) {
-      throw new Error(
-        "Unsupported updates/chatgpt.json entries cannot declare a binding",
-      );
-    }
-    return;
-  }
-  const manifest = manifests.get(support.chatgpt);
-  if (!manifest) {
-    throw new Error(
-      `updates/chatgpt.json marks missing binding ${support.chatgpt} as supported`,
-    );
-  }
-  const expected = {
-    version: manifest.version,
-    chatgptApi: manifest.chatgptApi,
-    release: releaseTag({
-      kind: "binding",
-      chatgpt: support.chatgpt,
-      version: manifest.version,
-    }),
-  };
-  requireExactObject(support.binding, expected, "ChatGPT support binding");
 }
 
 function readExtensionManifests(root) {

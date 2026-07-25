@@ -23,7 +23,6 @@ src/
     api-test-suite/             # the mechanical e2e test extension — exercises every public API path
 updates/
   latest.json                   # latest component versions and predictable GitHub Release tags
-  chatgpt.json                  # latest observed ChatGPT version and binding support
 ```
 
 `src/extensions/build.sh [<extension-id> ...]` is the local build and installation entry point. With no ids it builds all extensions. Each manifest declares `"main": "contents/main.js"`, its semantic `version`, and `compatibility.chatgpt` plus `compatibility.chatgptApi` ranges. The script compiles `<extension-id>.ts` as browser-targeted CommonJS and installs the bundle and manifest in the canonical runtime layout below. The shared `resolveCodexHome()` utility defines Codex home from `CODEX_HOME`, defaulting to `$HOME/.codex`.

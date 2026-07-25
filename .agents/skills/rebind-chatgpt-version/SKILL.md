@@ -100,7 +100,7 @@ Validate in this order:
 4. Run the API test extension together with representative shipped extensions to catch composition failures.
 5. Disable the test extension, then verify the normal shipped-extension flow.
 6. When producing a launcher artifact, build Release, verify its signature, compare the packaged binding files with source, and repeat the critical interaction through the packaged bridge.
-7. After the binding passes, update `src/platform/bindings/manifest.json` to the new version and exact Sparkle enclosure URL. For every extension validated on the new build, expand `compatibility.chatgpt` and increment its extension version; keep its source unchanged. Increment `updates/latest.json` generation once, update those extension entries, point its binding entry at `binding-<chatgpt>-v1.0.0`, and mark the same release supported in `updates/chatgpt.json`. Run `node scripts/validate-pinned-chatgpt.mjs` and `node scripts/component-releases.mjs <base-sha> --worktree`.
+7. After the binding passes, update `src/platform/bindings/manifest.json` to the new version and exact Sparkle enclosure URL. For every extension validated on the new build, expand `compatibility.chatgpt` and increment its extension version; keep its source unchanged. Increment `updates/latest.json` generation once, update those extension entries, and point its binding entry at `binding-<chatgpt>-v1.0.0`. Run `node scripts/validate-pinned-chatgpt.mjs` and `node scripts/component-releases.mjs <base-sha> --worktree`.
 
 Treat a result file as current only when the bridge log from the test PID and timestamp records that exact result. Missing, partial, stale, or unauthenticated results fail the run. Never weaken an assertion to obtain green tests.
 
@@ -128,7 +128,7 @@ Finish only when all conditions hold:
 
 - The new directory and manifest declare binding version `1.0.0` and match the installed ChatGPT version, API version, and app.asar.
 - The current bindings manifest points to the new version and exact download URL, and its validator passes.
-- `updates/latest.json` and `updates/chatgpt.json` identify the same binding release, and the component release plan passes.
+- `updates/latest.json` identifies the new binding release, and the component release plan passes.
 - Every referenced current-build module exists and its export was verified.
 - The public API, extension source, and all prior binding directories are unchanged.
 - Every validated extension manifest includes the new ChatGPT version and has an incremented version.
