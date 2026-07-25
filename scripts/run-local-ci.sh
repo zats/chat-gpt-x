@@ -28,7 +28,7 @@ if [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
   }
   SOURCE_CODEX_ROOT="${CODEX_HOME:-$HOME/.codex}"
   PRIMARY_AUTH="$SOURCE_CODEX_ROOT/auth.json"
-  SOURCE_ACCOUNTS_ROOT="$SOURCE_CODEX_ROOT/extensions/multiple-accounts"
+  SOURCE_ACCOUNTS_ROOT="$SOURCE_CODEX_ROOT/extensions/state/multiple-accounts"
   [[ -f "$PRIMARY_AUTH" && -d "$SOURCE_ACCOUNTS_ROOT" ]] || {
     echo "current authentication and multiple-accounts storage must exist" >&2
     exit 1
@@ -189,7 +189,14 @@ run_logged release-build env \
 
 LAUNCHER_BIN="$RELEASE_ROOT/ChatGPTX.app/Contents/MacOS/ChatGPTX"
 
-MULTIPLE_ACCOUNTS_ROOT="$CODEX_ROOT/extensions/multiple-accounts"
+run_logged local-api-test-build env \
+  HOME="$TEST_HOME" \
+  CODEX_HOME="$CODEX_ROOT" \
+  CHATGPTX_EXTENSION_BUILD_DIR="$WORK_ROOT/extension-builds" \
+  "$REPO_ROOT/src/extensions/build.sh" api-test-suite
+
+LOCAL_API_TEST_ROOT="$WORK_ROOT/extension-builds/api-test-suite"
+MULTIPLE_ACCOUNTS_ROOT="$CODEX_ROOT/extensions/state/multiple-accounts"
 mkdir -p "$MULTIPLE_ACCOUNTS_ROOT"
 
 launch_app() {
@@ -201,6 +208,7 @@ launch_app() {
     env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
       "$LAUNCHER_BIN" \
       --test-api \
+      --extension "$LOCAL_API_TEST_ROOT" \
       "--chatgpt-app=$APP_PATH" \
       "--user-data-dir=$PROFILE_ROOT" \
       "--remote-debugging-port=$PORT" \
@@ -234,16 +242,39 @@ launch_app() {
     fi
     APP_PID=""
   else
+    local versions_lock
+    local api_relative
+    local bridge_file
+    versions_lock="$CODEX_ROOT/extensions/versions-lock.json"
+    api_relative="$(jq -er '.chatgptApi.path' "$versions_lock")"
+    bridge_file="$CODEX_ROOT/extensions/$api_relative/bridge/main.cjs"
     local launch_configuration=""
     if [[ "$mode" == "composition" ]]; then
       launch_configuration="$WORK_ROOT/$name-launch.json"
-      jq '{extensions: [.extensions[].id]}' \
-        "$CODEX_ROOT/extensions/settings.json" > "$launch_configuration"
+      jq \
+        --arg root "$CODEX_ROOT/extensions" \
+        --arg apiTest "$LOCAL_API_TEST_ROOT/contents/main.js" \
+        '{
+          schemaVersion: 1,
+          extensions: (
+            [
+              .extensions[]
+              | select(.enabled)
+              | {
+                  id,
+                  path: ($root + "/" + .path + "/contents/main.js")
+                }
+            ]
+            + [{id: "api-test-suite", path: $apiTest}]
+          )
+        }' \
+        "$versions_lock" > "$launch_configuration"
       chmod 600 "$launch_configuration"
     fi
     env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
       CHATGPTX_LAUNCH_CONFIGURATION="$launch_configuration" \
-      NODE_OPTIONS="--require \"$REPO_ROOT/src/platform/bridge/main.cjs\"" \
+      CHATGPTX_VERSIONS_LOCK="$versions_lock" \
+      NODE_OPTIONS="--require \"$bridge_file\"" \
       "$APP_BIN" \
       --user-data-dir="$PROFILE_ROOT" \
       --remote-debugging-port="$PORT" \
@@ -291,7 +322,7 @@ stop_app() {
   capture_authentication
 }
 
-launch_app initialize
+launch_app initialize api-test
 if [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
   run_logged initialize-readiness node "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" "$PORT"
   CURRENT_USER_ID="$(jq -er '.currentUserId' "$LOG_ROOT/initialize-readiness.log")"
@@ -503,8 +534,12 @@ stop_app
 
 progress "verifying release artifact"
 codesign --verify --deep --strict --verbose=2 "$RELEASE_ROOT/ChatGPTX.app" >"$LOG_ROOT/codesign.log" 2>&1
-diff -rq "$BINDING_DIR" "$RELEASE_ROOT/ChatGPTX.app/Contents/Resources/bindings/$APP_VERSION" >"$LOG_ROOT/binding-diff.log"
-diff -q "$REPO_ROOT/src/platform/bridge/main.cjs" "$RELEASE_ROOT/ChatGPTX.app/Contents/Resources/bridge/main.cjs" >"$LOG_ROOT/bridge-diff.log"
+SEED_ROOT="$RELEASE_ROOT/ChatGPTX.app/Contents/Resources/component-seed"
+SEED_VERSIONS_LOCK="$SEED_ROOT/versions-lock.json"
+SEED_API_PATH="$(jq -er '.chatgptApi.path' "$SEED_VERSIONS_LOCK")"
+SEED_BINDING_PATH="$(jq -er '.binding.path' "$SEED_VERSIONS_LOCK")"
+diff -rq "$BINDING_DIR" "$SEED_ROOT/$SEED_BINDING_PATH" >"$LOG_ROOT/binding-diff.log"
+diff -q "$REPO_ROOT/src/platform/bridge/main.cjs" "$SEED_ROOT/$SEED_API_PATH/bridge/main.cjs" >"$LOG_ROOT/bridge-diff.log"
 progress "verified release artifact"
 
 UNIT_PASSED="$(awk '/[0-9]+ pass/{passed=$1} END{print passed}' "$LOG_ROOT/unit-tests.log")"

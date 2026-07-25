@@ -41,11 +41,15 @@ jobs:
           bash -n scripts/download-chatgpt-version.sh
           bash -n scripts/run-local-ci.sh
           bash -n scripts/validate-rebind-changes.sh
+          bash -n src/extensions/build.sh
+          bash -n src/macOS/scripts/build.sh
+          bash -n src/macOS/scripts/embed-component-seed.sh
           bash -n .agents/skills/manage-platform-api/scripts/extract-app.sh
           node --check scripts/auth-handoff.mjs
           node --check scripts/check-auth-exposure.mjs
           node --check scripts/capture-authentication-candidates.mjs
           node --check scripts/build-component-releases.mjs
+          node --check scripts/build-component-seed.mjs
           node --check scripts/component-releases.mjs
           node --check scripts/validate-pinned-chatgpt.mjs
           node --check scripts/wait-for-chatgpt-ready.mjs
