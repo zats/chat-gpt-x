@@ -105,16 +105,24 @@ enum ChatGPTRuntime {
             )
     }
 
-    static func activateRunningApplicationWithExtensions() -> Bool {
+    static func activateRunningApplicationWithExtensions(
+        workspace: NSWorkspace
+    ) async throws -> Bool {
         guard
             let application = runningApplications.first(where: {
                 extensionsEnabled(for: $0)
-            })
+            }),
+            let applicationURL = application.bundleURL
         else {
             return false
         }
 
-        application.activate(options: [.activateAllWindows])
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        try await workspace.openApplication(
+            at: applicationURL,
+            configuration: configuration
+        )
         return true
     }
 

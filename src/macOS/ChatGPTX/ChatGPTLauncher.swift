@@ -78,7 +78,9 @@ struct ChatGPTLauncher {
         }
 
         if mode == .normal, localExtensionURLs.isEmpty, !forceRestart,
-            ChatGPTRuntime.activateRunningApplicationWithExtensions() {
+            try await ChatGPTRuntime.activateRunningApplicationWithExtensions(
+                workspace: workspace
+            ) {
             return
         }
 
