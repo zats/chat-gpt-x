@@ -17,6 +17,10 @@ final class LauncherWindowController: NSWindowController {
         get { launcherViewController.onCheckForUpdates }
         set { launcherViewController.onCheckForUpdates = newValue }
     }
+    var onSetLaunchAtLogin: ((Bool) -> Void)? {
+        get { launcherViewController.onSetLaunchAtLogin }
+        set { launcherViewController.onSetLaunchAtLogin = newValue }
+    }
 
     init() {
         launcherViewController = LauncherViewController()
@@ -60,6 +64,10 @@ final class LauncherWindowController: NSWindowController {
         launcherViewController.setCheckingForUpdates(isChecking)
     }
 
+    func setLaunchAtLogin(_ isEnabled: Bool) {
+        launcherViewController.setLaunchAtLogin(isEnabled)
+    }
+
     func showUpdateSummary(_ summary: ComponentUpdateSummary) {
         launcherViewController.showUpdateSummary(summary)
     }
@@ -91,6 +99,7 @@ final class LauncherWindowController: NSWindowController {
 private final class LauncherViewController: NSViewController {
     var onOpenChatGPT: ((Bool) -> Void)?
     var onCheckForUpdates: (() -> Void)?
+    var onSetLaunchAtLogin: ((Bool) -> Void)?
 
     private let appNameLabel = NSTextField(labelWithString: "ChatGPT")
     private let appVersionLabel = NSTextField(labelWithString: "")
@@ -99,6 +108,11 @@ private final class LauncherViewController: NSViewController {
     private let updateButton = NSButton()
     private let updateSpinner = NSProgressIndicator()
     private let openButton = NSButton()
+    private let launchAtLoginButton = NSButton(
+        checkboxWithTitle: "Launch at Login",
+        target: nil,
+        action: nil
+    )
     private let componentsTableView = NSTableView()
     private let componentsScrollView = NSScrollView()
     private let updateStateStack = NSStackView()
@@ -222,8 +236,14 @@ private final class LauncherViewController: NSViewController {
 
         let actionsRow = NSView()
         actionsRow.addSubview(openButton)
+        actionsRow.addSubview(launchAtLoginButton)
         openButton.snp.makeConstraints { make in
             make.leading.centerY.equalToSuperview()
+        }
+        launchAtLoginButton.snp.makeConstraints { make in
+            make.trailing.centerY.equalToSuperview()
+            make.leading.greaterThanOrEqualTo(openButton.snp.trailing)
+                .offset(12)
         }
         actionsRow.snp.makeConstraints { make in
             make.height.equalTo(24)
@@ -273,7 +293,8 @@ private final class LauncherViewController: NSViewController {
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.initialFirstResponder = openButton
-        openButton.nextKeyView = revealButton
+        openButton.nextKeyView = launchAtLoginButton
+        launchAtLoginButton.nextKeyView = revealButton
         revealButton.nextKeyView = updateButton
         updateButton.nextKeyView = openButton
     }
@@ -297,6 +318,10 @@ private final class LauncherViewController: NSViewController {
         guard isChecking else { return }
         updateStatusDismissalTask?.cancel()
         hideUpdateState()
+    }
+
+    func setLaunchAtLogin(_ isEnabled: Bool) {
+        launchAtLoginButton.state = isEnabled ? .on : .off
     }
 
     func showUpdateSummary(_ summary: ComponentUpdateSummary) {
@@ -439,6 +464,11 @@ private final class LauncherViewController: NSViewController {
         openButton.action = #selector(openChatGPT)
         openButton.setAccessibilityIdentifier("open-chatgpt")
 
+        launchAtLoginButton.target = self
+        launchAtLoginButton.action = #selector(changeLaunchAtLogin)
+        launchAtLoginButton.controlSize = .small
+        launchAtLoginButton.setAccessibilityIdentifier("launch-at-login")
+
         let tableColumn = NSTableColumn(identifier: .component)
         componentsTableView.addTableColumn(tableColumn)
         componentsTableView.headerView = nil
@@ -535,6 +565,11 @@ private final class LauncherViewController: NSViewController {
     @objc
     private func checkForUpdates() {
         onCheckForUpdates?()
+    }
+
+    @objc
+    private func changeLaunchAtLogin() {
+        onSetLaunchAtLogin?(launchAtLoginButton.state == .on)
     }
 }
 

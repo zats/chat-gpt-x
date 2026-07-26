@@ -71,6 +71,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowController.onCheckForUpdates = { [weak self] in
             self?.checkForUpdates()
         }
+        windowController.onSetLaunchAtLogin = { [weak self] isEnabled in
+            self?.setLaunchAtLogin(isEnabled)
+        }
+        windowController.setLaunchAtLogin(LaunchAtLoginService.isEnabled)
         self.windowController = windowController
 
         let systemMenuController = SystemMenuController(
@@ -116,6 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         guard !options.isAPITest else { return }
+        windowController?.setLaunchAtLogin(LaunchAtLoginService.isEnabled)
         if !checkedAppManagementPermission {
             checkedAppManagementPermission = true
             guard !AppManagementPermission.requestIfNeeded() else {
@@ -145,6 +150,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showLauncher() {
         NSApplication.shared.activate()
         windowController?.showWindow(nil)
+    }
+
+    private func setLaunchAtLogin(_ isEnabled: Bool) {
+        do {
+            try LaunchAtLoginService.setEnabled(isEnabled)
+            windowController?.setLaunchAtLogin(
+                LaunchAtLoginService.isEnabled
+            )
+        } catch {
+            windowController?.setLaunchAtLogin(
+                LaunchAtLoginService.isEnabled
+            )
+            showLaunchAtLoginError(error)
+        }
     }
 
     private func runAPITest() {
@@ -318,6 +337,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "OK")
 
         NSApplication.shared.activate(ignoringOtherApps: true)
+        if let window = windowController?.window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    private func showLaunchAtLoginError(_ error: any Error) {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Couldn’t Update Launch at Login"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "OK")
+
         if let window = windowController?.window {
             alert.beginSheetModal(for: window)
         } else {
