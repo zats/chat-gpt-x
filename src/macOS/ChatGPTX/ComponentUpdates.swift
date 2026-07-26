@@ -196,6 +196,119 @@ struct ExtensionUpdate: Decodable {
     let sha256: String
 }
 
+enum ComponentLocalVersion: Equatable {
+    case current
+    case different(String)
+    case missing
+}
+
+struct ComponentUpdateItem: Equatable {
+    let id: String
+    let name: String
+    let latestVersion: String
+    let localVersion: ComponentLocalVersion
+}
+
+struct ComponentUpdateSummary: Equatable {
+    let items: [ComponentUpdateItem]
+}
+
+enum ComponentUpdateProgress: Equatable {
+    case downloading(
+        componentID: String,
+        name: String,
+        receivedBytes: Int64,
+        totalBytes: Int64?
+    )
+    case verifying(componentID: String, name: String)
+    case installing(componentID: String, name: String)
+}
+
+typealias ComponentUpdateProgressHandler =
+    @MainActor @Sendable (ComponentUpdateProgress) -> Void
+
+struct ComponentUpdatePlan {
+    fileprivate let index: ComponentUpdateIndex
+    fileprivate let chatgptVersion: String
+    fileprivate let current: PreparedComponentStore
+    fileprivate let api: UpdateRelease
+    fileprivate let binding: BindingUpdate
+    fileprivate let extensions: [PlannedExtensionUpdate]
+
+    var summary: ComponentUpdateSummary {
+        summary(installed: current.versions)
+    }
+
+    func summary(
+        installed versions: ComponentVersionsLock
+    ) -> ComponentUpdateSummary {
+        var items = [
+            ComponentUpdateItem(
+                id: "chatgpt-api",
+                name: "ChatGPT API",
+                latestVersion: binding.chatgptApi,
+                localVersion: localVersion(
+                    versions.chatgptApi.version,
+                    latest: binding.chatgptApi
+                )
+            ),
+            ComponentUpdateItem(
+                id: "binding",
+                name: "Binding",
+                latestVersion: binding.version,
+                localVersion: bindingLocalVersion(versions.binding)
+            ),
+        ]
+
+        let installedExtensions = Dictionary(
+            uniqueKeysWithValues: versions.extensions.map { ($0.id, $0) }
+        )
+        items.append(contentsOf: extensions.map { planned in
+            let localVersion: ComponentLocalVersion
+            if let installed = installedExtensions[planned.id] {
+                localVersion = self.localVersion(
+                    installed.version,
+                    latest: planned.update.version
+                )
+            } else {
+                localVersion = .missing
+            }
+            return ComponentUpdateItem(
+                id: "extension:\(planned.id)",
+                name: planned.id,
+                latestVersion: planned.update.version,
+                localVersion: localVersion
+            )
+        })
+
+        return ComponentUpdateSummary(items: items)
+    }
+
+    private func bindingLocalVersion(
+        _ installed: StoredBinding
+    ) -> ComponentLocalVersion {
+        guard installed.chatgpt == chatgptVersion else {
+            return .different(
+                "\(installed.version) · ChatGPT \(installed.chatgpt)"
+            )
+        }
+        return localVersion(installed.version, latest: binding.version)
+    }
+
+    private func localVersion(
+        _ installed: String,
+        latest: String
+    ) -> ComponentLocalVersion {
+        installed == latest ? .current : .different(installed)
+    }
+}
+
+private struct PlannedExtensionUpdate {
+    let id: String
+    let enabled: Bool
+    let update: ExtensionUpdate
+}
+
 enum ComponentUpdateResult {
     case upToDate(PreparedComponentStore)
     case installed(PreparedComponentStore)
@@ -217,7 +330,11 @@ enum ComponentUpdater {
     static func fetchIndex(
         session: URLSession = .shared
     ) async throws -> ComponentUpdateIndex {
-        let (data, response) = try await session.data(from: indexURL)
+        let request = URLRequest(
+            url: indexURL,
+            cachePolicy: .reloadRevalidatingCacheData
+        )
+        let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse,
             response.statusCode == 200 else {
             throw ComponentUpdateError.indexRequestFailed
@@ -227,11 +344,10 @@ enum ComponentUpdater {
 }
 
 extension ComponentStore {
-    func install(
+    func planUpdate(
         _ index: ComponentUpdateIndex,
-        chatgptVersion: String,
-        session: URLSession = .shared
-    ) async throws -> ComponentUpdateResult {
+        chatgptVersion: String
+    ) throws -> ComponentUpdatePlan {
         let current = try prepare()
         guard index.generation >= current.versions.generation else {
             throw ComponentUpdateError.olderGeneration(
@@ -268,6 +384,44 @@ extension ComponentStore {
             throw ComponentUpdateError.settingsInvalid
         }
 
+        var orderedSettings = settings.extensions
+        let configuredIDs = Set(orderedSettings.map(\.id))
+        for id in compatibleExtensions.keys.sorted()
+            where !configuredIDs.contains(id)
+        {
+            orderedSettings.append(ExtensionSetting(id: id, enabled: true))
+        }
+        let extensions = orderedSettings.compactMap { setting in
+            compatibleExtensions[setting.id].map {
+                PlannedExtensionUpdate(
+                    id: setting.id,
+                    enabled: setting.enabled,
+                    update: $0
+                )
+            }
+        }
+
+        return ComponentUpdatePlan(
+            index: index,
+            chatgptVersion: chatgptVersion,
+            current: current,
+            api: api,
+            binding: binding,
+            extensions: extensions
+        )
+    }
+
+    func install(
+        _ plan: ComponentUpdatePlan,
+        session: URLSession = .shared,
+        progress: @escaping ComponentUpdateProgressHandler = { _ in }
+    ) async throws -> ComponentUpdateResult {
+        let index = plan.index
+        let chatgptVersion = plan.chatgptVersion
+        let current = plan.current
+        let binding = plan.binding
+        let api = plan.api
+
         let apiPath = "components/chatgpt-api/\(binding.chatgptApi)"
         try await installArchive(
             release: api.release,
@@ -275,7 +429,10 @@ extension ComponentStore {
             baseURL: index.releaseBaseURL,
             destinationPath: apiPath,
             kind: .chatgptAPI(version: binding.chatgptApi),
-            session: session
+            componentID: "chatgpt-api",
+            componentName: "ChatGPT API",
+            session: session,
+            progress: progress
         )
 
         let bindingPath =
@@ -290,7 +447,10 @@ extension ComponentStore {
                 version: binding.version,
                 api: binding.chatgptApi
             ),
-            session: session
+            componentID: "binding",
+            componentName: "Binding",
+            session: session,
+            progress: progress
         )
         let installedBindingManifest = try decode(
             BindingPackageManifest.self,
@@ -299,37 +459,30 @@ extension ComponentStore {
             )
         )
 
-        let extensionsByID = compatibleExtensions
-        var orderedSettings = settings.extensions
-        let configuredIDs = Set(orderedSettings.map { $0.id })
-        for id in extensionsByID.keys.sorted()
-            where !configuredIDs.contains(id) {
-            orderedSettings.append(ExtensionSetting(id: id, enabled: true))
-        }
-
         var storedExtensions: [StoredExtension] = []
-        for setting in orderedSettings {
-            guard let extensionUpdate = extensionsByID[setting.id] else {
-                continue
-            }
+        for planned in plan.extensions {
+            let extensionUpdate = planned.update
             let extensionPath =
-                "components/extensions/\(setting.id)/\(extensionUpdate.version)"
+                "components/extensions/\(planned.id)/\(extensionUpdate.version)"
             try await installArchive(
                 release: extensionUpdate.release,
                 sha256: extensionUpdate.sha256,
                 baseURL: index.releaseBaseURL,
                 destinationPath: extensionPath,
                 kind: .extensionComponent(
-                    id: setting.id,
+                    id: planned.id,
                     version: extensionUpdate.version
                 ),
-                session: session
+                componentID: "extension:\(planned.id)",
+                componentName: planned.id,
+                session: session,
+                progress: progress
             )
             storedExtensions.append(
                 StoredExtension(
-                    id: setting.id,
+                    id: planned.id,
                     version: extensionUpdate.version,
-                    enabled: setting.enabled,
+                    enabled: planned.enabled,
                     compatibility: extensionUpdate.compatibility,
                     release: extensionUpdate.release,
                     sha256: extensionUpdate.sha256,
@@ -386,7 +539,10 @@ extension ComponentStore {
         baseURL: String,
         destinationPath: String,
         kind: ArchiveKind,
-        session: URLSession
+        componentID: String,
+        componentName: String,
+        session: URLSession,
+        progress: @escaping ComponentUpdateProgressHandler
     ) async throws {
         let destinationURL = try resolveStorePath(destinationPath)
         if fileManager.fileExists(atPath: destinationURL.path) {
@@ -416,18 +572,21 @@ extension ComponentStore {
             "\(release).zip"
         )
 
-        let (temporaryURL, response) = try await session.download(
-            from: archiveURL
+        try await downloadArchive(
+            from: archiveURL,
+            to: localArchiveURL,
+            release: release,
+            componentID: componentID,
+            componentName: componentName,
+            session: session,
+            progress: progress
         )
-        guard let response = response as? HTTPURLResponse,
-            response.statusCode == 200 else {
-            throw ComponentUpdateError.archiveRequestFailed(release)
-        }
-        try fileManager.copyItem(at: temporaryURL, to: localArchiveURL)
         try fileManager.setAttributes(
             [.posixPermissions: 0o600],
             ofItemAtPath: localArchiveURL.path
         )
+        progress(.verifying(componentID: componentID, name: componentName))
+        await Task.yield()
         let digest = SHA256.hash(
             data: try Data(contentsOf: localArchiveURL)
         ).map { String(format: "%02x", $0) }.joined()
@@ -435,6 +594,8 @@ extension ComponentStore {
             throw ComponentUpdateError.checksumMismatch(release)
         }
 
+        progress(.installing(componentID: componentID, name: componentName))
+        await Task.yield()
         let stagingURL = downloadsURL.appendingPathComponent(
             "extract-\(UUID().uuidString)",
             isDirectory: true
@@ -469,6 +630,33 @@ extension ComponentStore {
             attributes: [.posixPermissions: 0o700]
         )
         try fileManager.moveItem(at: stagingURL, to: destinationURL)
+    }
+
+    private func downloadArchive(
+        from archiveURL: URL,
+        to localArchiveURL: URL,
+        release: String,
+        componentID: String,
+        componentName: String,
+        session: URLSession,
+        progress: @escaping ComponentUpdateProgressHandler
+    ) async throws {
+        let download = ArchiveDownload(
+            configuration: session.configuration,
+            destinationURL: localArchiveURL,
+            release: release,
+            progress: { receivedBytes, totalBytes in
+                progress(
+                    .downloading(
+                        componentID: componentID,
+                        name: componentName,
+                        receivedBytes: receivedBytes,
+                        totalBytes: totalBytes
+                    )
+                )
+            }
+        )
+        try await download.start(from: archiveURL)
     }
 
     private func validateArchive(
@@ -559,6 +747,133 @@ extension ComponentStore {
                 throw ComponentUpdateError.archiveLayoutInvalid
             }
         }
+    }
+}
+
+private final nonisolated class ArchiveDownload:
+    NSObject,
+    URLSessionDownloadDelegate,
+    @unchecked Sendable
+{
+    private let configuration: URLSessionConfiguration
+    private let destinationURL: URL
+    private let release: String
+    private let progress:
+        @MainActor @Sendable (Int64, Int64?) -> Void
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, any Error>?
+    private var session: URLSession?
+    private var task: URLSessionDownloadTask?
+    private var downloadError: (any Error)?
+
+    init(
+        configuration: URLSessionConfiguration,
+        destinationURL: URL,
+        release: String,
+        progress: @escaping @MainActor @Sendable (Int64, Int64?) -> Void
+    ) {
+        self.configuration = configuration
+        self.destinationURL = destinationURL
+        self.release = release
+        self.progress = progress
+    }
+
+    func start(from url: URL) async throws {
+        await MainActor.run {
+            progress(0, nil)
+        }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.lock()
+                self.continuation = continuation
+                let session = URLSession(
+                    configuration: configuration,
+                    delegate: self,
+                    delegateQueue: .main
+                )
+                self.session = session
+                let task = session.downloadTask(with: url)
+                self.task = task
+                lock.unlock()
+
+                task.resume()
+                if Task.isCancelled {
+                    task.cancel()
+                }
+            }
+        } onCancel: {
+            self.cancel()
+        }
+    }
+
+    func urlSession(
+        _: URLSession,
+        downloadTask _: URLSessionDownloadTask,
+        didWriteData _: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        let totalBytes = totalBytesExpectedToWrite > 0
+            ? totalBytesExpectedToWrite
+            : nil
+        MainActor.assumeIsolated {
+            progress(totalBytesWritten, totalBytes)
+        }
+    }
+
+    func urlSession(
+        _: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        let error: (any Error)?
+        if let response = downloadTask.response as? HTTPURLResponse,
+           response.statusCode == 200
+        {
+            do {
+                try FileManager.default.moveItem(
+                    at: location,
+                    to: destinationURL
+                )
+                error = nil
+            } catch let moveError {
+                error = moveError
+            }
+        } else {
+            error = ComponentUpdateError.archiveRequestFailed(release)
+        }
+
+        lock.lock()
+        downloadError = error
+        lock.unlock()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task _: URLSessionTask,
+        didCompleteWithError error: (any Error)?
+    ) {
+        lock.lock()
+        let resultError = error ?? downloadError
+        let continuation = continuation
+        self.continuation = nil
+        self.session = nil
+        task = nil
+        lock.unlock()
+
+        session.finishTasksAndInvalidate()
+        if let resultError {
+            continuation?.resume(throwing: resultError)
+        } else {
+            continuation?.resume()
+        }
+    }
+
+    private func cancel() {
+        lock.lock()
+        let task = task
+        lock.unlock()
+        task?.cancel()
     }
 }
 
