@@ -27,11 +27,14 @@ enum ChatGPTXApplication {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let automaticUpdateInterval: Duration = .seconds(10 * 60)
+
     private let options: LaunchOptions
     private var componentUpdateService: ComponentUpdateService?
     private var preparedComponents: PreparedComponentStore?
     private var launchTask: Task<Void, Never>?
     private var updateTask: Task<Void, Never>?
+    private var automaticUpdateTask: Task<Void, Never>?
     private var windowController: LauncherWindowController?
     private var injectionMonitor: ChatGPTInjectionMonitor?
     private var notificationController: InjectionNotificationController?
@@ -91,9 +94,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.injectionMonitor = injectionMonitor
         injectionMonitor.start()
+        startAutomaticUpdates()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        automaticUpdateTask?.cancel()
+        automaticUpdateTask = nil
         injectionMonitor?.stop()
     }
 
@@ -191,16 +197,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 else {
                     throw UpdateUIError.chatGPTNotInstalled
                 }
-                let plan = try await componentUpdateService.check(
-                    for: chatgptVersion
-                )
-                windowController?.showUpdateSummary(plan.summary)
-                let result = try await componentUpdateService.install(
-                    plan,
+                let outcome = try await componentUpdateService.update(
+                    for: chatgptVersion,
+                    planned: { [weak self] plan in
+                        self?.windowController?.showUpdateSummary(plan.summary)
+                    },
                     progress: { [weak self] progress in
                         self?.windowController?.showUpdateProgress(progress)
                     }
                 )
+                let plan = outcome.plan
+                let result = outcome.result
                 preparedComponents = result.preparedStore
                 windowController?.showUpdateSummary(
                     plan.summary(installed: result.preparedStore.versions)
@@ -221,6 +228,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 showUpdateResult(result)
             } catch {
                 windowController?.showUpdateFailure(error)
+            }
+        }
+    }
+
+    private func startAutomaticUpdates() {
+        checkForUpdates()
+        automaticUpdateTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(
+                        for: Self.automaticUpdateInterval
+                    )
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                checkForUpdates()
             }
         }
     }

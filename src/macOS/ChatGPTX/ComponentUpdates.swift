@@ -232,6 +232,9 @@ enum ComponentUpdateProgress: Equatable {
 typealias ComponentUpdateProgressHandler =
     @MainActor @Sendable (ComponentUpdateProgress) -> Void
 
+typealias ComponentUpdatePlanHandler =
+    @MainActor @Sendable (ComponentUpdatePlan) -> Void
+
 struct ComponentUpdatePlan {
     fileprivate let index: ComponentUpdateIndex
     fileprivate let chatgptVersion: String
@@ -326,6 +329,11 @@ enum ComponentUpdateResult {
     }
 }
 
+struct ComponentUpdateOutcome {
+    let plan: ComponentUpdatePlan
+    let result: ComponentUpdateResult
+}
+
 final class ComponentUpdateService {
     private let componentStore: ComponentStore
     private let session: URLSession
@@ -341,25 +349,23 @@ final class ComponentUpdateService {
         self.indexURL = indexURL
     }
 
-    func check(
-        for chatgptVersion: String
-    ) async throws -> ComponentUpdatePlan {
+    func update(
+        for chatgptVersion: String,
+        planned: @escaping ComponentUpdatePlanHandler = { _ in },
+        progress: @escaping ComponentUpdateProgressHandler = { _ in }
+    ) async throws -> ComponentUpdateOutcome {
         let index = try await fetchIndex()
-        return try componentStore.planUpdate(
+        let plan = try componentStore.planUpdate(
             index,
             chatgptVersion: chatgptVersion
         )
-    }
-
-    func install(
-        _ plan: ComponentUpdatePlan,
-        progress: @escaping ComponentUpdateProgressHandler = { _ in }
-    ) async throws -> ComponentUpdateResult {
-        try await componentStore.install(
+        planned(plan)
+        let result = try await componentStore.install(
             plan,
             session: session,
             progress: progress
         )
+        return ComponentUpdateOutcome(plan: plan, result: result)
     }
 
     private func fetchIndex() async throws -> ComponentUpdateIndex {
