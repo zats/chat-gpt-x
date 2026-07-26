@@ -48,12 +48,10 @@ final class SystemMenuController: NSObject, NSMenuDelegate {
         guard let button = statusItem.button else {
             preconditionFailure("Unable to create the ChatGPTX status item")
         }
-        guard let image = NSImage(
-            systemSymbolName: "puzzlepiece.extension.fill",
-            accessibilityDescription: "ChatGPTX"
-        ) else {
-            preconditionFailure("ChatGPTX status item symbol is unavailable")
+        guard let image = NSImage(named: "MenuBarIcon") else {
+            preconditionFailure("ChatGPTX status item image is unavailable")
         }
+        image.size = NSSize(width: 18, height: 18)
         image.isTemplate = true
         button.image = image
         button.imagePosition = .imageOnly
