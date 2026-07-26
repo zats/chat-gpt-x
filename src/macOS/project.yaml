@@ -11,6 +11,9 @@ settings:
     SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
 
 packages:
+  Permiso:
+    url: https://github.com/zats/permiso.git
+    revision: 77afe0eb5251d6da8756aac1b24e3c01c1433f87
   SnapKit:
     url: https://github.com/SnapKit/SnapKit.git
     from: 6.0.0
@@ -19,16 +22,20 @@ targets:
   ChatGPTX:
     type: application
     platform: macOS
+    info:
+      path: ChatGPTX/Info.plist
+      properties:
+        CFBundleDisplayName: ChatGPTX
+        NSAppBundlesUsageDescription: ChatGPTX manages ChatGPT app updates.
     sources:
       - path: ChatGPTX
     dependencies:
+      - package: Permiso
       - package: SnapKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chatgptx.launcher
         PRODUCT_NAME: ChatGPTX
-        GENERATE_INFOPLIST_FILE: true
-        INFOPLIST_KEY_CFBundleDisplayName: ChatGPTX
         ENABLE_HARDENED_RUNTIME: true
         CODE_SIGN_STYLE: Automatic
     postBuildScripts:

@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.windowController = windowController
         windowController.showWindow(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
+        AppManagementPermission.requestIfNeeded()
 
         let notificationController = InjectionNotificationController()
         notificationController.onRestart = { [weak self] in
