@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowController: LauncherWindowController?
     private var injectionMonitor: ChatGPTInjectionMonitor?
     private var notificationController: InjectionNotificationController?
+    private var checkedAppManagementPermission = false
 
     init(options: LaunchOptions) {
         self.options = options
@@ -71,9 +72,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.checkForUpdates()
         }
         self.windowController = windowController
-        windowController.showWindow(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        AppManagementPermission.requestIfNeeded()
 
         let notificationController = InjectionNotificationController()
         notificationController.onRestart = { [weak self] in
@@ -95,6 +93,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.injectionMonitor = injectionMonitor
         injectionMonitor.start()
         startAutomaticUpdates()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard !options.isAPITest else { return }
+        if !checkedAppManagementPermission {
+            checkedAppManagementPermission = true
+            guard !AppManagementPermission.requestIfNeeded() else {
+                return
+            }
+        }
+        windowController?.showWindow(nil)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

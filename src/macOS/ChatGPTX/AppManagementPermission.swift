@@ -14,9 +14,11 @@ enum AppManagementPermission {
         "kTCCServiceSystemPolicyAppBundles" as CFString
     private static let allowedAuthorization: UInt64 = 2
 
-    static func requestIfNeeded() {
-        guard !isGranted else { return }
+    @discardableResult
+    static func requestIfNeeded() -> Bool {
+        guard !isGranted else { return false }
         PermisoAssistant.shared.present(panel: .appManagement)
+        return true
     }
 
     private static var isGranted: Bool {
