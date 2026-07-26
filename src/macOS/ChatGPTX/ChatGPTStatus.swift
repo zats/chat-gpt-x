@@ -5,6 +5,22 @@ enum ChatGPTRuntimeStatus: Equatable {
     case notRunning
     case running
     case extensionsUnavailable
+
+    var openAction: ChatGPTOpenAction {
+        switch self {
+        case .notRunning:
+            ChatGPTOpenAction(title: "Open ChatGPT", forceRestart: false)
+        case .running:
+            ChatGPTOpenAction(title: "Show ChatGPT", forceRestart: false)
+        case .extensionsUnavailable:
+            ChatGPTOpenAction(title: "Restart ChatGPT", forceRestart: true)
+        }
+    }
+}
+
+struct ChatGPTOpenAction: Equatable {
+    let title: String
+    let forceRestart: Bool
 }
 
 struct ChatGPTStatusSnapshot: Equatable {

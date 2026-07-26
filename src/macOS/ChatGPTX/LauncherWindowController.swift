@@ -18,10 +18,8 @@ final class LauncherWindowController: NSWindowController {
         set { launcherViewController.onCheckForUpdates = newValue }
     }
 
-    init(applicationURL: URL?) {
-        launcherViewController = LauncherViewController(
-            applicationURL: applicationURL
-        )
+    init() {
+        launcherViewController = LauncherViewController()
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 390),
@@ -54,8 +52,8 @@ final class LauncherWindowController: NSWindowController {
         launcherViewController.setLaunching(isLaunching)
     }
 
-    func refreshStatus() {
-        launcherViewController.refreshStatus()
+    func showStatus(_ snapshot: ChatGPTStatusSnapshot) {
+        launcherViewController.showStatus(snapshot)
     }
 
     func setCheckingForUpdates(_ isChecking: Bool) {
@@ -94,7 +92,6 @@ private final class LauncherViewController: NSViewController {
     var onOpenChatGPT: ((Bool) -> Void)?
     var onCheckForUpdates: (() -> Void)?
 
-    private let configuredApplicationURL: URL?
     private let appNameLabel = NSTextField(labelWithString: "ChatGPT")
     private let appVersionLabel = NSTextField(labelWithString: "")
     private let runtimeWarningLabel = NSTextField(labelWithString: "")
@@ -109,14 +106,12 @@ private final class LauncherViewController: NSViewController {
     private let progressIndicator = NSProgressIndicator()
     private var componentItems: [ComponentUpdateItem] = []
     private var currentApplicationURL: URL?
-    private var statusMonitor: ChatGPTStatusMonitor?
     private var updateStatusDismissalTask: Task<Void, Never>?
     private var runtimeStatus = ChatGPTRuntimeStatus.notRunning
     private var isLaunching = false
     private var isCheckingForUpdates = false
 
-    init(applicationURL: URL?) {
-        configuredApplicationURL = applicationURL
+    init() {
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -281,26 +276,12 @@ private final class LauncherViewController: NSViewController {
         openButton.nextKeyView = revealButton
         revealButton.nextKeyView = updateButton
         updateButton.nextKeyView = openButton
-
-        guard statusMonitor == nil else { return }
-
-        let monitor = ChatGPTStatusMonitor(
-            applicationURL: configuredApplicationURL
-        ) { [weak self] snapshot in
-            self?.apply(snapshot)
-        }
-        statusMonitor = monitor
-        monitor.start()
     }
 
     func setLaunching(_ isLaunching: Bool) {
         self.isLaunching = isLaunching
         updateOpenButton()
         updateActionAvailability()
-    }
-
-    func refreshStatus() {
-        statusMonitor?.refresh()
     }
 
     func setCheckingForUpdates(_ isChecking: Bool) {
@@ -487,7 +468,7 @@ private final class LauncherViewController: NSViewController {
         progressIndicator.isHidden = true
     }
 
-    private func apply(_ snapshot: ChatGPTStatusSnapshot) {
+    func showStatus(_ snapshot: ChatGPTStatusSnapshot) {
         currentApplicationURL = snapshot.applicationURL
         runtimeStatus = snapshot.runtimeStatus
         appVersionLabel.stringValue =
@@ -513,14 +494,7 @@ private final class LauncherViewController: NSViewController {
             return
         }
 
-        switch runtimeStatus {
-        case .notRunning:
-            openButton.title = "Open ChatGPT"
-        case .running:
-            openButton.title = "Show ChatGPT"
-        case .extensionsUnavailable:
-            openButton.title = "Restart ChatGPT"
-        }
+        openButton.title = runtimeStatus.openAction.title
     }
 
     private func showIndeterminateProgress() {
@@ -555,7 +529,7 @@ private final class LauncherViewController: NSViewController {
 
     @objc
     private func openChatGPT() {
-        onOpenChatGPT?(runtimeStatus == .extensionsUnavailable)
+        onOpenChatGPT?(runtimeStatus.openAction.forceRestart)
     }
 
     @objc

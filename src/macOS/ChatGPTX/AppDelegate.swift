@@ -36,6 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var updateTask: Task<Void, Never>?
     private var automaticUpdateTask: Task<Void, Never>?
     private var windowController: LauncherWindowController?
+    private var systemMenuController: SystemMenuController?
+    private var statusMonitor: ChatGPTStatusMonitor?
     private var injectionMonitor: ChatGPTInjectionMonitor?
     private var notificationController: InjectionNotificationController?
     private var checkedAppManagementPermission = false
@@ -62,9 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         installMainMenu()
-        let windowController = LauncherWindowController(
-            applicationURL: options.applicationURL
-        )
+        let windowController = LauncherWindowController()
         windowController.onOpenChatGPT = { [weak self] forceRestart in
             self?.openChatGPT(forceRestart: forceRestart)
         }
@@ -72,6 +72,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.checkForUpdates()
         }
         self.windowController = windowController
+
+        let systemMenuController = SystemMenuController(
+            onOpenChatGPT: { [weak self] forceRestart in
+                self?.openChatGPT(forceRestart: forceRestart)
+            },
+            onShowSettings: { [weak self] in
+                self?.showLauncher()
+            }
+        )
+        self.systemMenuController = systemMenuController
+
+        let statusMonitor = ChatGPTStatusMonitor(
+            applicationURL: options.applicationURL
+        ) { [weak self] snapshot in
+            self?.windowController?.showStatus(snapshot)
+            self?.systemMenuController?.showStatus(snapshot)
+        }
+        self.statusMonitor = statusMonitor
+        statusMonitor.start()
 
         let notificationController = InjectionNotificationController()
         notificationController.onRestart = { [weak self] in
@@ -109,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         automaticUpdateTask?.cancel()
         automaticUpdateTask = nil
+        statusMonitor?.stop()
         injectionMonitor?.stop()
     }
 
@@ -120,6 +140,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             windowController?.showWindow(nil)
         }
         return true
+    }
+
+    private func showLauncher() {
+        NSApplication.shared.activate()
+        windowController?.showWindow(nil)
     }
 
     private func runAPITest() {
@@ -154,13 +179,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         windowController?.setLaunching(true)
+        systemMenuController?.setLaunching(true)
 
         launchTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 launchTask = nil
                 windowController?.setLaunching(false)
-                windowController?.refreshStatus()
+                systemMenuController?.setLaunching(false)
+                statusMonitor?.refresh()
             }
 
             do {
@@ -186,11 +213,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         windowController?.setCheckingForUpdates(true)
+        systemMenuController?.setCheckingForUpdates(true)
         updateTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 updateTask = nil
                 windowController?.setCheckingForUpdates(false)
+                systemMenuController?.setCheckingForUpdates(false)
             }
 
             do {
