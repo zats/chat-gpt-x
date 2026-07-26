@@ -6,12 +6,6 @@ private let componentScrollerInset = NSScroller.scrollerWidth(
     scrollerStyle: .overlay
 )
 
-private final class CircularGlassButton: NSButton {
-    override var cornerConfiguration: NSViewCornerConfiguration? {
-        .capsule
-    }
-}
-
 final class LauncherWindowController: NSWindowController {
     private let launcherViewController: LauncherViewController
 
@@ -105,7 +99,7 @@ private final class LauncherViewController: NSViewController {
     private let appVersionLabel = NSTextField(labelWithString: "")
     private let runtimeWarningLabel = NSTextField(labelWithString: "")
     private let revealButton = NSButton()
-    private let updateButton = CircularGlassButton()
+    private let updateButton = NSButton()
     private let updateSpinner = NSProgressIndicator()
     private let openButton = NSButton()
     private let componentsTableView = NSTableView()
@@ -433,16 +427,15 @@ private final class LauncherViewController: NSViewController {
         revealButton.setAccessibilityIdentifier("reveal-chatgpt")
 
         let updateImage = NSImage(
-            systemSymbolName: "arrow.clockwise",
+            systemSymbolName: "arrow.clockwise.circle.fill",
             accessibilityDescription: "Check for Updates"
         )?.withSymbolConfiguration(actionSymbolConfiguration)
         updateImage?.isTemplate = true
         updateButton.image = updateImage
         updateButton.imagePosition = .imageOnly
         updateButton.imageScaling = .scaleNone
-        updateButton.bezelStyle = .glass
-        updateButton.tintProminence = .primary
-        updateButton.controlSize = .mini
+        updateButton.isBordered = false
+        updateButton.contentTintColor = .secondaryLabelColor
         updateButton.focusRingType = .none
         updateButton.toolTip = "Check for Updates"
         updateButton.target = self
