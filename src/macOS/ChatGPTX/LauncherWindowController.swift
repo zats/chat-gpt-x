@@ -1,9 +1,15 @@
 import AppKit
+import SnapKit
+
+private let componentScrollerInset = NSScroller.scrollerWidth(
+    for: .regular,
+    scrollerStyle: .overlay
+)
 
 final class LauncherWindowController: NSWindowController {
     private let launcherViewController: LauncherViewController
 
-    var onOpenChatGPT: (() -> Void)? {
+    var onOpenChatGPT: ((Bool) -> Void)? {
         get { launcherViewController.onOpenChatGPT }
         set { launcherViewController.onOpenChatGPT = newValue }
     }
@@ -18,7 +24,7 @@ final class LauncherWindowController: NSWindowController {
         )
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 220),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 390),
             styleMask: [
                 .titled,
                 .closable,
@@ -56,6 +62,28 @@ final class LauncherWindowController: NSWindowController {
         launcherViewController.setCheckingForUpdates(isChecking)
     }
 
+    func showUpdateSummary(_ summary: ComponentUpdateSummary) {
+        launcherViewController.showUpdateSummary(summary)
+    }
+
+    func showUpdateProgress(_ progress: ComponentUpdateProgress) {
+        launcherViewController.showUpdateProgress(progress)
+    }
+
+    func showUpdateCompletion(
+        installed: Bool,
+        restartRequired: Bool
+    ) {
+        launcherViewController.showUpdateCompletion(
+            installed: installed,
+            restartRequired: restartRequired
+        )
+    }
+
+    func showUpdateFailure(_ error: any Error) {
+        launcherViewController.showUpdateFailure(error)
+    }
+
     override func showWindow(_ sender: Any?) {
         super.showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
@@ -63,17 +91,29 @@ final class LauncherWindowController: NSWindowController {
 }
 
 private final class LauncherViewController: NSViewController {
-    var onOpenChatGPT: (() -> Void)?
+    var onOpenChatGPT: ((Bool) -> Void)?
     var onCheckForUpdates: (() -> Void)?
 
     private let configuredApplicationURL: URL?
-    private let statusDotView = NSImageView()
-    private let statusLabel = NSTextField(labelWithString: "Not Running")
+    private let appNameLabel = NSTextField(labelWithString: "ChatGPT")
+    private let appVersionLabel = NSTextField(labelWithString: "")
+    private let runtimeWarningLabel = NSTextField(labelWithString: "")
     private let revealButton = NSButton()
     private let updateButton = NSButton()
+    private let updateSpinner = NSProgressIndicator()
     private let openButton = NSButton()
+    private let componentsTableView = NSTableView()
+    private let componentsScrollView = NSScrollView()
+    private let updateStateStack = NSStackView()
+    private let updateStatusLabel = NSTextField(labelWithString: "")
+    private let progressIndicator = NSProgressIndicator()
+    private var componentItems: [ComponentUpdateItem] = []
     private var currentApplicationURL: URL?
     private var statusMonitor: ChatGPTStatusMonitor?
+    private var updateStatusDismissalTask: Task<Void, Never>?
+    private var runtimeStatus = ChatGPTRuntimeStatus.notRunning
+    private var isLaunching = false
+    private var isCheckingForUpdates = false
 
     init(applicationURL: URL?) {
         configuredApplicationURL = applicationURL
@@ -94,57 +134,144 @@ private final class LauncherViewController: NSViewController {
 
         configureControls()
 
-        let statusStack = NSStackView(views: [statusDotView, statusLabel])
-        statusStack.orientation = .horizontal
-        statusStack.alignment = .centerY
-        statusStack.spacing = 6
+        let appTitleStack = NSStackView(
+            views: [appNameLabel, appVersionLabel]
+        )
+        appTitleStack.orientation = .horizontal
+        appTitleStack.alignment = .firstBaseline
+        appTitleStack.spacing = 8
 
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        spacer.setContentCompressionResistancePriority(
-            .defaultLow,
-            for: .horizontal
+        let appInfoStack = NSStackView(
+            views: [appTitleStack, runtimeWarningLabel]
+        )
+        appInfoStack.orientation = .vertical
+        appInfoStack.alignment = .leading
+        appInfoStack.spacing = 4
+
+        let appRow = NSView()
+        appRow.addSubview(appInfoStack)
+        appRow.addSubview(updateButton)
+        appRow.addSubview(updateSpinner)
+        appRow.addSubview(revealButton)
+        appInfoStack.snp.makeConstraints { make in
+            make.leading.centerY.equalToSuperview()
+            make.trailing.lessThanOrEqualTo(updateButton.snp.leading).offset(-16)
+        }
+        revealButton.snp.makeConstraints { make in
+            make.trailing.centerY.equalToSuperview()
+            make.size.equalTo(28)
+        }
+        updateButton.snp.makeConstraints { make in
+            make.trailing.equalTo(revealButton.snp.leading).offset(-8)
+            make.centerY.equalToSuperview()
+            make.size.equalTo(28)
+        }
+        updateSpinner.snp.makeConstraints { make in
+            make.center.equalTo(updateButton)
+            make.size.equalTo(16)
+        }
+        appRow.snp.makeConstraints { make in
+            make.height.equalTo(32)
+        }
+
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.snp.makeConstraints { make in
+            make.height.equalTo(1)
+        }
+
+        let componentsTitleLabel = NSTextField(
+            labelWithString: "Components"
+        )
+        componentsTitleLabel.font = .systemFont(
+            ofSize: 13,
+            weight: .semibold
+        )
+        let latestLabel = NSTextField(labelWithString: "Latest")
+        latestLabel.font = .systemFont(ofSize: 11)
+        latestLabel.textColor = .secondaryLabelColor
+
+        let componentsHeader = NSView()
+        componentsHeader.addSubview(componentsTitleLabel)
+        componentsHeader.addSubview(latestLabel)
+        componentsTitleLabel.snp.makeConstraints { make in
+            make.leading.centerY.equalToSuperview()
+        }
+        latestLabel.snp.makeConstraints { make in
+            make.trailing.equalToSuperview().inset(componentScrollerInset)
+            make.centerY.equalToSuperview()
+        }
+        componentsHeader.snp.makeConstraints { make in
+            make.height.equalTo(18)
+        }
+
+        let componentsContainer = NSView()
+        componentsContainer.addSubview(componentsScrollView)
+        componentsScrollView.snp.makeConstraints { make in
+            make.edges.equalToSuperview()
+        }
+        componentsContainer.snp.makeConstraints { make in
+            make.height.equalTo(174)
+        }
+
+        updateStateStack.addArrangedSubview(updateStatusLabel)
+        updateStateStack.addArrangedSubview(progressIndicator)
+        updateStateStack.orientation = .vertical
+        updateStateStack.alignment = .leading
+        updateStateStack.spacing = 7
+        updateStateStack.isHidden = true
+        progressIndicator.snp.makeConstraints { make in
+            make.width.equalToSuperview()
+        }
+
+        let actionsRow = NSView()
+        actionsRow.addSubview(openButton)
+        openButton.snp.makeConstraints { make in
+            make.leading.centerY.equalToSuperview()
+        }
+        actionsRow.snp.makeConstraints { make in
+            make.height.equalTo(24)
+        }
+
+        let flexibleSpacer = NSView()
+        flexibleSpacer.setContentHuggingPriority(
+            .init(rawValue: 1),
+            for: .vertical
+        )
+        flexibleSpacer.setContentCompressionResistancePriority(
+            .init(rawValue: 1),
+            for: .vertical
         )
 
-        let appRow = NSStackView(
-            views: [statusStack, spacer, updateButton, revealButton]
+        let contentStack = NSStackView(
+            views: [
+                appRow,
+                separator,
+                componentsHeader,
+                componentsContainer,
+                updateStateStack,
+                flexibleSpacer,
+                actionsRow,
+            ]
         )
-        appRow.orientation = .horizontal
-        appRow.alignment = .centerY
-        appRow.spacing = 12
-
-        let contentStack = NSStackView(views: [appRow, openButton])
         contentStack.orientation = .vertical
         contentStack.alignment = .leading
-        contentStack.spacing = 28
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        contentStack.spacing = 14
+        contentStack.setCustomSpacing(10, after: appRow)
+        contentStack.setCustomSpacing(12, after: componentsHeader)
+        contentStack.setCustomSpacing(18, after: updateStateStack)
         backgroundView.addSubview(contentStack)
-
-        NSLayoutConstraint.activate([
-            contentStack.leadingAnchor.constraint(
-                equalTo: backgroundView.leadingAnchor,
-                constant: 28
-            ),
-            contentStack.trailingAnchor.constraint(
-                equalTo: backgroundView.trailingAnchor,
-                constant: -28
-            ),
-            contentStack.topAnchor.constraint(
-                equalTo: backgroundView.safeAreaLayoutGuide.topAnchor,
-                constant: 22
-            ),
-            contentStack.bottomAnchor.constraint(
-                equalTo: backgroundView.bottomAnchor,
-                constant: -28
-            ),
-            appRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            statusDotView.widthAnchor.constraint(equalToConstant: 8),
-            statusDotView.heightAnchor.constraint(equalToConstant: 8),
-            revealButton.widthAnchor.constraint(equalToConstant: 28),
-            revealButton.heightAnchor.constraint(equalToConstant: 28),
-            updateButton.widthAnchor.constraint(equalToConstant: 28),
-            updateButton.heightAnchor.constraint(equalToConstant: 28),
-        ])
+        contentStack.snp.makeConstraints { make in
+            make.leading.trailing.equalToSuperview().inset(28)
+            make.top.equalTo(backgroundView.safeAreaLayoutGuide.snp.top)
+                .offset(8)
+            make.bottom.equalToSuperview().inset(24)
+        }
+        for arrangedView in contentStack.arrangedSubviews {
+            arrangedView.snp.makeConstraints { make in
+                make.width.equalTo(contentStack)
+            }
+        }
     }
 
     override func viewDidAppear() {
@@ -166,9 +293,9 @@ private final class LauncherViewController: NSViewController {
     }
 
     func setLaunching(_ isLaunching: Bool) {
-        openButton.isEnabled = !isLaunching
-        updateButton.isEnabled = !isLaunching
-        openButton.title = isLaunching ? "Opening…" : "Open ChatGPT"
+        self.isLaunching = isLaunching
+        updateOpenButton()
+        updateActionAvailability()
     }
 
     func refreshStatus() {
@@ -176,20 +303,106 @@ private final class LauncherViewController: NSViewController {
     }
 
     func setCheckingForUpdates(_ isChecking: Bool) {
-        updateButton.isEnabled = !isChecking
-        openButton.isEnabled = !isChecking
+        isCheckingForUpdates = isChecking
+        updateButton.isHidden = isChecking
+        updateSpinner.isHidden = !isChecking
+        if isChecking {
+            updateSpinner.startAnimation(nil)
+        } else {
+            updateSpinner.stopAnimation(nil)
+        }
+        updateActionAvailability()
+        guard isChecking else { return }
+        updateStatusDismissalTask?.cancel()
+        hideUpdateState()
+    }
+
+    func showUpdateSummary(_ summary: ComponentUpdateSummary) {
+        componentItems = summary.items
+        componentsTableView.reloadData()
+    }
+
+    func showUpdateProgress(_ progress: ComponentUpdateProgress) {
+        updateStatusDismissalTask?.cancel()
+        switch progress {
+        case let .downloading(
+            _,
+            name,
+            receivedBytes,
+            totalBytes
+        ):
+            let received = ByteCountFormatter.string(
+                fromByteCount: receivedBytes,
+                countStyle: .file
+            )
+            if let totalBytes {
+                let total = ByteCountFormatter.string(
+                    fromByteCount: totalBytes,
+                    countStyle: .file
+                )
+                showUpdateStatus(
+                    "Downloading \(name) · \(received) of \(total)"
+                )
+                progressIndicator.isIndeterminate = false
+                progressIndicator.minValue = 0
+                progressIndicator.maxValue = Double(totalBytes)
+                progressIndicator.doubleValue = Double(receivedBytes)
+                progressIndicator.stopAnimation(nil)
+            } else {
+                showUpdateStatus("Downloading \(name) · \(received)")
+                showIndeterminateProgress()
+            }
+        case let .verifying(_, name):
+            showUpdateStatus("Verifying \(name)…")
+            showIndeterminateProgress()
+        case let .installing(_, name):
+            showUpdateStatus("Installing \(name)…")
+            showIndeterminateProgress()
+        }
+    }
+
+    func showUpdateCompletion(
+        installed: Bool,
+        restartRequired: Bool
+    ) {
+        hideProgress()
+        if !installed {
+            hideUpdateState()
+        } else if restartRequired {
+            showUpdateStatus("Restart ChatGPT to activate updates.")
+        } else {
+            showUpdateStatus("Updated")
+            updateStatusDismissalTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                guard !Task.isCancelled else { return }
+                self?.hideUpdateState()
+            }
+        }
+    }
+
+    func showUpdateFailure(_ error: any Error) {
+        updateStatusDismissalTask?.cancel()
+        hideProgress()
+        showUpdateStatus(
+            "Update failed: \(error.localizedDescription)"
+        )
     }
 
     private func configureControls() {
-        statusDotView.image = NSImage(
-            systemSymbolName: "circle.fill",
-            accessibilityDescription: nil
+        appNameLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        appVersionLabel.font = .monospacedDigitSystemFont(
+            ofSize: 12,
+            weight: .regular
         )
-        statusDotView.contentTintColor = .tertiaryLabelColor
+        appVersionLabel.textColor = .secondaryLabelColor
+        appVersionLabel.setAccessibilityIdentifier("chatgpt-version")
 
-        statusLabel.font = .systemFont(ofSize: 13)
-        statusLabel.textColor = .secondaryLabelColor
-        statusLabel.setAccessibilityIdentifier("chatgpt-status")
+        runtimeWarningLabel.font = .systemFont(ofSize: 11)
+        runtimeWarningLabel.textColor = .systemOrange
+        runtimeWarningLabel.isHidden = true
+        runtimeWarningLabel.setAccessibilityIdentifier(
+            "chatgpt-runtime-warning"
+        )
 
         revealButton.image = NSImage(
             systemSymbolName: "arrow.up.right.circle.fill",
@@ -220,6 +433,12 @@ private final class LauncherViewController: NSViewController {
         updateButton.action = #selector(checkForUpdates)
         updateButton.setAccessibilityIdentifier("check-for-updates")
 
+        updateSpinner.style = .spinning
+        updateSpinner.controlSize = .small
+        updateSpinner.isHidden = true
+        updateSpinner.setAccessibilityLabel("Checking for updates")
+        updateSpinner.setAccessibilityIdentifier("checking-for-updates")
+
         openButton.title = "Open ChatGPT"
         openButton.bezelStyle = .glass
         openButton.tintProminence = .primary
@@ -229,24 +448,94 @@ private final class LauncherViewController: NSViewController {
         openButton.target = self
         openButton.action = #selector(openChatGPT)
         openButton.setAccessibilityIdentifier("open-chatgpt")
+
+        let tableColumn = NSTableColumn(identifier: .component)
+        componentsTableView.addTableColumn(tableColumn)
+        componentsTableView.headerView = nil
+        componentsTableView.style = .plain
+        componentsTableView.backgroundColor = .clear
+        componentsTableView.selectionHighlightStyle = .none
+        componentsTableView.rowHeight = 42
+        componentsTableView.intercellSpacing = NSSize(width: 0, height: 2)
+        componentsTableView.columnAutoresizingStyle =
+            .lastColumnOnlyAutoresizingStyle
+        tableColumn.resizingMask = .autoresizingMask
+        componentsTableView.dataSource = self
+        componentsTableView.delegate = self
+
+        componentsScrollView.documentView = componentsTableView
+        componentsScrollView.drawsBackground = false
+        componentsScrollView.borderType = .noBorder
+        componentsScrollView.hasVerticalScroller = true
+        componentsScrollView.autohidesScrollers = true
+
+        updateStatusLabel.font = .systemFont(ofSize: 11)
+        updateStatusLabel.textColor = .secondaryLabelColor
+        updateStatusLabel.lineBreakMode = .byTruncatingTail
+        updateStatusLabel.isHidden = true
+        progressIndicator.style = .bar
+        progressIndicator.controlSize = .small
+        progressIndicator.isHidden = true
     }
 
     private func apply(_ snapshot: ChatGPTStatusSnapshot) {
         currentApplicationURL = snapshot.applicationURL
+        runtimeStatus = snapshot.runtimeStatus
+        appVersionLabel.stringValue =
+            snapshot.applicationVersion ?? "Not installed"
         revealButton.isEnabled = snapshot.applicationURL != nil
         revealButton.toolTip = snapshot.applicationURL?.path
+        runtimeWarningLabel.stringValue = "Extensions unavailable"
+        runtimeWarningLabel.isHidden =
+            snapshot.runtimeStatus != .extensionsUnavailable
+        updateOpenButton()
+        updateActionAvailability()
+    }
 
-        switch snapshot.runtimeStatus {
-        case .notRunning:
-            statusLabel.stringValue = "Not Running"
-            statusDotView.contentTintColor = .tertiaryLabelColor
-        case .running(extensionsEnabled: true):
-            statusLabel.stringValue = "Running"
-            statusDotView.contentTintColor = .systemGreen
-        case .running(extensionsEnabled: false):
-            statusLabel.stringValue = "Running · Extensions Disabled"
-            statusDotView.contentTintColor = .systemOrange
+    private func updateActionAvailability() {
+        let enabled = !isLaunching && !isCheckingForUpdates
+        updateButton.isEnabled = enabled
+        openButton.isEnabled = enabled && currentApplicationURL != nil
+    }
+
+    private func updateOpenButton() {
+        if isLaunching {
+            openButton.title = "Opening…"
+            return
         }
+
+        switch runtimeStatus {
+        case .notRunning:
+            openButton.title = "Open ChatGPT"
+        case .running:
+            openButton.title = "Show ChatGPT"
+        case .extensionsUnavailable:
+            openButton.title = "Restart ChatGPT"
+        }
+    }
+
+    private func showIndeterminateProgress() {
+        updateStateStack.isHidden = false
+        progressIndicator.isHidden = false
+        progressIndicator.isIndeterminate = true
+        progressIndicator.startAnimation(nil)
+    }
+
+    private func hideProgress() {
+        progressIndicator.stopAnimation(nil)
+        progressIndicator.isHidden = true
+    }
+
+    private func showUpdateStatus(_ status: String) {
+        updateStatusLabel.stringValue = status
+        updateStatusLabel.isHidden = false
+        updateStateStack.isHidden = false
+    }
+
+    private func hideUpdateState() {
+        updateStatusLabel.stringValue = ""
+        updateStatusLabel.isHidden = true
+        updateStateStack.isHidden = true
     }
 
     @objc
@@ -257,11 +546,100 @@ private final class LauncherViewController: NSViewController {
 
     @objc
     private func openChatGPT() {
-        onOpenChatGPT?()
+        onOpenChatGPT?(runtimeStatus == .extensionsUnavailable)
     }
 
     @objc
     private func checkForUpdates() {
         onCheckForUpdates?()
     }
+}
+
+extension LauncherViewController: NSTableViewDataSource, NSTableViewDelegate {
+    func numberOfRows(in _: NSTableView) -> Int {
+        componentItems.count
+    }
+
+    func tableView(
+        _ tableView: NSTableView,
+        viewFor _: NSTableColumn?,
+        row: Int
+    ) -> NSView? {
+        let cell =
+            tableView.makeView(
+                withIdentifier: .component,
+                owner: self
+            ) as? ComponentRowView
+            ?? ComponentRowView()
+        cell.identifier = .component
+        cell.configure(with: componentItems[row])
+        return cell
+    }
+}
+
+private final class ComponentRowView: NSTableCellView {
+    private let nameLabel = NSTextField(labelWithString: "")
+    private let latestVersionLabel = NSTextField(labelWithString: "")
+    private let localVersionLabel = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        nameLabel.font = .systemFont(ofSize: 13)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        latestVersionLabel.font = .monospacedDigitSystemFont(
+            ofSize: 12,
+            weight: .medium
+        )
+        latestVersionLabel.alignment = .right
+        localVersionLabel.font = .systemFont(ofSize: 10)
+        localVersionLabel.textColor = .secondaryLabelColor
+        localVersionLabel.alignment = .right
+
+        let versionStack = NSStackView(
+            views: [latestVersionLabel, localVersionLabel]
+        )
+        versionStack.orientation = .vertical
+        versionStack.alignment = .trailing
+        versionStack.spacing = 2
+
+        addSubview(nameLabel)
+        addSubview(versionStack)
+        nameLabel.snp.makeConstraints { make in
+            make.leading.centerY.equalToSuperview()
+            make.trailing.lessThanOrEqualTo(versionStack.snp.leading)
+                .offset(-16)
+        }
+        versionStack.snp.makeConstraints { make in
+            make.trailing.equalToSuperview().inset(componentScrollerInset)
+            make.centerY.equalToSuperview()
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is unavailable")
+    }
+
+    func configure(with item: ComponentUpdateItem) {
+        nameLabel.stringValue = item.name
+        latestVersionLabel.stringValue = item.latestVersion
+        switch item.localVersion {
+        case .current:
+            localVersionLabel.isHidden = true
+        case let .different(version):
+            localVersionLabel.stringValue = "Installed \(version)"
+            localVersionLabel.isHidden = false
+        case .missing:
+            localVersionLabel.stringValue = "Not installed"
+            localVersionLabel.isHidden = false
+        }
+        setAccessibilityLabel(
+            "\(item.name), latest \(item.latestVersion)"
+        )
+    }
+}
+
+private extension NSUserInterfaceItemIdentifier {
+    static let component = Self("component")
 }

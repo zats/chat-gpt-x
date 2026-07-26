@@ -10,12 +10,19 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
 
+packages:
+  SnapKit:
+    url: https://github.com/SnapKit/SnapKit.git
+    from: 6.0.0
+
 targets:
   ChatGPTX:
     type: application
     platform: macOS
     sources:
       - path: ChatGPTX
+    dependencies:
+      - package: SnapKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chatgptx.launcher

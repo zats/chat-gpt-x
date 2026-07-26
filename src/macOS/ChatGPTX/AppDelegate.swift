@@ -59,8 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let windowController = LauncherWindowController(
             applicationURL: options.applicationURL
         )
-        windowController.onOpenChatGPT = { [weak self] in
-            self?.openChatGPT()
+        windowController.onOpenChatGPT = { [weak self] forceRestart in
+            self?.openChatGPT(forceRestart: forceRestart)
         }
         windowController.onCheckForUpdates = { [weak self] in
             self?.checkForUpdates()
@@ -189,63 +189,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     throw UpdateUIError.chatGPTNotInstalled
                 }
                 let index = try await ComponentUpdater.fetchIndex()
-                let result = try await componentStore.install(
+                let plan = try componentStore.planUpdate(
                     index,
                     chatgptVersion: chatgptVersion
                 )
+                windowController?.showUpdateSummary(plan.summary)
+                let result = try await componentStore.install(
+                    plan,
+                    progress: { [weak self] progress in
+                        self?.windowController?.showUpdateProgress(progress)
+                    }
+                )
                 preparedComponents = result.preparedStore
+                windowController?.showUpdateSummary(
+                    plan.summary(installed: result.preparedStore.versions)
+                )
+                let installed: Bool
+                switch result {
+                case .upToDate:
+                    installed = false
+                case .installed:
+                    installed = true
+                }
+                let restartRequired =
+                    installed && !ChatGPTRuntime.runningApplications.isEmpty
+                windowController?.showUpdateCompletion(
+                    installed: installed,
+                    restartRequired: restartRequired
+                )
                 showUpdateResult(result)
             } catch {
-                showUpdateError(error)
+                windowController?.showUpdateFailure(error)
             }
         }
     }
 
     private func showUpdateResult(_ result: ComponentUpdateResult) {
-        let alert = NSAlert()
-        switch result {
-        case .upToDate:
-            alert.messageText = "Up to Date"
-            alert.informativeText = "All components are current."
-            alert.addButton(withTitle: "OK")
-        case .installed:
-            alert.messageText = "Components Installed"
-            if ChatGPTRuntime.runningApplications.isEmpty {
-                alert.informativeText =
-                    "Updates will activate when ChatGPT opens."
-                alert.addButton(withTitle: "OK")
-            } else {
-                alert.informativeText =
-                    "Restart ChatGPT to activate the updates."
-                alert.addButton(withTitle: "Restart ChatGPT")
-                alert.addButton(withTitle: "Later")
-            }
+        guard case .installed = result,
+            !ChatGPTRuntime.runningApplications.isEmpty else {
+            return
         }
+        let alert = NSAlert()
+        alert.messageText = "Components Installed"
+        alert.informativeText = "Restart ChatGPT to activate the updates."
+        alert.addButton(withTitle: "Restart ChatGPT")
+        alert.addButton(withTitle: "Later")
 
         guard let window = windowController?.window else {
             alert.runModal()
             return
         }
         alert.beginSheetModal(for: window) { [weak self] response in
-            guard case .installed = result,
-                response == .alertFirstButtonReturn,
-                !ChatGPTRuntime.runningApplications.isEmpty else {
+            guard response == .alertFirstButtonReturn else {
                 return
             }
             self?.openChatGPT(forceRestart: true)
-        }
-    }
-
-    private func showUpdateError(_ error: any Error) {
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Update Failed"
-        alert.informativeText = error.localizedDescription
-        alert.addButton(withTitle: "OK")
-        if let window = windowController?.window {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
         }
     }
 
