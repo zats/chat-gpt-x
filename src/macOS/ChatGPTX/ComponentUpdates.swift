@@ -1,6 +1,11 @@
 import CryptoKit
 import Foundation
 
+private let defaultComponentUpdateIndexURL = URL(
+    string:
+        "https://github.com/zats/chat-gpt-x/releases/download/updates/latest.json"
+)!
+
 struct ComponentUpdateIndex: Decodable {
     let schemaVersion: Int
     let generation: Int
@@ -321,15 +326,43 @@ enum ComponentUpdateResult {
     }
 }
 
-enum ComponentUpdater {
-    private static let indexURL = URL(
-        string:
-            "https://github.com/zats/chat-gpt-x/releases/download/updates/latest.json"
-    )!
+final class ComponentUpdateService {
+    private let componentStore: ComponentStore
+    private let session: URLSession
+    private let indexURL: URL
 
-    static func fetchIndex(
-        session: URLSession = .shared
-    ) async throws -> ComponentUpdateIndex {
+    init(
+        componentStore: ComponentStore,
+        session: URLSession = .shared,
+        indexURL: URL = defaultComponentUpdateIndexURL
+    ) {
+        self.componentStore = componentStore
+        self.session = session
+        self.indexURL = indexURL
+    }
+
+    func check(
+        for chatgptVersion: String
+    ) async throws -> ComponentUpdatePlan {
+        let index = try await fetchIndex()
+        return try componentStore.planUpdate(
+            index,
+            chatgptVersion: chatgptVersion
+        )
+    }
+
+    func install(
+        _ plan: ComponentUpdatePlan,
+        progress: @escaping ComponentUpdateProgressHandler = { _ in }
+    ) async throws -> ComponentUpdateResult {
+        try await componentStore.install(
+            plan,
+            session: session,
+            progress: progress
+        )
+    }
+
+    private func fetchIndex() async throws -> ComponentUpdateIndex {
         let request = URLRequest(
             url: indexURL,
             cachePolicy: .reloadRevalidatingCacheData
@@ -343,7 +376,7 @@ enum ComponentUpdater {
     }
 }
 
-extension ComponentStore {
+private extension ComponentStore {
     func planUpdate(
         _ index: ComponentUpdateIndex,
         chatgptVersion: String

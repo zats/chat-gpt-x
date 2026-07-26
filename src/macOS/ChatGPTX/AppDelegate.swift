@@ -28,7 +28,7 @@ enum ChatGPTXApplication {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: LaunchOptions
-    private var componentStore: ComponentStore?
+    private var componentUpdateService: ComponentUpdateService?
     private var preparedComponents: PreparedComponentStore?
     private var launchTask: Task<Void, Never>?
     private var updateTask: Task<Void, Never>?
@@ -43,7 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
             let componentStore = try ComponentStore()
-            self.componentStore = componentStore
+            componentUpdateService = ComponentUpdateService(
+                componentStore: componentStore
+            )
             preparedComponents = try componentStore.prepare()
         } catch {
             failStartup(error)
@@ -163,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func checkForUpdates() {
         guard updateTask == nil, launchTask == nil else { return }
-        guard let componentStore else {
+        guard let componentUpdateService else {
             failStartup(ComponentStoreUnavailable())
             return
         }
@@ -189,13 +191,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 else {
                     throw UpdateUIError.chatGPTNotInstalled
                 }
-                let index = try await ComponentUpdater.fetchIndex()
-                let plan = try componentStore.planUpdate(
-                    index,
-                    chatgptVersion: chatgptVersion
+                let plan = try await componentUpdateService.check(
+                    for: chatgptVersion
                 )
                 windowController?.showUpdateSummary(plan.summary)
-                let result = try await componentStore.install(
+                let result = try await componentUpdateService.install(
                     plan,
                     progress: { [weak self] progress in
                         self?.windowController?.showUpdateProgress(progress)
