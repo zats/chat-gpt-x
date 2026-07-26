@@ -99,6 +99,7 @@ private final class LauncherViewController: NSViewController {
     private let appVersionLabel = NSTextField(labelWithString: "")
     private let runtimeWarningLabel = NSTextField(labelWithString: "")
     private let revealButton = NSButton()
+    private let revealGlassView = NSGlassEffectView()
     private let updateButton = NSButton()
     private let updateGlassView = NSGlassEffectView()
     private let updateSpinner = NSProgressIndicator()
@@ -153,18 +154,18 @@ private final class LauncherViewController: NSViewController {
         appRow.addSubview(appInfoStack)
         appRow.addSubview(updateGlassView)
         appRow.addSubview(updateSpinner)
-        appRow.addSubview(revealButton)
+        appRow.addSubview(revealGlassView)
         appInfoStack.snp.makeConstraints { make in
             make.leading.centerY.equalToSuperview()
             make.trailing.lessThanOrEqualTo(updateGlassView.snp.leading)
                 .offset(-16)
         }
-        revealButton.snp.makeConstraints { make in
+        revealGlassView.snp.makeConstraints { make in
             make.trailing.centerY.equalToSuperview()
             make.size.equalTo(28)
         }
         updateGlassView.snp.makeConstraints { make in
-            make.trailing.equalTo(revealButton.snp.leading).offset(-8)
+            make.trailing.equalTo(revealGlassView.snp.leading).offset(-8)
             make.centerY.equalToSuperview()
             make.size.equalTo(28)
         }
@@ -391,6 +392,11 @@ private final class LauncherViewController: NSViewController {
     }
 
     private func configureControls() {
+        let actionSymbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: 18,
+            weight: .regular
+        )
+
         appNameLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         appVersionLabel.font = .monospacedDigitSystemFont(
             ofSize: 12,
@@ -406,29 +412,37 @@ private final class LauncherViewController: NSViewController {
             "chatgpt-runtime-warning"
         )
 
-        revealButton.image = NSImage(
+        let revealImage = NSImage(
             systemSymbolName: "magnifyingglass.circle.fill",
             accessibilityDescription: "Show ChatGPT in Finder"
-        )?.withSymbolConfiguration(
-            NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
-        )
+        )?.withSymbolConfiguration(actionSymbolConfiguration)
+        revealImage?.isTemplate = true
+        revealButton.image = revealImage
         revealButton.imagePosition = .imageOnly
+        revealButton.imageScaling = .scaleProportionallyDown
         revealButton.isBordered = false
         revealButton.contentTintColor = .secondaryLabelColor
+        revealButton.controlSize = .small
         revealButton.focusRingType = .none
         revealButton.target = self
         revealButton.action = #selector(revealChatGPT)
         revealButton.setAccessibilityIdentifier("reveal-chatgpt")
+        revealGlassView.contentView = revealButton
+        revealGlassView.cornerRadius = 14
+        revealButton.snp.makeConstraints { make in
+            make.edges.equalToSuperview()
+        }
 
-        updateButton.image = NSImage(
+        let updateImage = NSImage(
             systemSymbolName: "arrow.clockwise",
             accessibilityDescription: "Check for Updates"
-        )?.withSymbolConfiguration(
-            NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
-        )
+        )?.withSymbolConfiguration(actionSymbolConfiguration)
+        updateImage?.isTemplate = true
+        updateButton.image = updateImage
         updateButton.imagePosition = .imageOnly
+        updateButton.imageScaling = .scaleProportionallyDown
         updateButton.isBordered = false
-        updateButton.contentTintColor = .labelColor
+        updateButton.contentTintColor = .alternateSelectedControlTextColor
         updateButton.controlSize = .small
         updateButton.focusRingType = .none
         updateButton.toolTip = "Check for Updates"
