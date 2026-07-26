@@ -100,6 +100,7 @@ private final class LauncherViewController: NSViewController {
     private let runtimeWarningLabel = NSTextField(labelWithString: "")
     private let revealButton = NSButton()
     private let updateButton = NSButton()
+    private let updateGlassView = NSGlassEffectView()
     private let updateSpinner = NSProgressIndicator()
     private let openButton = NSButton()
     private let componentsTableView = NSTableView()
@@ -150,24 +151,25 @@ private final class LauncherViewController: NSViewController {
 
         let appRow = NSView()
         appRow.addSubview(appInfoStack)
-        appRow.addSubview(updateButton)
+        appRow.addSubview(updateGlassView)
         appRow.addSubview(updateSpinner)
         appRow.addSubview(revealButton)
         appInfoStack.snp.makeConstraints { make in
             make.leading.centerY.equalToSuperview()
-            make.trailing.lessThanOrEqualTo(updateButton.snp.leading).offset(-16)
+            make.trailing.lessThanOrEqualTo(updateGlassView.snp.leading)
+                .offset(-16)
         }
         revealButton.snp.makeConstraints { make in
             make.trailing.centerY.equalToSuperview()
             make.size.equalTo(28)
         }
-        updateButton.snp.makeConstraints { make in
+        updateGlassView.snp.makeConstraints { make in
             make.trailing.equalTo(revealButton.snp.leading).offset(-8)
             make.centerY.equalToSuperview()
             make.size.equalTo(28)
         }
         updateSpinner.snp.makeConstraints { make in
-            make.center.equalTo(updateButton)
+            make.center.equalTo(updateGlassView)
             make.size.equalTo(16)
         }
         appRow.snp.makeConstraints { make in
@@ -304,7 +306,7 @@ private final class LauncherViewController: NSViewController {
 
     func setCheckingForUpdates(_ isChecking: Bool) {
         isCheckingForUpdates = isChecking
-        updateButton.isHidden = isChecking
+        updateGlassView.isHidden = isChecking
         updateSpinner.isHidden = !isChecking
         if isChecking {
             updateSpinner.startAnimation(nil)
@@ -405,7 +407,7 @@ private final class LauncherViewController: NSViewController {
         )
 
         revealButton.image = NSImage(
-            systemSymbolName: "arrow.up.right.circle.fill",
+            systemSymbolName: "magnifyingglass.circle.fill",
             accessibilityDescription: "Show ChatGPT in Finder"
         )?.withSymbolConfiguration(
             NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
@@ -419,19 +421,26 @@ private final class LauncherViewController: NSViewController {
         revealButton.setAccessibilityIdentifier("reveal-chatgpt")
 
         updateButton.image = NSImage(
-            systemSymbolName: "arrow.clockwise.circle.fill",
+            systemSymbolName: "arrow.clockwise",
             accessibilityDescription: "Check for Updates"
         )?.withSymbolConfiguration(
             NSImage.SymbolConfiguration(pointSize: 18, weight: .regular)
         )
         updateButton.imagePosition = .imageOnly
         updateButton.isBordered = false
-        updateButton.contentTintColor = .secondaryLabelColor
+        updateButton.contentTintColor = .labelColor
+        updateButton.controlSize = .small
         updateButton.focusRingType = .none
         updateButton.toolTip = "Check for Updates"
         updateButton.target = self
         updateButton.action = #selector(checkForUpdates)
         updateButton.setAccessibilityIdentifier("check-for-updates")
+        updateGlassView.contentView = updateButton
+        updateGlassView.cornerRadius = 14
+        updateGlassView.tintColor = .controlAccentColor
+        updateButton.snp.makeConstraints { make in
+            make.edges.equalToSuperview()
+        }
 
         updateSpinner.style = .spinning
         updateSpinner.controlSize = .small
