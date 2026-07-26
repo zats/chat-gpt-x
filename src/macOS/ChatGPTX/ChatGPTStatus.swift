@@ -3,11 +3,13 @@ import Foundation
 
 enum ChatGPTRuntimeStatus: Equatable {
     case notRunning
-    case running(extensionsEnabled: Bool)
+    case running
+    case extensionsUnavailable
 }
 
 struct ChatGPTStatusSnapshot: Equatable {
     let applicationURL: URL?
+    let applicationVersion: String?
     let runtimeStatus: ChatGPTRuntimeStatus
 }
 
@@ -190,6 +192,8 @@ final class ChatGPTInjectionMonitor {
 }
 
 final class ChatGPTStatusMonitor: NSObject {
+    private static let injectionGracePeriod: TimeInterval = 6
+
     private let applicationURL: URL?
     private let fileManager: FileManager
     private let workspace: NSWorkspace
@@ -263,24 +267,33 @@ final class ChatGPTStatusMonitor: NSObject {
         let resolvedApplicationURL = applicationURL
             ?? runningApplications.first?.bundleURL
             ?? ChatGPTLauncher.installedApplicationURL(workspace: workspace)
-
-        guard !runningApplications.isEmpty else {
-            return ChatGPTStatusSnapshot(
-                applicationURL: resolvedApplicationURL,
-                runtimeStatus: .notRunning
-            )
+        let applicationVersion = resolvedApplicationURL.flatMap {
+            ChatGPTLauncher.applicationVersion(at: $0)
         }
-
-        let extensionsEnabled = runningApplications.contains { application in
+        let runtimeStatus: ChatGPTRuntimeStatus
+        if runningApplications.isEmpty {
+            runtimeStatus = .notRunning
+        } else if runningApplications.contains(where: {
             ChatGPTRuntime.extensionsEnabled(
-                for: application,
+                for: $0,
                 fileManager: fileManager
             )
+        }) {
+            runtimeStatus = .running
+        } else if runningApplications.contains(where: {
+            guard let launchDate = $0.launchDate else { return false }
+            return Date().timeIntervalSince(launchDate)
+                < injectionGracePeriod
+        }) {
+            runtimeStatus = .running
+        } else {
+            runtimeStatus = .extensionsUnavailable
         }
 
         return ChatGPTStatusSnapshot(
             applicationURL: resolvedApplicationURL,
-            runtimeStatus: .running(extensionsEnabled: extensionsEnabled)
+            applicationVersion: applicationVersion,
+            runtimeStatus: runtimeStatus
         )
     }
 
