@@ -70,6 +70,7 @@ arguments are forwarded to ChatGPT in test mode for isolated profiles and CDP.
 5. Research is done on extracted copies of the app in temp directories (see the skill's `scripts/extract-app.sh`), cleaned up afterwards — never against the installed app in place, never by modifying its bundle.
 6. Durable knowledge lives in the skill's `references/`; version-specific findings live in `src/platform/bindings/<version>/DERIVATION.md`. Don't mix the two.
 7. Component releases are derived from predictable paths. Changes under the API, a versioned binding directory, or a public extension directory increment that component's semantic version and the schema-v2 `updates/latest.json` generation in the same pull request. Internal extensions declare `"private": true` and stay out of the public index. A new binding also increments each public extension version whose `compatibility.chatgpt` range is expanded after validation. CI runs `scripts/refresh-update-index-hashes.sh <base-sha>` and commits deterministic archive hashes to same-repository pull requests before validation. After CI passes on `main`, GitHub Releases publishes immutable `chatgpt-api-v<version>`, `binding-<chatgpt>-v<version>`, and `extension-<id>-v<version>` archives, verifies every referenced checksum, and publishes the index on the stable `updates` release.
+8. Programmatic Auto Layout in the macOS launcher uses SnapKit exclusively. Do not create or activate `NSLayoutConstraint` instances directly.
 
 ## Live debugging (CDP)
 
