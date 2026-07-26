@@ -6,6 +6,12 @@ private let componentScrollerInset = NSScroller.scrollerWidth(
     scrollerStyle: .overlay
 )
 
+private final class CircularGlassButton: NSButton {
+    override var cornerConfiguration: NSViewCornerConfiguration? {
+        .capsule
+    }
+}
+
 final class LauncherWindowController: NSWindowController {
     private let launcherViewController: LauncherViewController
 
@@ -99,9 +105,7 @@ private final class LauncherViewController: NSViewController {
     private let appVersionLabel = NSTextField(labelWithString: "")
     private let runtimeWarningLabel = NSTextField(labelWithString: "")
     private let revealButton = NSButton()
-    private let revealGlassView = NSGlassEffectView()
-    private let updateButton = NSButton()
-    private let updateGlassView = NSGlassEffectView()
+    private let updateButton = CircularGlassButton()
     private let updateSpinner = NSProgressIndicator()
     private let openButton = NSButton()
     private let componentsTableView = NSTableView()
@@ -152,25 +156,25 @@ private final class LauncherViewController: NSViewController {
 
         let appRow = NSView()
         appRow.addSubview(appInfoStack)
-        appRow.addSubview(updateGlassView)
+        appRow.addSubview(updateButton)
         appRow.addSubview(updateSpinner)
-        appRow.addSubview(revealGlassView)
+        appRow.addSubview(revealButton)
         appInfoStack.snp.makeConstraints { make in
             make.leading.centerY.equalToSuperview()
-            make.trailing.lessThanOrEqualTo(updateGlassView.snp.leading)
+            make.trailing.lessThanOrEqualTo(revealButton.snp.leading)
                 .offset(-16)
         }
-        revealGlassView.snp.makeConstraints { make in
-            make.trailing.centerY.equalToSuperview()
-            make.size.equalTo(28)
-        }
-        updateGlassView.snp.makeConstraints { make in
-            make.trailing.equalTo(revealGlassView.snp.leading).offset(-8)
+        revealButton.snp.makeConstraints { make in
+            make.trailing.equalTo(updateButton.snp.leading).offset(-8)
             make.centerY.equalToSuperview()
-            make.size.equalTo(28)
+            make.size.equalTo(16)
+        }
+        updateButton.snp.makeConstraints { make in
+            make.trailing.centerY.equalToSuperview()
+            make.size.equalTo(16)
         }
         updateSpinner.snp.makeConstraints { make in
-            make.center.equalTo(updateGlassView)
+            make.center.equalTo(updateButton)
             make.size.equalTo(16)
         }
         appRow.snp.makeConstraints { make in
@@ -280,9 +284,9 @@ private final class LauncherViewController: NSViewController {
     override func viewDidAppear() {
         super.viewDidAppear()
         view.window?.initialFirstResponder = openButton
-        openButton.nextKeyView = updateButton
-        updateButton.nextKeyView = revealButton
-        revealButton.nextKeyView = openButton
+        openButton.nextKeyView = revealButton
+        revealButton.nextKeyView = updateButton
+        updateButton.nextKeyView = openButton
 
         guard statusMonitor == nil else { return }
 
@@ -307,7 +311,7 @@ private final class LauncherViewController: NSViewController {
 
     func setCheckingForUpdates(_ isChecking: Bool) {
         isCheckingForUpdates = isChecking
-        updateGlassView.isHidden = isChecking
+        updateButton.isHidden = isChecking
         updateSpinner.isHidden = !isChecking
         if isChecking {
             updateSpinner.startAnimation(nil)
@@ -419,19 +423,14 @@ private final class LauncherViewController: NSViewController {
         revealImage?.isTemplate = true
         revealButton.image = revealImage
         revealButton.imagePosition = .imageOnly
-        revealButton.imageScaling = .scaleProportionallyDown
+        revealButton.imageScaling = .scaleNone
         revealButton.isBordered = false
         revealButton.contentTintColor = .secondaryLabelColor
-        revealButton.controlSize = .small
         revealButton.focusRingType = .none
+        revealButton.toolTip = "Show ChatGPT in Finder"
         revealButton.target = self
         revealButton.action = #selector(revealChatGPT)
         revealButton.setAccessibilityIdentifier("reveal-chatgpt")
-        revealGlassView.contentView = revealButton
-        revealGlassView.cornerRadius = 14
-        revealButton.snp.makeConstraints { make in
-            make.edges.equalToSuperview()
-        }
 
         let updateImage = NSImage(
             systemSymbolName: "arrow.clockwise",
@@ -440,21 +439,15 @@ private final class LauncherViewController: NSViewController {
         updateImage?.isTemplate = true
         updateButton.image = updateImage
         updateButton.imagePosition = .imageOnly
-        updateButton.imageScaling = .scaleProportionallyDown
-        updateButton.isBordered = false
-        updateButton.contentTintColor = .alternateSelectedControlTextColor
-        updateButton.controlSize = .small
+        updateButton.imageScaling = .scaleNone
+        updateButton.bezelStyle = .glass
+        updateButton.tintProminence = .primary
+        updateButton.controlSize = .mini
         updateButton.focusRingType = .none
         updateButton.toolTip = "Check for Updates"
         updateButton.target = self
         updateButton.action = #selector(checkForUpdates)
         updateButton.setAccessibilityIdentifier("check-for-updates")
-        updateGlassView.contentView = updateButton
-        updateGlassView.cornerRadius = 14
-        updateGlassView.tintColor = .controlAccentColor
-        updateButton.snp.makeConstraints { make in
-            make.edges.equalToSuperview()
-        }
 
         updateSpinner.style = .spinning
         updateSpinner.controlSize = .small

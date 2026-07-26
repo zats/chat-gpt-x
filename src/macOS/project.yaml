@@ -3,7 +3,7 @@ name: ChatGPTX
 options:
   createIntermediateGroups: true
   deploymentTarget:
-    macOS: "26.0"
+    macOS: "27.0"
 
 settings:
   base:
