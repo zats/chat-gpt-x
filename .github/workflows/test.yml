@@ -16,7 +16,7 @@ on:
       CHATGPTX_PRIMARY_AUTH_JSON:
         required: true
       CHATGPTX_SECONDARY_AUTH_JSON:
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -87,7 +87,7 @@ jobs:
         run: |
           app_path="$(scripts/download-pinned-chatgpt.sh "$RUNNER_TEMP/chatgpt-app")"
           echo "path=$app_path" >> "$GITHUB_OUTPUT"
-      - name: Write burner authentication files
+      - name: Write test authentication files
         id: authentication
         env:
           PRIMARY_AUTH_JSON: ${{ secrets.CHATGPTX_PRIMARY_AUTH_JSON }}
@@ -97,18 +97,30 @@ jobs:
             echo "CHATGPTX_PRIMARY_AUTH_JSON is required" >&2
             exit 1
           }
-          [[ -n "$SECONDARY_AUTH_JSON" ]] || {
-            echo "CHATGPTX_SECONDARY_AUTH_JSON is required" >&2
-            exit 1
-          }
           auth_root="$RUNNER_TEMP/chatgptx-auth"
           mkdir -p "$auth_root"
           chmod 700 "$auth_root"
           printf '%s' "$PRIMARY_AUTH_JSON" > "$auth_root/primary.json"
-          printf '%s' "$SECONDARY_AUTH_JSON" > "$auth_root/secondary.json"
-          chmod 600 "$auth_root/primary.json" "$auth_root/secondary.json"
+          chmod 600 "$auth_root/primary.json"
           echo "primary=$auth_root/primary.json" >> "$GITHUB_OUTPUT"
-          echo "secondary=$auth_root/secondary.json" >> "$GITHUB_OUTPUT"
+          auth_mode="$(jq -er '.auth_mode' "$auth_root/primary.json")"
+          case "$auth_mode" in
+            apikey)
+              ;;
+            chatgpt)
+              [[ -n "$SECONDARY_AUTH_JSON" ]] || {
+                echo "CHATGPTX_SECONDARY_AUTH_JSON is required for ChatGPT authentication" >&2
+                exit 1
+              }
+              printf '%s' "$SECONDARY_AUTH_JSON" > "$auth_root/secondary.json"
+              chmod 600 "$auth_root/secondary.json"
+              echo "secondary=$auth_root/secondary.json" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "unsupported authentication mode: $auth_mode" >&2
+              exit 1
+              ;;
+          esac
       - name: Build launcher and run isolated end-to-end suite
         id: end-to-end
         env:
@@ -174,9 +186,12 @@ jobs:
           echo "[ci] recording end-to-end video in 30-second segments"
 
           set +e
+          auth_paths=("${{ steps.authentication.outputs.primary }}")
+          if [[ -n "${{ steps.authentication.outputs.secondary }}" ]]; then
+            auth_paths+=("${{ steps.authentication.outputs.secondary }}")
+          fi
           CHATGPTX_PROGRESS_FD=3 scripts/run-local-ci.sh \
-            "${{ steps.authentication.outputs.primary }}" \
-            "${{ steps.authentication.outputs.secondary }}" \
+            "${auth_paths[@]}" \
             3>&1 \
             > "$test_log" 2>&1
           test_exit_code=$?
@@ -192,8 +207,10 @@ jobs:
 
           auth_paths=(
             "${{ steps.authentication.outputs.primary }}"
-            "${{ steps.authentication.outputs.secondary }}"
           )
+          if [[ -n "${{ steps.authentication.outputs.secondary }}" ]]; then
+            auth_paths+=("${{ steps.authentication.outputs.secondary }}")
+          fi
           for candidate in \
             "$CHATGPTX_AUTH_OUTPUT_DIR/primary.json" \
             "$CHATGPTX_AUTH_OUTPUT_DIR/secondary.json"; do
