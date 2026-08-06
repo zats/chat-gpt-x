@@ -132,10 +132,6 @@ ACTUAL_ASAR="$(shasum -a 256 "$ASAR" | awk '{print $1}')"
   exit 1
 }
 
-if pgrep -f "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE" >/dev/null; then
-  echo "quit ChatGPT before running local CI" >&2
-  exit 1
-fi
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "port $PORT is already in use" >&2
   exit 1
@@ -162,13 +158,64 @@ capture_authentication() {
     "$CHATGPTX_AUTH_OUTPUT_DIR"
 }
 
+isolated_process_ids() {
+  ps eww -axo pid=,command= \
+    | awk -v root="$WORK_ROOT" \
+      'index($0, "CHATGPTX_CI_PROCESS_MARKER=" root) { print $1 }'
+}
+
+stop_isolated_processes() {
+  local process_ids=()
+  while IFS= read -r process_id; do
+    [[ "$process_id" =~ ^[0-9]+$ ]] && process_ids+=("$process_id")
+  done < <(isolated_process_ids)
+  (( ${#process_ids[@]} > 0 )) || return 0
+
+  kill -TERM "${process_ids[@]}" 2>/dev/null || true
+  local deadline=$((SECONDS + 15))
+  while (( SECONDS < deadline )); do
+    local running=0
+    for process_id in "${process_ids[@]}"; do
+      if kill -0 "$process_id" 2>/dev/null \
+        && [[ "$(ps -o state= -p "$process_id" | tr -d ' ')" != Z ]]; then
+        running=1
+        break
+      fi
+    done
+    [[ "$running" == "0" ]] && break
+    sleep 0.1
+  done
+
+  process_ids=()
+  while IFS= read -r process_id; do
+    [[ "$process_id" =~ ^[0-9]+$ ]] && process_ids+=("$process_id")
+  done < <(isolated_process_ids)
+  (( ${#process_ids[@]} > 0 )) || return 0
+  kill -KILL "${process_ids[@]}" 2>/dev/null || true
+
+  deadline=$((SECONDS + 5))
+  while (( SECONDS < deadline )); do
+    process_ids=()
+    while IFS= read -r process_id; do
+      [[ "$process_id" =~ ^[0-9]+$ ]] && process_ids+=("$process_id")
+    done < <(isolated_process_ids)
+    (( ${#process_ids[@]} > 0 )) || return 0
+    kill -KILL "${process_ids[@]}" 2>/dev/null || true
+    sleep 0.1
+  done
+  echo "isolated ChatGPT processes did not exit" >&2
+  return 1
+}
+
 cleanup() {
   local exit_code="${1:-$?}"
   local capture_exit_code=0
+  local process_cleanup_exit_code=0
+  local stopped_pid="$APP_PID"
   trap - EXIT INT TERM
-  if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
-    kill -TERM "$APP_PID" 2>/dev/null || true
-    wait "$APP_PID" 2>/dev/null || true
+  stop_isolated_processes || process_cleanup_exit_code=$?
+  if [[ -n "$stopped_pid" ]]; then
+    wait "$stopped_pid" 2>/dev/null || true
   fi
   capture_authentication || capture_exit_code=$?
   if [[ "$KEEP_WORKDIR" == "1" ]]; then
@@ -178,6 +225,9 @@ cleanup() {
   fi
   if [[ "$exit_code" == "0" && "$capture_exit_code" != "0" ]]; then
     exit_code="$capture_exit_code"
+  fi
+  if [[ "$exit_code" == "0" && "$process_cleanup_exit_code" != "0" ]]; then
+    exit_code="$process_cleanup_exit_code"
   fi
   exit "$exit_code"
 }
@@ -263,6 +313,7 @@ launch_app() {
   progress "launching ChatGPT for $name"
   if [[ "$mode" == "api-test" ]]; then
     env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
+      CHATGPTX_CI_PROCESS_MARKER="$WORK_ROOT" \
       "$LAUNCHER_BIN" \
       --test-api \
       --extension "$LOCAL_API_TEST_ROOT" \
@@ -329,6 +380,7 @@ launch_app() {
       chmod 600 "$launch_configuration"
     fi
     env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
+      CHATGPTX_CI_PROCESS_MARKER="$WORK_ROOT" \
       CHATGPTX_LAUNCH_CONFIGURATION="$launch_configuration" \
       CHATGPTX_VERSIONS_LOCK="$versions_lock" \
       NODE_OPTIONS="--require \"$bridge_file\"" \
@@ -364,17 +416,9 @@ launch_app() {
 
 stop_app() {
   [[ -n "$APP_PID" ]] || return
-  kill -TERM "$APP_PID"
-  local deadline=$((SECONDS + 15))
-  while kill -0 "$APP_PID" 2>/dev/null; do
-    [[ "$(ps -o state= -p "$APP_PID" | tr -d ' ')" == Z ]] && break
-    (( SECONDS < deadline )) || {
-      echo "ChatGPT did not exit" >&2
-      return 1
-    }
-    sleep 0.1
-  done
-  wait "$APP_PID" 2>/dev/null || true
+  local stopped_pid="$APP_PID"
+  stop_isolated_processes
+  wait "$stopped_pid" 2>/dev/null || true
   APP_PID=""
   capture_authentication
 }

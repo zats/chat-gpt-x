@@ -89,7 +89,15 @@ struct ChatGPTLauncher {
             return
         }
 
-        try await quitRunningChatGPT()
+        if mode == .apiTest {
+            guard arguments.contains(where: {
+                $0.hasPrefix("--user-data-dir=/")
+            }) else {
+                throw LaunchError.apiTestUserDataDirectoryMissing
+            }
+        } else {
+            try await quitRunningChatGPT()
+        }
 
         let launchConfigurationURL = try launchConfiguration(
             for: mode,
@@ -418,6 +426,7 @@ private enum LaunchError: LocalizedError {
     case bindingMissing(installed: String, available: String)
     case bindingBuildMismatch(String)
     case bridgeMissing
+    case apiTestUserDataDirectoryMissing
     case chatGPTWouldNotQuit
     case chatGPTQuitTimedOut
     case applicationLaunchFailed(any Error)
@@ -436,6 +445,8 @@ private enum LaunchError: LocalizedError {
             "The active binding does not match the installed ChatGPT \(version) build."
         case .bridgeMissing:
             "The platform bridge is missing from ChatGPTX."
+        case .apiTestUserDataDirectoryMissing:
+            "API tests require an isolated absolute --user-data-dir."
         case .chatGPTWouldNotQuit:
             "The running ChatGPT app declined to quit."
         case .chatGPTQuitTimedOut:
