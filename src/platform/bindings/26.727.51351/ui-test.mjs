@@ -207,17 +207,32 @@ async function validateUi(
     );
   };
   const openThreadMenu = async () => {
-    const trigger = Array.from(document.querySelectorAll('button')).find(
-      (button) => button.getAttribute('aria-label') === 'Chat actions',
+    const findTrigger = () =>
+      Array.from(document.querySelectorAll('button')).find(
+        (button) =>
+          button.getAttribute('aria-label') === 'Chat actions' &&
+          button.getBoundingClientRect().height > 0,
+      );
+    await waitUntil(
+      () =>
+        typeof findTrigger()?.getAttribute('data-cgptx-thread-id') === 'string',
     );
+    const trigger = findTrigger();
     if (!trigger) throw new Error('Thread menu trigger missing');
     activateButton(trigger);
-    await sleep(350);
-    return Array.from(document.querySelectorAll('[role="menu"]')).find((menu) =>
-      Array.from(menu.children).some((child) =>
-        child.hasAttribute('data-cgptx-thread-id'),
-      ),
+    let menu;
+    await waitUntil(
+      () => {
+        menu = Array.from(document.querySelectorAll('[role="menu"]')).find(
+          (candidate) =>
+            Array.from(candidate.children).some((child) =>
+              child.hasAttribute('data-cgptx-thread-id'),
+            ),
+        );
+        return Boolean(menu);
+      },
     );
+    return menu;
   };
   const openProfile = async () => {
     const trigger = Array.from(document.querySelectorAll('button')).find((button) =>
@@ -935,6 +950,11 @@ async function validateUi(
 
   let threadMenu = await openThreadMenu();
   if (!threadMenu) throw new Error('Thread menu did not open');
+  check(
+    globalThis.__CGPTX_HOST__._debug.applicationRootRefreshCount() === 1 &&
+      globalThis.__CGPTX_HOST__._debug.threadMenuBoundaryRenderCount() > 0,
+    'native binding reconciles the application tree before activation',
+  );
   const threadId = threadMenu
     .querySelector('[data-cgptx-thread-id]')
     ?.getAttribute('data-cgptx-thread-id');

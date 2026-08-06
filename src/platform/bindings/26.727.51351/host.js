@@ -230,6 +230,10 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let currentThread = undefined;
   let currentThreadClearGeneration = 0;
   let native = null;
+  let nativeBindingInstalled = false;
+  let nativeBindingError = null;
+  let applicationRootRefreshCount = 0;
+  let threadMenuBoundaryRenderCount = 0;
   let pendingExpandedId = null;
   let pendingThreadExpanded = null;
   let nestedItemClassName = null;
@@ -2241,6 +2245,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     }
 
     function ThreadMenuBoundary({ child }) {
+      threadMenuBoundaryRenderCount += 1;
       React.useSyncExternalStore(
         subscribe,
         () => renderVersion,
@@ -2330,6 +2335,64 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     log("native JSX hook installed");
   }
 
+  function applicationReactRoot() {
+    if (!document.body) return null;
+    for (const node of document.body.querySelectorAll("*")) {
+      let fiber = fiberOf(node);
+      if (!fiber) continue;
+      while (fiber.return) fiber = fiber.return;
+      if (fiber.tag === 3 && fiber.stateNode?.current) {
+        return fiber.stateNode;
+      }
+    }
+    return null;
+  }
+
+  async function reconcileApplicationTree() {
+    const deadline = Date.now() + 10_000;
+    let root = null;
+    let element = null;
+    while (Date.now() < deadline) {
+      root = applicationReactRoot();
+      element = root?.current?.memoizedState?.element;
+      if (root && isElement(element)) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!root || !isElement(element)) {
+      throw new Error("ChatGPT React root is unavailable");
+    }
+
+    const existingThreadMenu = Array.from(
+      document.querySelectorAll('button[aria-label="Chat actions"]'),
+    ).some((button) => button.getBoundingClientRect().height > 0);
+    const probe = native.ReactDOM.createRoot(document.createElement("div"));
+    const render = Object.getPrototypeOf(probe)?.render;
+    probe.unmount();
+    if (typeof render !== "function") {
+      throw new Error("ChatGPT React root renderer is unavailable");
+    }
+    render.call(
+      { _internalRoot: root },
+      native.React.cloneElement(element),
+    );
+    applicationRootRefreshCount += 1;
+
+    if (!existingThreadMenu) return;
+    const boundaryDeadline = Date.now() + 10_000;
+    while (Date.now() < boundaryDeadline) {
+      const boundaryReady = Array.from(
+        document.querySelectorAll('button[aria-label="Chat actions"]'),
+      ).some(
+        (button) =>
+          button.getBoundingClientRect().height > 0 &&
+          typeof threadIdForTrigger(button) === "string",
+      );
+      if (boundaryReady) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error("ChatGPT thread menu did not enter the native boundary");
+  }
+
   async function installNativeBinding() {
     const [
       appInitialModule,
@@ -2392,6 +2455,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       ]),
     };
     installJsxHook();
+    await reconcileApplicationTree();
     mountColorPickerHost();
 
     const observer = new MutationObserver(() => {
@@ -2434,6 +2498,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     });
     refreshThreadListRows();
     warmModel();
+    nativeBindingInstalled = true;
   }
 
   // ------------------------------------------------------------------
@@ -2762,7 +2827,10 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       },
       visibleThreadMenuColumn,
       captureDynamicThreadItemsFromOpenMenus,
-      nativeReady: () => native !== null,
+      nativeReady: () => nativeBindingInstalled,
+      nativeBindingError: () => nativeBindingError,
+      applicationRootRefreshCount: () => applicationRootRefreshCount,
+      threadMenuBoundaryRenderCount: () => threadMenuBoundaryRenderCount,
       authenticationReady: () => typeof refreshAuthentication === "function",
       authenticationRefreshCount: () => authenticationRefreshCount,
       authenticationAccountInfoResetCount: () =>
@@ -2795,7 +2863,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   });
 
   log("host installed");
-  void installNativeBinding().catch((error) => {
-    warn("native binding installation failed", error);
-  });
+  window.__CGPTX_NATIVE_READY__ = installNativeBinding().then(
+    () => true,
+    (error) => {
+      nativeBindingError = String(error?.stack ?? error);
+      warn("native binding installation failed", error);
+      return false;
+    },
+  );
 })();

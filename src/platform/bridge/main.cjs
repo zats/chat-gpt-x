@@ -9,8 +9,8 @@
  * Responsibilities:
  *  - load the exact API, binding, and extension set selected by the launch
  *    versions lock
- *  - inject the binding host into app windows (webContents.executeJavaScript
- *    is privileged and bypasses the page CSP)
+ *  - install the binding host from the external preload before app page code
+ *    (webFrame.executeJavaScript is privileged and bypasses the page CSP)
  *  - activate locked extensions in order through the host
  *  - report api-test-suite results in separate files per launch and renderer
  *
@@ -47,6 +47,9 @@ function init() {
   const RESULTS_DIR = path.join(LOG_DIR, "test-results", String(process.pid));
   const PRELOAD_FILE = path.join(__dirname, "preload.cjs");
   const AUTH_FILE = path.join(CODEX_HOME, "auth.json");
+  const RENDERER_BOOTSTRAP_CHANNEL = "chatgptx:renderer-bootstrap";
+  const RENDERER_BOOTSTRAP_ERROR_CHANNEL =
+    "chatgptx:renderer-bootstrap-error";
 
   function log(event, data) {
     try {
@@ -156,6 +159,12 @@ function init() {
         "Boolean(window.__CGPTX_HOST__)",
       );
       if (!hostReady) throw new Error("ChatGPTX host did not initialize");
+      const nativeReady = await contents.executeJavaScript(
+        "Promise.resolve(window.__CGPTX_NATIVE_READY__).then((value) => value === true)",
+      );
+      if (!nativeReady) {
+        throw new Error("ChatGPTX native binding did not initialize");
+      }
     } catch (error) {
       log("host-injection-failed", { error: String(error) });
       return;
@@ -292,6 +301,16 @@ function init() {
         return [path.relative(root, absolute).split(path.sep).join("/")];
       });
     }
+
+    ipcMain.on(RENDERER_BOOTSTRAP_CHANNEL, (event) => {
+      const url = event.senderFrame?.url ?? event.sender.getURL();
+      event.returnValue = url.startsWith("app:") ? hostSource : null;
+    });
+    ipcMain.on(RENDERER_BOOTSTRAP_ERROR_CHANNEL, (event, error) => {
+      const url = event.senderFrame?.url ?? event.sender.getURL();
+      if (!url.startsWith("app:")) return;
+      log("renderer-bootstrap-error", { url, error: String(error) });
+    });
 
     ipcMain.handle("chatgptx:runtime", async (event, request) => {
       assertAppSender(event);
