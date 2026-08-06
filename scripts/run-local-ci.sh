@@ -18,6 +18,7 @@ SOURCE_ACCOUNTS_ROOT=""
 
 usage() {
   echo "usage: scripts/run-local-ci.sh <primary-auth.json> <secondary-auth.json>" >&2
+  echo "       scripts/run-local-ci.sh <api-key-auth.json>" >&2
   echo "       scripts/run-local-ci.sh --use-current-accounts" >&2
 }
 
@@ -29,15 +30,23 @@ if [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
   SOURCE_CODEX_ROOT="${CODEX_HOME:-$HOME/.codex}"
   PRIMARY_AUTH="$SOURCE_CODEX_ROOT/auth.json"
   SOURCE_ACCOUNTS_ROOT="$SOURCE_CODEX_ROOT/extensions/state/multiple-accounts"
-  [[ -f "$PRIMARY_AUTH" && -d "$SOURCE_ACCOUNTS_ROOT" ]] || {
-    echo "current authentication and multiple-accounts storage must exist" >&2
+  [[ -f "$PRIMARY_AUTH" ]] || {
+    echo "current authentication must exist" >&2
     exit 1
   }
 else
-  [[ "$#" == "2" && -f "$PRIMARY_AUTH" && -f "$SECONDARY_AUTH" ]] || {
+  [[ "$#" == "1" || "$#" == "2" ]] || {
     usage
     exit 1
   }
+  [[ -f "$PRIMARY_AUTH" ]] || {
+    echo "primary authentication file does not exist" >&2
+    exit 1
+  }
+  if [[ -n "$SECONDARY_AUTH" && ! -f "$SECONDARY_AUTH" ]]; then
+    echo "secondary authentication file does not exist" >&2
+    exit 1
+  fi
 fi
 
 for command in bun jq sqlite3 xcodegen xcodebuild codesign curl lsof rg; do
@@ -46,6 +55,47 @@ for command in bun jq sqlite3 xcodegen xcodebuild codesign curl lsof rg; do
     exit 1
   }
 done
+
+AUTH_MODE="$(jq -er '.auth_mode' "$PRIMARY_AUTH")"
+case "$AUTH_MODE" in
+  apikey)
+    jq -e '
+      .auth_mode == "apikey"
+      and (.OPENAI_API_KEY | type == "string" and length > 0)
+      and (.tokens == null)
+    ' "$PRIMARY_AUTH" >/dev/null || {
+      echo "API-key authentication is malformed" >&2
+      exit 1
+    }
+    NO_PROFILE=1
+    ;;
+  chatgpt)
+    jq -e '
+      .auth_mode == "chatgpt"
+      and (.tokens | type == "object")
+      and (.tokens.access_token | type == "string" and length > 0)
+      and (.tokens.refresh_token | type == "string" and length > 0)
+    ' "$PRIMARY_AUTH" >/dev/null || {
+      echo "ChatGPT authentication is malformed" >&2
+      exit 1
+    }
+    NO_PROFILE=0
+    if [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
+      [[ -d "$SOURCE_ACCOUNTS_ROOT" ]] || {
+        echo "multiple-accounts storage must exist for ChatGPT authentication" >&2
+        exit 1
+      }
+    elif [[ -z "$SECONDARY_AUTH" ]]; then
+      echo "secondary authentication is required for ChatGPT authentication" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "unsupported authentication mode: $AUTH_MODE" >&2
+    exit 1
+    ;;
+esac
+export CHATGPTX_TEST_NO_PROFILE="$NO_PROFILE"
 
 if [[ -z "$APP_PATH" ]]; then
   APP_PATH="$(osascript -l JavaScript -e '
@@ -102,6 +152,7 @@ RELEASE_ROOT="$WORK_ROOT/release"
 APP_PID=""
 
 capture_authentication() {
+  [[ "$NO_PROFILE" == "0" ]] || return 0
   [[ -n "${CHATGPTX_AUTH_OUTPUT_DIR:-}" ]] || return 0
   [[ -f "$PRIMARY_AUTH" && -f "$SECONDARY_AUTH" && -f "$CODEX_ROOT/auth.json" ]] || return 0
   node "$REPO_ROOT/scripts/capture-authentication-candidates.mjs" \
@@ -151,6 +202,10 @@ progress() {
   printf '[ci +%ss] %s\n' "$((SECONDS - RUN_STARTED_AT))" "$1" >&"$PROGRESS_FD"
 }
 
+if [[ "$NO_PROFILE" == "1" ]]; then
+  progress "API-key authentication detected; profile-dependent gates disabled"
+fi
+
 run_logged() {
   local name="$1"
   shift
@@ -197,7 +252,9 @@ run_logged local-api-test-build env \
 
 LOCAL_API_TEST_ROOT="$WORK_ROOT/extension-builds/api-test-suite"
 MULTIPLE_ACCOUNTS_ROOT="$CODEX_ROOT/extensions/state/multiple-accounts"
-mkdir -p "$MULTIPLE_ACCOUNTS_ROOT"
+if [[ "$NO_PROFILE" == "0" ]]; then
+  mkdir -p "$MULTIPLE_ACCOUNTS_ROOT"
+fi
 
 launch_app() {
   local name="$1"
@@ -323,35 +380,40 @@ stop_app() {
 }
 
 launch_app initialize api-test
-if [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
-  run_logged initialize-readiness node "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" "$PORT"
-  CURRENT_USER_ID="$(jq -er '.currentUserId' "$LOG_ROOT/initialize-readiness.log")"
-  CURRENT_FILE_NAME="auth-$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$CURRENT_USER_ID").json"
-  while IFS= read -r candidate; do
-    [[ "$(basename "$candidate")" == "$CURRENT_FILE_NAME" ]] && continue
-    SECONDARY_AUTH="$candidate"
-    break
-  done < <(find "$SOURCE_ACCOUNTS_ROOT" -maxdepth 1 -type f -name 'auth-*.json' | sort)
-  [[ -n "$SECONDARY_AUTH" ]] || {
-    echo "no alternate current account exists" >&2
+if [[ "$NO_PROFILE" == "1" ]]; then
+  run_logged initialize-readiness node \
+    "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" "$PORT"
+else
+  if [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
+    run_logged initialize-readiness node "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" "$PORT"
+    CURRENT_USER_ID="$(jq -er '.currentUserId' "$LOG_ROOT/initialize-readiness.log")"
+    CURRENT_FILE_NAME="auth-$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$CURRENT_USER_ID").json"
+    while IFS= read -r candidate; do
+      [[ "$(basename "$candidate")" == "$CURRENT_FILE_NAME" ]] && continue
+      SECONDARY_AUTH="$candidate"
+      break
+    done < <(find "$SOURCE_ACCOUNTS_ROOT" -maxdepth 1 -type f -name 'auth-*.json' | sort)
+    [[ -n "$SECONDARY_AUTH" ]] || {
+      echo "no alternate current account exists" >&2
+      exit 1
+    }
+    run_logged initialize-alternate node "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" \
+      "$PORT" 90000 "$SECONDARY_AUTH"
+    SECONDARY_USER_ID="$(jq -er '.inspectedUserId' "$LOG_ROOT/initialize-alternate.log")"
+  else
+    run_logged initialize-readiness node "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" \
+      "$PORT" 90000 "$SECONDARY_AUTH"
+    CURRENT_USER_ID="$(jq -er '.currentUserId' "$LOG_ROOT/initialize-readiness.log")"
+    SECONDARY_USER_ID="$(jq -er '.inspectedUserId' "$LOG_ROOT/initialize-readiness.log")"
+  fi
+  [[ "$CURRENT_USER_ID" != "$SECONDARY_USER_ID" ]] || {
+    echo "primary and secondary authentication identify the same account" >&2
     exit 1
   }
-  run_logged initialize-alternate node "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" \
-    "$PORT" 90000 "$SECONDARY_AUTH"
-  SECONDARY_USER_ID="$(jq -er '.inspectedUserId' "$LOG_ROOT/initialize-alternate.log")"
-else
-  run_logged initialize-readiness node "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" \
-    "$PORT" 90000 "$SECONDARY_AUTH"
-  CURRENT_USER_ID="$(jq -er '.currentUserId' "$LOG_ROOT/initialize-readiness.log")"
-  SECONDARY_USER_ID="$(jq -er '.inspectedUserId' "$LOG_ROOT/initialize-readiness.log")"
+  SECONDARY_FILE_NAME="auth-$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$SECONDARY_USER_ID").json"
+  cp "$SECONDARY_AUTH" "$MULTIPLE_ACCOUNTS_ROOT/$SECONDARY_FILE_NAME"
+  chmod 600 "$MULTIPLE_ACCOUNTS_ROOT/$SECONDARY_FILE_NAME"
 fi
-[[ "$CURRENT_USER_ID" != "$SECONDARY_USER_ID" ]] || {
-  echo "primary and secondary authentication identify the same account" >&2
-  exit 1
-}
-SECONDARY_FILE_NAME="auth-$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$SECONDARY_USER_ID").json"
-cp "$SECONDARY_AUTH" "$MULTIPLE_ACCOUNTS_ROOT/$SECONDARY_FILE_NAME"
-chmod 600 "$MULTIPLE_ACCOUNTS_ROOT/$SECONDARY_FILE_NAME"
 deadline=$((SECONDS + 30))
 until [[ -f "$CODEX_ROOT/state_5.sqlite" ]]; do
   (( SECONDS < deadline )) || {
@@ -362,10 +424,12 @@ until [[ -f "$CODEX_ROOT/state_5.sqlite" ]]; do
 done
 stop_app
 
-launch_app accounts
-run_logged accounts-readiness node "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" "$PORT"
-run_logged multiple-accounts-e2e node "$REPO_ROOT/src/extensions/multiple-accounts/multiple-accounts.e2e.mjs" "$PORT"
-stop_app
+if [[ "$NO_PROFILE" == "0" ]]; then
+  launch_app accounts
+  run_logged accounts-readiness node "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" "$PORT"
+  run_logged multiple-accounts-e2e node "$REPO_ROOT/src/extensions/multiple-accounts/multiple-accounts.e2e.mjs" "$PORT"
+  stop_app
+fi
 
 GLOBAL_STATE="$CODEX_ROOT/.codex-global-state.json"
 LOCAL_PROJECT_ID="local-chatgptx-ci"
@@ -483,7 +547,7 @@ run_logged unit-tests bun test \
   "$REPO_ROOT/src/extensions/thread-colors/thread-colors.test.ts" \
   "$REPO_ROOT/src/platform/utilities/extension-storage.test.ts"
 
-if [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
+if [[ "$USE_CURRENT_ACCOUNTS" == "1" && "$NO_PROFILE" == "0" ]]; then
   THREAD_SELECTION="--select-thread-kind=remote"
 else
   THREAD_SELECTION="--select-thread=$THREAD_ID"
@@ -528,8 +592,13 @@ progress "verified persisted public API results"
 stop_app
 
 launch_app validation composition
-run_logged native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \
-  "--alternate-auth=$SECONDARY_AUTH" "$THREAD_SELECTION"
+if [[ "$NO_PROFILE" == "1" ]]; then
+  run_logged native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \
+    "$THREAD_SELECTION"
+else
+  run_logged native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \
+    "--alternate-auth=$SECONDARY_AUTH" "$THREAD_SELECTION"
+fi
 stop_app
 
 progress "verifying release artifact"
@@ -548,7 +617,9 @@ NATIVE_TOTAL="$(jq -r '.total' "$LOG_ROOT/native-ui.log")"
 echo "unit: $UNIT_PASSED passed"
 echo "public API: $PUBLIC_PASSED/$PUBLIC_TOTAL"
 echo "native UI: $NATIVE_PASSED/$NATIVE_TOTAL"
-if [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
+if [[ "$NO_PROFILE" == "1" ]]; then
+  echo "authentication: API key; profile-dependent gates disabled"
+elif [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
   echo "multiple-accounts: switched to another current account and restored the original"
 else
   echo "multiple-accounts: switched to burner 2 and restored burner 1"

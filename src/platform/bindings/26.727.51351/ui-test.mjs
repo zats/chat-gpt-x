@@ -10,6 +10,8 @@
  *   [--select-thread=<thread-id>]
  *   [--select-thread-kind=remote]
  *   [--public-api-only]
+ *
+ * Set CHATGPTX_TEST_NO_PROFILE=1 for API-key authentication.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -19,12 +21,16 @@ const expectNativeProfileCallbackMissing = process.argv.includes(
   '--expect-native-profile-callback-missing',
 );
 const publicAPIOnly = process.argv.includes('--public-api-only');
+const noProfile = process.env.CHATGPTX_TEST_NO_PROFILE === '1';
 const alternateAuthPath = process.argv
   .find((argument) => argument.startsWith('--alternate-auth='))
   ?.slice('--alternate-auth='.length);
 const alternateAuthJson = alternateAuthPath
   ? await readFile(alternateAuthPath, 'utf8')
   : undefined;
+if (noProfile && alternateAuthJson) {
+  throw new Error('alternate authentication is unavailable without profiles');
+}
 const selectThreadId = process.argv
   .find((argument) => argument.startsWith('--select-thread='))
   ?.slice('--select-thread='.length);
@@ -93,6 +99,7 @@ async function waitFor(expression, timeoutMs = 20000) {
 async function validateUi(
   expectMissingProfileCallback,
   alternateAuthentication,
+  noProfile,
 ) {
   const checks = [];
   const markProgress = (value) => {
@@ -1209,12 +1216,18 @@ async function validateUi(
   );
   markProgress('thread-menu');
 
-  let column = await openProfile();
-  if (!column) throw new Error('Profile menu did not open');
   check(
     typeof globalThis.__CGPTX_RUNTIME__?.request === 'function',
     'version-independent runtime preload is available',
   );
+
+  if (noProfile) {
+    markProgress('complete');
+    return checks;
+  }
+
+  let column = await openProfile();
+  if (!column) throw new Error('Profile menu did not open');
   check(
     globalThis.__CGPTX_HOST__?._debug.authenticationReady() === true,
     'native post-authentication refresh callback is captured',
@@ -1673,7 +1686,6 @@ async function validateUi(
       );
     }
   }
-
   markProgress('complete');
   return checks;
 }
@@ -1856,6 +1868,8 @@ const report = await evaluate(
     JSON.stringify(expectNativeProfileCallbackMissing) +
     ',' +
     JSON.stringify(alternateAuthJson) +
+    ',' +
+    JSON.stringify(noProfile) +
     ')',
 );
 socket.close();

@@ -174,6 +174,13 @@ node src/platform/bindings/26.727.51351/ui-test.mjs "$PORT" \
 Results were `39/39` for the stable public API suite and `63/63` for the
 current native UI suite.
 
+Binding `1.0.1` adds an API-key validation mode without changing the bound
+ChatGPT implementation. When `CHATGPTX_TEST_NO_PROFILE=1`, the native driver
+omits profile-menu and ChatGPT-account assertions while preserving local
+thread, thread-menu, thread-list, appearance, color-picker, runtime preload,
+composition, packaging, and signing checks. OAuth validation keeps the full
+`39/39` public API and `63/63` native UI gates.
+
 The deterministic completion command was:
 
 ```bash

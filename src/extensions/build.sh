@@ -68,12 +68,24 @@ for manifest in "${manifests[@]}"; do
   built_main="$BUILD_ROOT/$extension_id/main.js"
   extension_build_dir="$OUTPUT_ROOT/$extension_id"
   extension_main_output="$extension_build_dir/$CANONICAL_MAIN"
+  build_arguments=()
+  if [[ "$extension_id" == "api-test-suite" ]]; then
+    case "${CHATGPTX_TEST_NO_PROFILE:-0}" in
+      0 | 1) ;;
+      *)
+        echo "CHATGPTX_TEST_NO_PROFILE must be 0 or 1" >&2
+        exit 1
+        ;;
+    esac
+    build_arguments+=(--env='CHATGPTX_TEST_*')
+  fi
 
   mkdir -p "$(dirname "$built_main")" "$(dirname "$extension_main_output")"
-  bun build \
+  CHATGPTX_TEST_NO_PROFILE="${CHATGPTX_TEST_NO_PROFILE:-0}" bun build \
     "$extension_source" \
     --target=browser \
     --format=cjs \
+    "${build_arguments[@]}" \
     --outfile="$built_main"
   cp "$built_main" "$extension_main_output"
   cp "$manifest" "$extension_build_dir/package.json"

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 const port = process.argv[2] ?? "9451";
 const timeoutMs = Number(process.argv[3] ?? "90000");
 const authenticationPath = process.argv[4];
+const noProfile = process.env.CHATGPTX_TEST_NO_PROFILE === "1";
 const authenticationJson = authenticationPath
   ? await readFile(authenticationPath, "utf8")
   : undefined;
@@ -67,6 +68,7 @@ while (Date.now() < deadline) {
     }
     const api = globalThis.__CGPTX_LOCAL_CI_API__;
     if (!api) return false;
+    if (${JSON.stringify(noProfile)}) return { noProfile: true };
     const current = await api.authentication.getCurrent();
     if (
       !current ||

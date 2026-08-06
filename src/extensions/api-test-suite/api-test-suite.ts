@@ -32,6 +32,7 @@ import type {
 
 const EXT_ID = "api-test-suite";
 const RESULTS_KEY = "__CGPTX_TEST_RESULTS__";
+const NO_PROFILE = process.env.CHATGPTX_TEST_NO_PROFILE === "1";
 
 // --------------------------------------------------------------------------
 // Minimal harness
@@ -49,6 +50,10 @@ const tests: Array<{ name: string; fn: TestFn }> = [];
 
 function test(name: string, fn: TestFn): void {
   tests.push({ name, fn });
+}
+
+function profileTest(name: string, fn: TestFn): void {
+  if (!NO_PROFILE) test(name, fn);
 }
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -153,7 +158,7 @@ const VISUAL_DISABLED_ID = `${EXT_ID}.visual-disabled`;
 const VISUAL_PARENT_ID = `${EXT_ID}.visual-parent`;
 const VISUAL_CHILD_ID = `${EXT_ID}.visual-child`;
 
-test("profile-menu: contributes an action item and dispose removes it", () => {
+profileTest("profile-menu: contributes an action item and dispose removes it", () => {
   const registration = register((items) => [
     ...items,
     { kind: "action", id: ID_BASIC, label: "Basic" },
@@ -165,7 +170,7 @@ test("profile-menu: contributes an action item and dispose removes it", () => {
   assert(!byId(ID_BASIC), "dispose is idempotent");
 });
 
-test("profile-menu: built-in items pass through unchanged", () => {
+profileTest("profile-menu: built-in items pass through unchanged", () => {
   const baseline = items();
   assert(baseline.length > 0, "menu has built-in items");
   const registration = register((items) => items);
@@ -176,7 +181,7 @@ test("profile-menu: built-in items pass through unchanged", () => {
   registration.dispose();
 });
 
-test("profile-menu: can remove a built-in item, dispose restores it", () => {
+profileTest("profile-menu: can remove a built-in item, dispose restores it", () => {
   const victim = items()[0];
   assert(victim, "found a built-in item to remove");
   const registration = register((items) =>
@@ -187,7 +192,7 @@ test("profile-menu: can remove a built-in item, dispose restores it", () => {
   assert(byId(victim.id), "built-in item is restored after dispose");
 });
 
-test("profile-menu: transformers chain in registration order", () => {
+profileTest("profile-menu: transformers chain in registration order", () => {
   const seenBySecond: string[] = [];
   const first = register((items) => [
     ...items,
@@ -210,7 +215,7 @@ test("profile-menu: transformers chain in registration order", () => {
   second.dispose();
 });
 
-test("profile-menu: throwing transformer is isolated", () => {
+profileTest("profile-menu: throwing transformer is isolated", () => {
   const baseline = items();
   const bad = register(() => {
     throw new Error("intentional test failure");
@@ -228,7 +233,7 @@ test("profile-menu: throwing transformer is isolated", () => {
   good.dispose();
 });
 
-test("profile-menu: accepts and preserves all item affordances", () => {
+profileTest("profile-menu: accepts and preserves all item affordances", () => {
   const registration = register((items) => [
     ...items,
     {
@@ -255,7 +260,7 @@ test("profile-menu: accepts and preserves all item affordances", () => {
   registration.dispose();
 });
 
-test("profile-menu: activateItem fires onClick, disabled item does not", () => {
+profileTest("profile-menu: activateItem fires onClick, disabled item does not", () => {
   let clicked = 0;
   const registration = register((items) => [
     ...items,
@@ -294,7 +299,7 @@ test("profile-menu: activateItem fires onClick, disabled item does not", () => {
   registration.dispose();
 });
 
-test("profile-menu: separator contribution increments by exactly one", () => {
+profileTest("profile-menu: separator contribution increments by exactly one", () => {
   const countSeparators = () =>
     items().filter((item) => item.kind === "separator").length;
   const baseline = countSeparators();
@@ -309,7 +314,7 @@ test("profile-menu: separator contribution increments by exactly one", () => {
   registration.dispose();
 });
 
-test("profile-menu: drops items with foreign-namespace ids", () => {
+profileTest("profile-menu: drops items with foreign-namespace ids", () => {
   const registration = register((items) => [
     ...items,
     { kind: "action", id: `someone-else.item`, label: "Foreign" },
@@ -318,7 +323,7 @@ test("profile-menu: drops items with foreign-namespace ids", () => {
   registration.dispose();
 });
 
-test("profile-menu: stamps origins and drops duplicate ids", () => {
+profileTest("profile-menu: stamps origins and drops duplicate ids", () => {
   const registration = register((items) => [
     ...items,
     { kind: "action", id: ID_DUPLICATE, label: "First" },
@@ -330,7 +335,7 @@ test("profile-menu: stamps origins and drops duplicate ids", () => {
   registration.dispose();
 });
 
-test("profile-menu: throwing onClick is isolated", () => {
+profileTest("profile-menu: throwing onClick is isolated", () => {
   let afterThrow = 0;
   const registration = register((items) => [
     ...items,
@@ -363,7 +368,7 @@ test("profile-menu: throwing onClick is isolated", () => {
   registration.dispose();
 });
 
-test("profile-menu: built-in items expose stable, unique ids", () => {
+profileTest("profile-menu: built-in items expose stable, unique ids", () => {
   const builtIns = items().filter((item) => item.origin === "app");
   assert(builtIns.length > 0, "effective list contains built-in items");
   for (const item of builtIns) {
@@ -378,7 +383,7 @@ test("profile-menu: built-in items expose stable, unique ids", () => {
   );
 });
 
-test("profile-menu: account identity exposes its native action", () => {
+profileTest("profile-menu: account identity exposes its native action", () => {
   const account = byId("codex.profileDropdown.account");
   assert(
     account?.kind === "action",
@@ -390,7 +395,7 @@ test("profile-menu: account identity exposes its native action", () => {
   );
 });
 
-test("profile-menu: replaces a built-in item in place by id", () => {
+profileTest("profile-menu: replaces a built-in item in place by id", () => {
   const victim = items().find(
     (item) => item.origin === "app" && item.kind === "action",
   );
@@ -423,7 +428,7 @@ test("profile-menu: replaces a built-in item in place by id", () => {
   registration.dispose();
 });
 
-test("profile-menu: built-in replacement inherits omitted fields", () => {
+profileTest("profile-menu: built-in replacement inherits omitted fields", () => {
   const victim = items().find(
     (item) =>
       item.origin === "app" &&
@@ -451,7 +456,7 @@ test("profile-menu: built-in replacement inherits omitted fields", () => {
   registration.dispose();
 });
 
-test("profile-menu: submenu children are live, expandable items", () => {
+profileTest("profile-menu: submenu children are live, expandable items", () => {
   let parentClicks = 0;
   let childClicks = 0;
   const registration = register((items) => [
@@ -496,7 +501,7 @@ test("profile-menu: submenu children are live, expandable items", () => {
   registration.dispose();
 });
 
-test("profile-menu: validates nested item namespaces and duplicates", () => {
+profileTest("profile-menu: validates nested item namespaces and duplicates", () => {
   const registration = register((items) => [
     ...items,
     {
@@ -1137,7 +1142,7 @@ test("appearance.header: rejects unknown properties and invalid colors", () => {
 // Tests: authentication API
 // --------------------------------------------------------------------------
 
-test("authentication: current credentials expose stable inspectable identity", async () => {
+profileTest("authentication: current credentials expose stable inspectable identity", async () => {
   const current = await api.authentication.getCurrent();
   assert(current, "authenticated test profile has current credentials");
   assert(current.userId.length > 0, "current credentials have a user id");
@@ -1158,7 +1163,7 @@ test("authentication: invalid serialized credentials are rejected", async () => 
   assert(rejected, "invalid credentials are rejected");
 });
 
-test("authentication: native sign-in starts and credential replacement preserves the selected account", async () => {
+profileTest("authentication: native sign-in starts and credential replacement preserves the selected account", async () => {
   const current = await api.authentication.getCurrent();
   assert(current, "authenticated test profile has credentials to restore");
   let changes = 0;
@@ -1206,53 +1211,61 @@ export function deactivate(): void {
 }
 
 function installVisualFixture(): void {
-  const builtInToMove = items().find(
-    (item) => item.origin === "app" && item.kind === "action",
-  );
-  assert(builtInToMove, "visual fixture found a built-in item to move");
+  if (!NO_PROFILE) {
+    const builtInToMove = items().find(
+      (item) => item.origin === "app" && item.kind === "action",
+    );
+    assert(builtInToMove, "visual fixture found a built-in item to move");
 
-  visualFixtures.push(register((current) => [
-    ...current.filter((item) => item.id !== builtInToMove.id),
-    { kind: "separator", id: VISUAL_SEPARATOR_ID },
-    {
-      kind: "action",
-      id: VISUAL_RICH_ID,
-      label: "Binding Rich Item",
-      icon: "person",
-      rightIcon: "chevron-right",
-      subText: "Binding subtext",
-      keyboardShortcut: "⌘T",
-      onClick: () => {
-        const fixture = globalThis as Record<string, unknown>;
-        fixture.__CGPTX_VISUAL_CLICK_COUNT__ =
-          Number(fixture.__CGPTX_VISUAL_CLICK_COUNT__ ?? 0) + 1;
-      },
-    },
-    {
-      kind: "action",
-      id: VISUAL_DISABLED_ID,
-      label: "Binding Disabled Item",
-      disabled: true,
-    },
-    {
-      kind: "action",
-      id: VISUAL_PARENT_ID,
-      label: "Binding Submenu",
-      items: [
-        {
-          kind: "action",
-          id: VISUAL_CHILD_ID,
-          label: "Binding Child Item",
-          onClick: () => {
-            const fixture = globalThis as Record<string, unknown>;
-            fixture.__CGPTX_VISUAL_CHILD_CLICK_COUNT__ =
-              Number(fixture.__CGPTX_VISUAL_CHILD_CLICK_COUNT__ ?? 0) + 1;
-          },
+    visualFixtures.push(register((current) => [
+      ...current.filter((item) => item.id !== builtInToMove.id),
+      { kind: "separator", id: VISUAL_SEPARATOR_ID },
+      {
+        kind: "action",
+        id: VISUAL_RICH_ID,
+        label: "Binding Rich Item",
+        icon: "person",
+        rightIcon: "chevron-right",
+        subText: "Binding subtext",
+        keyboardShortcut: "⌘T",
+        onClick: () => {
+          const fixture = globalThis as Record<string, unknown>;
+          fixture.__CGPTX_VISUAL_CLICK_COUNT__ =
+            Number(fixture.__CGPTX_VISUAL_CLICK_COUNT__ ?? 0) + 1;
         },
-        builtInToMove,
-      ],
-    },
-  ]));
+      },
+      {
+        kind: "action",
+        id: VISUAL_DISABLED_ID,
+        label: "Binding Disabled Item",
+        disabled: true,
+      },
+      {
+        kind: "action",
+        id: VISUAL_PARENT_ID,
+        label: "Binding Submenu",
+        items: [
+          {
+            kind: "action",
+            id: VISUAL_CHILD_ID,
+            label: "Binding Child Item",
+            onClick: () => {
+              const fixture = globalThis as Record<string, unknown>;
+              fixture.__CGPTX_VISUAL_CHILD_CLICK_COUNT__ =
+                Number(fixture.__CGPTX_VISUAL_CHILD_CLICK_COUNT__ ?? 0) + 1;
+            },
+          },
+          builtInToMove,
+        ],
+      },
+    ]));
+    (globalThis as Record<string, unknown>).__CGPTX_VISUAL_MOVED_ID__ =
+      builtInToMove.id;
+    (
+      globalThis as Record<string, unknown>
+    ).__CGPTX_ACTIVATE_VISUAL_PARENT__ = () =>
+      api.menus.profile.activateItem(VISUAL_PARENT_ID);
+  }
   threadListVisualFixture = api.threads.list.registerItem((thread) => {
     if (thread.threadId !== observedThreadListContext?.threadId) return undefined;
     return {
@@ -1271,33 +1284,27 @@ function installVisualFixture(): void {
     globalThis as Record<string, unknown>
   ).__CGPTX_REMOVE_THREAD_LIST_VISUAL_FIXTURE__ =
     removeThreadListVisualFixture;
-  (globalThis as Record<string, unknown>).__CGPTX_VISUAL_MOVED_ID__ =
-    builtInToMove.id;
-  (
-    globalThis as Record<string, unknown>
-  ).__CGPTX_ACTIVATE_VISUAL_PARENT__ = () =>
-    api.menus.profile.activateItem(VISUAL_PARENT_ID);
   (globalThis as Record<string, unknown>).__CGPTX_BINDING_FIXTURE_READY__ = true;
 }
 
 async function runAll(): Promise<void> {
   const results: TestResult[] = [];
-  // Readiness gate: the app must reach a state where the profile menu's
-  // built-in items exist (authenticated session, header mounted). Bounded
-  // wait; failing the gate is a failure, not a skip.
-  const ready = await waitFor(
-    () => api.menus.profile.getItems().some((item) => item.origin === "app"),
-    20000,
-  );
-  if (!ready) {
-    results.push({
-      name: "readiness: built-in profile menu items present",
-      pass: false,
-      error: "no built-in profile menu items within 20s (unauthenticated?)",
-    });
-    (globalThis as Record<string, unknown>)[RESULTS_KEY] = results;
-    console.error(`[${EXT_ID}] readiness gate failed`);
-    return;
+  if (!NO_PROFILE) {
+    // OAuth mode must reach the authenticated profile menu before testing.
+    const ready = await waitFor(
+      () => api.menus.profile.getItems().some((item) => item.origin === "app"),
+      20000,
+    );
+    if (!ready) {
+      results.push({
+        name: "readiness: built-in profile menu items present",
+        pass: false,
+        error: "no built-in profile menu items within 20s (unauthenticated?)",
+      });
+      (globalThis as Record<string, unknown>)[RESULTS_KEY] = results;
+      console.error(`[${EXT_ID}] readiness gate failed`);
+      return;
+    }
   }
   const threadReady = await waitFor(
     () => {
