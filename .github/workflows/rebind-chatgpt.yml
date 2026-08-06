@@ -18,12 +18,17 @@ on:
         description: Version-watcher issue number
         required: true
         type: string
+      force:
+        description: Re-run and increment an existing binding version
+        required: false
+        default: false
+        type: boolean
   repository_dispatch:
     types:
       - chatgpt-version-detected
 
 concurrency:
-  group: rebind-chatgpt-issue-${{ inputs.issue_number || github.event.client_payload.issue_number || github.event.issue.number || github.run_id }}
+  group: rebind-chatgpt-version-${{ inputs.version || github.event.client_payload.version || github.event.issue.title || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -40,6 +45,7 @@ jobs:
       version: ${{ steps.request.outputs.version }}
       download-url: ${{ steps.request.outputs.download-url }}
       issue-number: ${{ steps.request.outputs.issue-number }}
+      force: ${{ steps.request.outputs.force }}
       validation-error: ${{ steps.request.outputs.validation-error }}
     steps:
       - name: Validate request
@@ -49,9 +55,11 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_DOWNLOAD_URL: ${{ inputs.download_url }}
           INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          INPUT_FORCE: ${{ inputs.force }}
           PAYLOAD_VERSION: ${{ github.event.client_payload.version }}
           PAYLOAD_DOWNLOAD_URL: ${{ github.event.client_payload.download_url }}
           PAYLOAD_ISSUE_NUMBER: ${{ github.event.client_payload.issue_number }}
+          PAYLOAD_FORCE: ${{ github.event.client_payload.force }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
@@ -73,7 +81,13 @@ jobs:
                   .schema == 1 and
                   (.version | type) == "string" and
                   (.download_url | type) == "string" and
-                  (keys | sort) == ["download_url", "schema", "version"]
+                  (
+                    (keys | sort) == ["download_url", "schema", "version"] or
+                    (
+                      .force == true and
+                      (keys | sort) == ["download_url", "force", "schema", "version"]
+                    )
+                  )
                 )
               ' <<< "$ISSUE_BODY" 2>/dev/null
             )" ||
@@ -83,14 +97,17 @@ jobs:
               invalid "Issue title and JSON version do not match."
             request_download_url="$(jq -r .download_url <<< "$metadata")"
             request_issue_number="$EVENT_ISSUE_NUMBER"
+            request_force="$(jq -r '.force // false' <<< "$metadata")"
           elif [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
             request_version="$PAYLOAD_VERSION"
             request_download_url="$PAYLOAD_DOWNLOAD_URL"
             request_issue_number="$PAYLOAD_ISSUE_NUMBER"
+            request_force="$PAYLOAD_FORCE"
           else
             request_version="$INPUT_VERSION"
             request_download_url="$INPUT_DOWNLOAD_URL"
             request_issue_number="$INPUT_ISSUE_NUMBER"
+            request_force="$INPUT_FORCE"
           fi
 
           [[ "$request_version" =~ ^[0-9]+(\.[0-9]+)+$ ]] ||
@@ -100,11 +117,22 @@ jobs:
             invalid "Download URL must be $expected_url."
           [[ "$request_issue_number" =~ ^[1-9][0-9]*$ ]] ||
             invalid "Issue number must be a positive integer."
+          case "$request_force" in
+            "" | false)
+              request_force=false
+              ;;
+            true)
+              ;;
+            *)
+              invalid "Force must be true or false."
+              ;;
+          esac
           {
             echo "valid=true"
             echo "version=$request_version"
             echo "download-url=$request_download_url"
             echo "issue-number=$request_issue_number"
+            echo "force=$request_force"
           } >> "$GITHUB_OUTPUT"
 
       - name: Require valid request
@@ -188,6 +216,7 @@ jobs:
       version: ${{ needs.request.outputs.version }}
       download-url: ${{ needs.request.outputs.download-url }}
       issue-number: ${{ needs.request.outputs.issue-number }}
+      binding-mode: ${{ steps.binding-mode.outputs.mode }}
       base-sha: ${{ steps.base.outputs.sha }}
       codex-version: ${{ steps.codex.outputs.version }}
       patch-artifact: ${{ steps.patch.outputs.artifact-name }}
@@ -201,6 +230,23 @@ jobs:
       - name: Record tested base
         id: base
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Determine binding mode
+        id: binding-mode
+        env:
+          APP_VERSION: ${{ needs.request.outputs.version }}
+          FORCE: ${{ needs.request.outputs.force }}
+        run: |
+          binding_root="src/platform/bindings/$APP_VERSION"
+          if git cat-file -e "HEAD:$binding_root" 2>/dev/null; then
+            [[ "$FORCE" == "true" ]] || {
+              echo "Binding $APP_VERSION exists and requires a force request." >&2
+              exit 1
+            }
+            echo "mode=correction" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=new" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -327,20 +373,28 @@ jobs:
           APP_VERSION: ${{ needs.request.outputs.version }}
           DOWNLOAD_URL: ${{ needs.request.outputs.download-url }}
           ISSUE_NUMBER: ${{ needs.request.outputs.issue-number }}
+          BINDING_MODE: ${{ steps.binding-mode.outputs.mode }}
           CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
           AGENT_CODEX_HOME: ${{ steps.authentication.outputs.agent-home }}
           AUTH_ROOT: ${{ steps.authentication.outputs.auth-root }}
           DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
         run: |
           prompt_path="$RUNNER_TEMP/rebind-prompt.md"
+          if [[ "$BINDING_MODE" == "correction" ]]; then
+            task="correct the existing binding for ChatGPT $APP_VERSION"
+            binding_instructions="Edit src/platform/bindings/$APP_VERSION and increment its binding patch version by exactly one. Preserve its chatgpt and chatgptApi values. Keep every other binding directory, src/platform/types.d.ts, extension source, and extension manifests unchanged. Update src/platform/bindings/manifest.json only if needed to pin the exact version and URL. Increment updates/latest.json generation once and replace this build's binding entry with the new binding release. Preserve every other API, binding, and extension entry. Set the changed binding sha256 to 64 zeroes; the workflow replaces it with the deterministic archive hash before validation."
+          else
+            task="complete the new binding for ChatGPT $APP_VERSION"
+            binding_instructions="Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, extension source files, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. After the live suites pass, increment each validated public extension version and expand its compatibility.chatgpt range in package.json. Update src/platform/bindings/manifest.json and the schema-v2 maps in updates/latest.json. Increment the update generation once, preserve every existing API and binding entry, add the new binding by ChatGPT version, and use predictable release tags. Set new sha256 fields to 64 zeroes; the workflow replaces them with deterministic archive hashes before validation."
+          fi
           cat > "$prompt_path" <<PROMPT
-          Use \$rebind-chatgpt-version and complete the new binding for ChatGPT $APP_VERSION.
+          Use \$rebind-chatgpt-version and $task.
 
           Exact stock app: $CHATGPT_APP_PATH
           Exact Sparkle URL: $DOWNLOAD_URL
           Version-watcher issue: #$ISSUE_NUMBER
 
-          Follow the skill's entire completion gate. Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, extension source files, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. After the live suites pass, increment each validated public extension version and expand its compatibility.chatgpt range in package.json. Update src/platform/bindings/manifest.json and the schema-v2 maps in updates/latest.json. Increment the update generation once, preserve every existing API and binding entry, add the new binding by ChatGPT version, and use predictable release tags. Set new sha256 fields to 64 zeroes; the workflow replaces them with deterministic archive hashes before validation.
+          Follow the skill's completion gate for $BINDING_MODE mode. $binding_instructions
 
           The authenticated test accounts are available only as opaque files:
           - $AUTH_ROOT/primary.json
@@ -384,7 +438,8 @@ jobs:
           APP_VERSION: ${{ needs.request.outputs.version }}
           DOWNLOAD_URL: ${{ needs.request.outputs.download-url }}
           BASE_SHA: ${{ steps.base.outputs.sha }}
-        run: scripts/validate-rebind-changes.sh "$APP_VERSION" "$DOWNLOAD_URL" "$BASE_SHA"
+          BINDING_MODE: ${{ steps.binding-mode.outputs.mode }}
+        run: scripts/validate-rebind-changes.sh "$APP_VERSION" "$DOWNLOAD_URL" "$BASE_SHA" "$BINDING_MODE"
 
       - name: Create scoped binding patch
         id: patch
@@ -565,14 +620,21 @@ jobs:
         id: binding
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
+          BINDING_MODE: ${{ needs.generate.outputs.binding-mode }}
+          ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
         run: |
           git apply --index "$RUNNER_TEMP/binding-patch/binding.patch"
           git diff --cached --check
-          branch_name="codex/bindings-chatgpt-$APP_VERSION"
+          branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
           git switch -c "$branch_name"
           git config user.name "chat-gpt-x[bot]"
           git config user.email "chat-gpt-x[bot]@users.noreply.github.com"
-          git commit -m "Create bindings for ChatGPT $APP_VERSION"
+          if [[ "$BINDING_MODE" == "correction" ]]; then
+            commit_action="Update"
+          else
+            commit_action="Create"
+          fi
+          git commit -m "$commit_action bindings for ChatGPT $APP_VERSION"
           git fetch --no-tags origin main
           latest_main_sha="$(git rev-parse FETCH_HEAD)"
           echo "latest-main-sha=$latest_main_sha" >> "$GITHUB_OUTPUT"
@@ -655,6 +717,7 @@ jobs:
         env:
           AGENT_CODEX_HOME: ${{ steps.resolver-authentication.outputs.home }}
           APP_VERSION: ${{ needs.generate.outputs.version }}
+          BINDING_MODE: ${{ needs.generate.outputs.binding-mode }}
           BASE_SHA: ${{ needs.generate.outputs.base-sha }}
           LATEST_MAIN_SHA: ${{ steps.binding.outputs.latest-main-sha }}
         run: |
@@ -670,7 +733,7 @@ jobs:
           Conflicted files:
           $conflicts
 
-          Preserve the current main changes and the generated binding changes. Follow the repository versioning and update-manifest invariants. For a public extension manifest whose compatibility range expands, increment from the current main version. Preserve the schema-v2 maps and every existing API and binding entry. Increment updates/latest.json generation exactly once from current main, add the new binding by ChatGPT version, and keep every release entry aligned with its component manifest. A changed release may use 64 zeroes for sha256 because the workflow computes its deterministic archive hash after the rebase.
+          Preserve the current main changes and the generated binding changes. Follow the repository versioning and update-manifest invariants. For new mode, increment any changed public extension version from current main and add the new binding entry. For correction mode, increment the target binding patch version by exactly one from current main, replace its binding entry, and keep extension manifests unchanged. Preserve the schema-v2 maps and every other API, binding, and extension entry. Increment updates/latest.json generation exactly once from current main. A changed release may use 64 zeroes for sha256 because the workflow computes its deterministic archive hash after the rebase. The binding mode is $BINDING_MODE.
 
           Modify only the conflicted files listed above. Do not stage files, commit, continue or abort the rebase, push, inspect authentication, weaken validation, or modify any non-conflicted file. Remove every conflict marker and run git diff --check. Finish only when the conflicted files contain the complete resolution.
           PROMPT
@@ -714,11 +777,13 @@ jobs:
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
           DOWNLOAD_URL: ${{ needs.generate.outputs.download-url }}
+          BINDING_MODE: ${{ needs.generate.outputs.binding-mode }}
           LATEST_MAIN_SHA: ${{ steps.binding.outputs.latest-main-sha }}
           REBASE_CONFLICTED: ${{ steps.binding.outputs.conflicted }}
           RESOLVER_AUTHENTICATION_OUTCOME: ${{ steps.resolver-authentication.outcome }}
           RESOLVER_EXIT_CODE: ${{ steps.rebase-resolver.outputs.exit-code }}
           REBASE_EXPOSURE_OUTCOME: ${{ steps.rebase-exposure.outcome }}
+          ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if [[ "$REBASE_CONFLICTED" == "true" ]]; then
@@ -781,12 +846,10 @@ jobs:
 
           git diff --check "$LATEST_MAIN_SHA"
           binding_root="src/platform/bindings/$APP_VERSION"
-          if git cat-file -e \
-            "$LATEST_MAIN_SHA:$binding_root" \
-            2>/dev/null; then
-            echo "Binding $APP_VERSION already existed on current main." >&2
-            exit 1
-          fi
+          node scripts/validate-rebind-binding.mjs \
+            "$BINDING_MODE" \
+            "$LATEST_MAIN_SHA" \
+            "$APP_VERSION"
           binding_entries=("$binding_root"/*)
           [[ "${#binding_entries[@]}" == "4" ]]
           for binding_entry in "${binding_entries[@]}"; do
@@ -801,18 +864,29 @@ jobs:
             esac
           done
           while IFS= read -r changed_path; do
-            case "$changed_path" in
-              "$binding_root"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json)
-                ;;
-              *)
-                echo "Rebase changed a forbidden path: $changed_path" >&2
-                exit 1
-                ;;
-            esac
+            if [[ "$BINDING_MODE" == "new" ]]; then
+              case "$changed_path" in
+                "$binding_root"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json)
+                  ;;
+                *)
+                  echo "Rebase changed a forbidden path: $changed_path" >&2
+                  exit 1
+                  ;;
+              esac
+            else
+              case "$changed_path" in
+                "$binding_root"/* | src/platform/bindings/manifest.json | updates/latest.json)
+                  ;;
+                *)
+                  echo "Binding correction changed a forbidden path: $changed_path" >&2
+                  exit 1
+                  ;;
+              esac
+            fi
           done < <(git diff --name-only "$LATEST_MAIN_SHA" HEAD)
           jq -e \
             --arg version "$APP_VERSION" \
-            '.version == "1.0.0" and .chatgpt == $version' \
+            '.chatgpt == $version' \
             "$binding_root/manifest.json" >/dev/null
           jq -e \
             --arg version "$APP_VERSION" \
@@ -826,7 +900,7 @@ jobs:
           binding_sha="$(git rev-parse HEAD)"
           [[ "$binding_sha" =~ ^[0-9a-f]{40}$ ]]
           echo "head-sha=$binding_sha" >> "$GITHUB_OUTPUT"
-          branch_name="codex/bindings-chatgpt-$APP_VERSION"
+          branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
           gh auth setup-git
           git push --force origin "HEAD:refs/heads/$branch_name"
 
@@ -847,12 +921,17 @@ jobs:
         id: pull-request
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
+          BINDING_MODE: ${{ needs.generate.outputs.binding-mode }}
           EXPECTED_HEAD_SHA: ${{ steps.binding-final.outputs.head-sha }}
           ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          branch_name="codex/bindings-chatgpt-$APP_VERSION"
-          title="Create bindings for ChatGPT $APP_VERSION"
+          branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
+          if [[ "$BINDING_MODE" == "correction" ]]; then
+            title="Update bindings for ChatGPT $APP_VERSION"
+          else
+            title="Create bindings for ChatGPT $APP_VERSION"
+          fi
           body="Generated by the ChatGPT rebinding workflow. The shared CI workflow must pass before automatic merge.
 
           Tracks #$ISSUE_NUMBER."
@@ -921,7 +1000,9 @@ jobs:
       - name: Validate generated pull request
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
+          BINDING_MODE: ${{ needs.generate.outputs.binding-mode }}
           EXPECTED_HEAD_SHA: ${{ needs.open-pull-request.outputs.head-sha }}
+          ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.open-pull-request.outputs.pr-number }}
           PR_URL: ${{ needs.open-pull-request.outputs.pr-url }}
@@ -930,9 +1011,14 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --json number,state,title,author,baseRefName,headRefName,headRefOid,isCrossRepository \
             > "$RUNNER_TEMP/pull-request.json"
+          if [[ "$BINDING_MODE" == "correction" ]]; then
+            title="Update bindings for ChatGPT $APP_VERSION"
+          else
+            title="Create bindings for ChatGPT $APP_VERSION"
+          fi
           jq -e \
-            --arg title "Create bindings for ChatGPT $APP_VERSION" \
-            --arg branch "codex/bindings-chatgpt-$APP_VERSION" \
+            --arg title "$title" \
+            --arg branch "codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER" \
             --arg headSha "$EXPECTED_HEAD_SHA" \
             --argjson number "$PR_NUMBER" \
             '
@@ -950,6 +1036,7 @@ jobs:
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
           EXPECTED_HEAD_SHA: ${{ needs.open-pull-request.outputs.head-sha }}
+          ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.open-pull-request.outputs.pr-number }}
         run: |
@@ -976,7 +1063,7 @@ jobs:
             echo "GitHub did not mark the exact tested commit as merged" >&2
             exit 1
           }
-          branch_name="codex/bindings-chatgpt-$APP_VERSION"
+          branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
           git push origin --delete "$branch_name"
 
           validation_id="rebind-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"

@@ -51,6 +51,8 @@ jobs:
           node --check scripts/build-component-releases.mjs
           node --check scripts/build-component-seed.mjs
           node --check scripts/component-releases.mjs
+          node --check scripts/trigger-chatgpt-rebind.mjs
+          node --check scripts/validate-rebind-binding.mjs
           node --check scripts/validate-pinned-chatgpt.mjs
           node --check scripts/wait-for-chatgpt-ready.mjs
           bash -n scripts/publish-component-releases.sh
@@ -58,6 +60,8 @@ jobs:
           bash -n scripts/refresh-update-index-hashes.sh
           node --test scripts/build-component-releases.test.mjs
           node --test scripts/component-releases.test.mjs
+          node --test scripts/trigger-chatgpt-rebind.test.mjs
+          node --test scripts/validate-rebind-binding.test.mjs
           node --test src/platform/runtime/extension-launch-config.test.cjs
 
   end-to-end:

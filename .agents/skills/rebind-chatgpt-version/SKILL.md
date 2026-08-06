@@ -1,11 +1,11 @@
 ---
 name: rebind-chatgpt-version
-description: Create and validate a new version-pinned binding for an updated ChatGPT desktop (Codex Electron) build while keeping the public extension API and previous bindings unchanged. Use when the installed app version or app.asar hash changes, the launcher reports an unsupported version, or a user asks to upgrade/rebind `src/platform/bindings` to the current or a newer app build. Covers exact-build extraction, fast anchor-based rebinding from the newest prior version, stock-versus-injected behavior comparison, deterministic public and native UI testing, derivation documentation, packaging checks, and cleanup.
+description: Create and validate a version-pinned binding for an updated ChatGPT desktop (Codex Electron) build, or correct an existing binding for the same build. Use when the installed app version or app.asar hash changes, the launcher reports an unsupported version, or a user asks to upgrade, rebind, or correct `src/platform/bindings`. Covers exact-build extraction, fast anchor-based rebinding, same-build binding version increments, stock-versus-injected behavior comparison, deterministic public and native UI testing, derivation documentation, packaging checks, and cleanup.
 ---
 
 # Rebind ChatGPT Version
 
-Create one new binding directory for the installed build and prove the existing public API against the real app. Optimize for the common case where internal module paths and exports moved while product behavior stayed the same.
+Create a binding for a new build or correct the binding for an existing build. Prove the existing public API against the real app. Optimize for the common case where internal module paths and exports moved while product behavior stayed the same.
 
 ## Load the source workflow
 
@@ -18,13 +18,13 @@ Read these files completely before editing:
 
 Use `manage-platform-api` as the authority for platform invariants and research mechanics. This skill supplies the rebinding fast path.
 
-## Hold these files immutable
+## Set the binding mode
 
-- `src/platform/types.d.ts`: the public API and semantics are fixed during a rebind.
-- `src/extensions/api-test-suite/`: its public-API tests stay unchanged.
-- Existing `src/platform/bindings/<old-version>/` directories: use the newest one as evidence and a copy source; never edit it.
+Use `new` mode when the target build has no binding directory. Create `src/platform/bindings/<new-version>/` at version `1.0.0`. Keep every existing binding directory unchanged.
 
-Create `src/platform/bindings/<new-version>/`. Keep unrelated files and user state unchanged. Do not add compatibility paths, fallback bindings, machine-specific paths, account names, or profile data.
+Use `correction` mode when the target build already has a binding directory. Edit only that binding directory and increment its patch version by exactly one. Keep every other binding directory and all extension manifests unchanged.
+
+In both modes, keep `src/platform/types.d.ts`, `src/extensions/api-test-suite/`, extension source, unrelated files, and user state unchanged. Do not add compatibility paths, fallback bindings, machine-specific paths, account names, or profile data.
 
 If the current build makes the API impossible to implement, report that fact instead of changing the API.
 
@@ -34,19 +34,21 @@ If the current build makes the API impossible to implement, report that fact ins
 
 1. Inspect repository status and preserve unrelated work.
 2. Read `CFBundleShortVersionString`, the Electron version, and the SHA-256 of the installed `app.asar`.
-3. Identify the newest completed prior binding.
+3. Identify the target binding for correction mode or the newest completed prior binding for new mode.
 4. Run the extraction script from `manage-platform-api` with `--expect-version <new-version>`. Work only in the returned temp directory.
 5. Stop if the version or hash changes during the task.
 
-Record the version, hash, exact Sparkle enclosure URL, and current ChatGPT API version immediately. They become the directory name, binding manifest identity, and current CI pin.
+Record the version, hash, exact Sparkle enclosure URL, and current ChatGPT API version immediately. They define the target directory, binding manifest identity, and current CI pin.
 
-### 2. Bootstrap from the prior binding
+### 2. Prepare the target binding
 
-Copy the prior binding into the new version directory. Update only the new copy:
+In `new` mode, copy the prior binding into the new version directory. Update only the new copy:
 
 - manifest `version` to `1.0.0`, `chatgpt` to the new app version, `chatgptApi` to the unchanged API version, plus the app.asar hash, Electron version, and binding date;
 - version constants and usage text in the host and native UI test;
 - version-specific module paths, exports, locators, and derivation findings.
+
+In `correction` mode, retain the target directory identity, increment its binding patch version by exactly one, and update its implementation and derivation. Preserve its `chatgpt` and `chatgptApi` values.
 
 Run syntax and manifest checks early. Verify the immutable paths still have no diff before continuing.
 
@@ -100,7 +102,7 @@ Validate in this order:
 4. Run the API test extension together with representative shipped extensions to catch composition failures.
 5. Disable the test extension, then verify the normal shipped-extension flow.
 6. When producing a launcher artifact, build Release, verify its signature, compare the packaged binding files with source, and repeat the critical interaction through the packaged bridge.
-7. After the binding passes, update `src/platform/bindings/manifest.json` to the new version and exact Sparkle enclosure URL. For every public extension validated on the new build, expand `compatibility.chatgpt` and increment its extension version; keep its source unchanged. Increment `updates/latest.json` generation once, preserve its existing schema-v2 API and binding maps, add the new binding keyed by ChatGPT version, and update the changed public-extension entries. Set new `sha256` values to 64 zeroes, then run `scripts/refresh-update-index-hashes.sh <base-sha>` and `node scripts/validate-pinned-chatgpt.mjs`.
+7. After the binding passes, update `src/platform/bindings/manifest.json` to the target version and exact Sparkle enclosure URL when needed. In `new` mode, expand `compatibility.chatgpt` and increment the version of every public extension validated on the new build; keep its source unchanged. In `correction` mode, keep all extension manifests unchanged. Increment `updates/latest.json` generation once, preserve its existing schema-v2 maps, and add or replace the target binding entry. Set changed `sha256` values to 64 zeroes, then run `scripts/refresh-update-index-hashes.sh <base-sha>` and `node scripts/validate-pinned-chatgpt.mjs`.
 
 Treat a result file as current only when the bridge log from the test PID and timestamp records that exact result. Missing, partial, stale, or unauthenticated results fail the run. Never weaken an assertion to obtain green tests.
 
@@ -108,7 +110,7 @@ Restore extension settings exactly after testing. Stop only the throwaway proces
 
 ### 7. Record the final derivation
 
-Write `src/platform/bindings/<new-version>/DERIVATION.md` with only the final working approach:
+Write `src/platform/bindings/<target-version>/DERIVATION.md` with only the final working approach:
 
 - pinned version, hash, and Electron version;
 - semantic anchors and current extracted-build locations;
@@ -118,22 +120,19 @@ Write `src/platform/bindings/<new-version>/DERIVATION.md` with only the final wo
 
 Keep version-specific facts in this derivation. Do not copy them into this skill or the durable `manage-platform-api` references.
 
-## Correcting an existing binding
-
-When fixing a faulty binding for the same ChatGPT build, edit that version's existing directory, increment its semantic `version`, and preserve its exact `chatgpt` and `chatgptApi`. Repeat the live completion gate, increment `updates/latest.json` generation, replace that binding-map entry with release tag `binding-<chatgpt>-v<version>`, and refresh its hash with `scripts/refresh-update-index-hashes.sh <base-sha>`. GitHub Releases preserve earlier iterations.
-
 ## Completion gate
 
 Finish only when all conditions hold:
 
-- The new directory and manifest declare binding version `1.0.0` and match the installed ChatGPT version, API version, and app.asar.
-- The current bindings manifest points to the new version and exact download URL, and its validator passes.
-- `updates/latest.json` preserves schema v2, identifies the new binding release by ChatGPT version, contains the deterministic archive hash, and the component release plan passes.
+- In `new` mode, the new directory and manifest declare binding version `1.0.0`. In `correction` mode, the target manifest increments its prior patch version by exactly one.
+- The target manifest matches the tested ChatGPT version, API version, and app.asar.
+- The current bindings manifest points to the target version and exact download URL, and its validator passes.
+- `updates/latest.json` preserves schema v2, identifies the target binding release by ChatGPT version, contains the deterministic archive hash, and the component release plan passes.
 - Every referenced current-build module exists and its export was verified.
-- The public API, extension source, and all prior binding directories are unchanged.
-- Every validated extension manifest includes the new ChatGPT version and has an incremented version.
+- The public API and extension source are unchanged. Non-target binding directories are unchanged.
+- In `new` mode, every validated extension manifest includes the new ChatGPT version and has an incremented version. In `correction` mode, all extension manifests are unchanged.
 - The unchanged public suite passes against the live app.
-- The new native UI suite passes, including every stock interactive affordance observed in the baseline.
+- The target native UI suite passes, including every stock interactive affordance observed in the baseline.
 - Representative shipped extensions work together.
 - The packaged artifact matches source when packaging is in scope.
 - `DERIVATION.md` describes the final current solution.

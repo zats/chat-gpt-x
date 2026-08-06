@@ -1,4 +1,4 @@
 interface:
   display_name: "Rebind ChatGPT Version"
-  short_description: "Rebind APIs to a new ChatGPT desktop build"
-  default_prompt: "Use $rebind-chatgpt-version to create and validate bindings for the currently installed ChatGPT version."
+  short_description: "Create or correct a ChatGPT desktop binding"
+  default_prompt: "Use $rebind-chatgpt-version to create and validate a new binding, or correct the existing binding, for the currently installed ChatGPT version."

@@ -40,6 +40,26 @@ curl https://codex-version-watch.<your-subdomain>.workers.dev/check
 
 The response identifies whether a binding or issue already handles the version, or a new issue was created.
 
+## Local Trigger
+
+Run the complete production issue flow from the repository root:
+
+```fish
+scripts/trigger-chatgpt-rebind.mjs
+```
+
+The script uses the latest Sparkle item and reads the repository default branch through GitHub. It stops when the binding or an exact version issue exists. Otherwise, it creates the same metadata issue as the Worker and applies `pending`. The existing issue workflow then reports progress, creates and validates the binding pull request, merges it, runs post-merge CI, publishes releases, and updates the issue.
+
+Force a fresh run even when the issue or binding exists:
+
+```fish
+scripts/trigger-chatgpt-rebind.mjs --force
+```
+
+For an existing binding, force mode requests a same-build correction and requires one binding patch-version increment. It creates a new issue so every progress comment and workflow update has a distinct durable record.
+
+The script requires an authenticated GitHub CLI session with Contents read and Issues read/write access. It uses the current repository and its default branch. `CHATGPTX_GITHUB_REPOSITORY` and `CHATGPTX_GITHUB_BRANCH` can select a different target.
+
 ## Configuration
 
 Defaults live in `wrangler.toml`:
