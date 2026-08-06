@@ -114,6 +114,23 @@ extension views at `data-thread-title-trigger`. A mutation observer covers
 rows rendered before and after injection. The absolute leading-view host
 grows leftward without changing title geometry.
 
+## Renderer bootstrap
+
+Binding `1.0.2` installs the main-world JSX hook from ChatGPTX's external
+session preload before the app's page scripts run. The preload requests the
+version-pinned host source from the injected main-process bridge and executes
+it through Electron's privileged `webFrame` path. This keeps the stock app
+bundle unchanged and uses the same `NODE_OPTIONS=--require` launch boundary.
+
+Native module imports can finish on either side of the app's first React
+render. The binding waits for the committed application root, then submits its
+current root element once through the app's React DOM renderer. This makes
+already-created menu elements enter the JSX boundary in both orders.
+Extension activation waits for `__CGPTX_NATIVE_READY__`, including this
+reconciliation, before registration. The version-specific native suite waits
+for an augmented Chat actions trigger and menu rather than accepting the stock
+menu as ready.
+
 ## authentication
 
 `startSignIn` uses the app's `login-with-chatgpt` URL construction and direct
@@ -181,6 +198,12 @@ thread, thread-menu, thread-list, appearance, color-picker, runtime preload,
 composition, packaging, and signing checks. OAuth validation keeps the full
 `39/39` public API and `63/63` native UI gates.
 
+Binding `1.0.2` removes the renderer-startup ordering race described above.
+Repeated isolated API-key validation completed with `20/20` public API and
+`35/35` native UI checks. The native suite also verifies that the thread-menu
+boundary rendered before extensions became active and that the application
+root is refreshed exactly once.
+
 The deterministic completion command was:
 
 ```bash
@@ -222,4 +245,7 @@ Results:
 - Missing or unpainted header: `_Header_khftr_1`, its five-section topology,
   remote action surface classes, or theme root classes changed.
 - Picker mismatch: header anchor, React DOM root, or native picker export
+  changed.
+- Native readiness failure before extension activation: preload bootstrap,
+  native module imports, application-root discovery, or root reconciliation
   changed.
