@@ -14,6 +14,16 @@ on:
         required: false
         default: ''
         type: string
+      release_base_sha:
+        description: Base commit for component releases in a protected dispatch
+        required: false
+        default: ''
+        type: string
+      release_head_sha:
+        description: Exact tested landing for component releases in a protected dispatch
+        required: false
+        default: ''
+        type: string
   push:
     branches:
       - main
@@ -108,7 +118,15 @@ jobs:
     needs: refresh-component-hashes
     if: >-
       always() &&
-      github.event_name != 'workflow_dispatch' &&
+      (
+        github.event_name != 'workflow_dispatch' ||
+        (
+          inputs.protected_run &&
+          inputs.release_base_sha != '' &&
+          inputs.release_head_sha != '' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        )
+      ) &&
       needs.refresh-component-hashes.result == 'success' &&
       needs.refresh-component-hashes.outputs.updated != 'true'
     runs-on: ubuntu-latest
@@ -129,9 +147,18 @@ jobs:
       - name: Validate affected components
         id: plan
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ inputs.release_base_sha || github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ inputs.release_head_sha || github.event.pull_request.head.sha || github.sha }}
+          RELEASE_BASE_SHA: ${{ inputs.release_base_sha }}
+          RELEASE_HEAD_SHA: ${{ inputs.release_head_sha }}
         run: |
+          if [[ -n "$RELEASE_BASE_SHA" || -n "$RELEASE_HEAD_SHA" ]]; then
+            [[ "$RELEASE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$RELEASE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$RELEASE_HEAD_SHA" == "$GITHUB_SHA" ]]
+            git merge-base --is-ancestor "$RELEASE_BASE_SHA" "$RELEASE_HEAD_SHA"
+            [[ "$RELEASE_BASE_SHA" != "$RELEASE_HEAD_SHA" ]]
+          fi
           node scripts/component-releases.mjs "$BASE_SHA" "$HEAD_SHA" \
             > "$RUNNER_TEMP/component-releases.json"
           node scripts/build-component-releases.mjs \
@@ -150,8 +177,19 @@ jobs:
 
   publish-component-releases:
     if: >-
-      github.event_name == 'push' &&
-      github.ref_name == github.event.repository.default_branch &&
+      (
+        (
+          github.event_name == 'push' &&
+          github.ref_name == github.event.repository.default_branch
+        ) ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          inputs.protected_run &&
+          inputs.release_base_sha != '' &&
+          inputs.release_head_sha != ''
+        )
+      ) &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       needs.component-release-plan.outputs.has_components == 'true'
     needs:
       - test
@@ -173,8 +211,8 @@ jobs:
           bun-version: 1.3.14
       - name: Build release artifacts
         env:
-          BASE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ inputs.release_base_sha || github.event.before }}
+          HEAD_SHA: ${{ inputs.release_head_sha || github.sha }}
         run: |
           command -v zip >/dev/null
           node scripts/component-releases.mjs "$BASE_SHA" "$HEAD_SHA" \

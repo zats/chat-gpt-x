@@ -1086,13 +1086,17 @@ jobs:
           branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
           git push origin --delete "$branch_name"
 
+          release_base_sha="$(git rev-parse "$EXPECTED_HEAD_SHA^")"
+          [[ "$release_base_sha" =~ ^[0-9a-f]{40}$ ]]
           validation_id="rebind-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           validation_title="CI ($validation_id)"
           gh workflow run ci.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \
             -f protected_run=true \
-            -f validation_id="$validation_id"
+            -f validation_id="$validation_id" \
+            -f release_base_sha="$release_base_sha" \
+            -f release_head_sha="$EXPECTED_HEAD_SHA"
 
           run_id=""
           deadline=$((SECONDS + 120))
