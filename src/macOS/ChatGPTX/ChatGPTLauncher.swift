@@ -8,6 +8,12 @@ enum ChatGPTLaunchMode {
     case apiTest
 }
 
+enum ChatGPTRunningApplicationPolicy: Equatable {
+    case normal
+    case forceRestart
+    case requireNotRunning
+}
+
 struct ChatGPTLauncher {
     static let chatGPTBundleIdentifier = "com.openai.codex"
     private static let launchConfigurationEnvironmentKey =
@@ -18,14 +24,17 @@ struct ChatGPTLauncher {
     private static let quitTimeout: TimeInterval = 10
 
     let componentStore: PreparedComponentStore
+    private let launchReservationStore = ChatGPTLaunchReservationStore()
 
+    @discardableResult
     func launch(
         mode: ChatGPTLaunchMode = .normal,
         arguments: [String] = [],
         localExtensionURLs: [URL] = [],
-        forceRestart: Bool = false,
-        applicationURL: URL? = nil
-    ) async throws {
+        runningApplicationPolicy: ChatGPTRunningApplicationPolicy = .normal,
+        applicationURL: URL? = nil,
+        beforeOpen: ((String) -> Void)? = nil
+    ) async throws -> NSRunningApplication? {
         let activity = ProcessInfo.processInfo.beginActivity(
             options: .userInitiated,
             reason: "Restart ChatGPT with the extension platform"
@@ -67,6 +76,21 @@ struct ChatGPTLauncher {
             throw LaunchError.bindingBuildMismatch(installedVersion)
         }
 
+        let launchClaim: (any ChatGPTRecoveryClaim)?
+        if mode == .normal,
+            runningApplicationPolicy != .requireNotRunning
+        {
+            guard let claim = try ChatGPTRecoveryClaimStore().acquire(
+                applicationURL: resolvedApplicationURL
+            ) else {
+                throw LaunchError.launchAlreadyInProgress
+            }
+            launchClaim = claim
+        } else {
+            launchClaim = nil
+        }
+        defer { launchClaim?.release() }
+
         let bridgeURL = componentStore.rootURL
             .appendingPathComponent(
                 componentStore.versions.chatgptApi.path,
@@ -77,16 +101,29 @@ struct ChatGPTLauncher {
             throw LaunchError.bridgeMissing
         }
 
-        if mode == .normal, localExtensionURLs.isEmpty, !forceRestart,
-            try await ChatGPTRuntime.activateRunningApplicationWithExtensions(
-                workspace: workspace
-            ) {
-            return
-        }
-
-        if mode == .normal, !forceRestart, Self.isChatGPTRunning,
-            !RestartPrompt(seconds: Self.restartCountdown).run() {
-            return
+        if mode == .normal {
+            switch runningApplicationPolicy {
+            case .normal:
+                if localExtensionURLs.isEmpty,
+                    try await ChatGPTRuntime
+                        .activateRunningApplicationWithExtensions(
+                            workspace: workspace
+                        )
+                {
+                    return nil
+                }
+                if Self.isChatGPTRunning,
+                    !RestartPrompt(seconds: Self.restartCountdown).run()
+                {
+                    return nil
+                }
+            case .forceRestart:
+                break
+            case .requireNotRunning:
+                guard !Self.isChatGPTRunning else {
+                    throw LaunchError.chatGPTAlreadyRunning
+                }
+            }
         }
 
         if mode == .apiTest {
@@ -95,14 +132,41 @@ struct ChatGPTLauncher {
             }) else {
                 throw LaunchError.apiTestUserDataDirectoryMissing
             }
-        } else {
-            try await quitRunningChatGPT()
         }
 
         let launchConfigurationURL = try launchConfiguration(
             for: mode,
             localExtensionURLs: localExtensionURLs
         )
+        let launchReservation: ChatGPTLaunchReservation
+        do {
+            launchReservation = try launchReservationStore.reserve(
+                applicationURL: resolvedApplicationURL
+            )
+        } catch {
+            if let launchConfigurationURL {
+                try? FileManager.default.removeItem(at: launchConfigurationURL)
+            }
+            throw LaunchError.launchCoordinationFailed(error)
+        }
+        beforeOpen?(launchReservation.token)
+
+        if mode == .normal
+            && runningApplicationPolicy != .requireNotRunning
+        {
+            do {
+                try await quitRunningChatGPT()
+            } catch {
+                launchReservation.cancel()
+                if let launchConfigurationURL {
+                    try? FileManager.default.removeItem(
+                        at: launchConfigurationURL
+                    )
+                }
+                throw error
+            }
+        }
+
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.arguments = arguments
         configuration.environment = Self.environment(
@@ -112,18 +176,72 @@ struct ChatGPTLauncher {
         )
         configuration.createsNewApplicationInstance = true
 
+        let application: NSRunningApplication
         do {
-            try await workspace.openApplication(
+            application = try await workspace.openApplication(
                 at: resolvedApplicationURL,
                 configuration: configuration
             )
         } catch {
+            launchReservation.cancel()
             if let launchConfigurationURL {
                 try? FileManager.default.removeItem(at: launchConfigurationURL)
             }
             throw LaunchError.applicationLaunchFailed(error)
         }
 
+        do {
+            try launchReservation.bind(to: application.processIdentifier)
+        } catch {
+            let bindingError = error
+            defer {
+                launchReservation.cancel()
+                if let launchConfigurationURL {
+                    try? FileManager.default.removeItem(
+                        at: launchConfigurationURL
+                    )
+                }
+            }
+            do {
+                try await stopUncoordinatedChatGPT(application)
+            } catch {
+                throw LaunchError.launchCoordinationCleanupFailed(
+                    binding: bindingError,
+                    cleanup: error
+                )
+            }
+            throw LaunchError.launchCoordinationFailed(bindingError)
+        }
+        return application
+    }
+
+    private func stopUncoordinatedChatGPT(
+        _ application: NSRunningApplication
+    ) async throws {
+        let processIdentifier = application.processIdentifier
+        guard !Self.isProcessRunning(processIdentifier)
+            || application.terminate()
+            || application.forceTerminate()
+        else {
+            throw LaunchError.chatGPTWouldNotQuit
+        }
+
+        var deadline = Date().addingTimeInterval(Self.quitTimeout)
+        while Self.isProcessRunning(processIdentifier), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard Self.isProcessRunning(processIdentifier) else { return }
+        guard application.forceTerminate() else {
+            throw LaunchError.chatGPTWouldNotQuit
+        }
+
+        deadline = Date().addingTimeInterval(Self.quitTimeout)
+        while Self.isProcessRunning(processIdentifier), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        guard !Self.isProcessRunning(processIdentifier) else {
+            throw LaunchError.chatGPTQuitTimedOut
+        }
     }
 
     private func quitRunningChatGPT() async throws {
@@ -427,6 +545,13 @@ private enum LaunchError: LocalizedError {
     case bindingBuildMismatch(String)
     case bridgeMissing
     case apiTestUserDataDirectoryMissing
+    case chatGPTAlreadyRunning
+    case launchAlreadyInProgress
+    case launchCoordinationFailed(any Error)
+    case launchCoordinationCleanupFailed(
+        binding: any Error,
+        cleanup: any Error
+    )
     case chatGPTWouldNotQuit
     case chatGPTQuitTimedOut
     case applicationLaunchFailed(any Error)
@@ -447,6 +572,14 @@ private enum LaunchError: LocalizedError {
             "The platform bridge is missing from ChatGPTX."
         case .apiTestUserDataDirectoryMissing:
             "API tests require an isolated absolute --user-data-dir."
+        case .chatGPTAlreadyRunning:
+            "Another ChatGPT instance started before recovery completed."
+        case .launchAlreadyInProgress:
+            "Another ChatGPTX launch is already in progress."
+        case .launchCoordinationFailed(let error):
+            "ChatGPT launch coordination failed: \(error.localizedDescription)"
+        case .launchCoordinationCleanupFailed(let binding, let cleanup):
+            "ChatGPT launch coordination failed: \(binding.localizedDescription). The uncoordinated ChatGPT process could not be stopped: \(cleanup.localizedDescription)"
         case .chatGPTWouldNotQuit:
             "The running ChatGPT app declined to quit."
         case .chatGPTQuitTimedOut:

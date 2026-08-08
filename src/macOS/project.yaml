@@ -9,6 +9,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    CHATGPTX_TEST_ROOT_PATH: "$(PROJECT_TEMP_DIR)/ChatGPTXTests"
 
 packages:
   Permiso:
@@ -44,3 +45,39 @@ targets:
         script: '"$PROJECT_DIR/scripts/embed-component-seed.sh"'
         outputFiles:
           - "$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/component-seed"
+
+  ChatGPTXTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: ChatGPTXTests
+    dependencies:
+      - target: ChatGPTX
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+
+schemes:
+  ChatGPTX:
+    build:
+      targets:
+        ChatGPTX: all
+        ChatGPTXTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - ChatGPTXTests
+      environmentVariables:
+        CHATGPTX_UNIT_TESTING: "1"
+        CHATGPTX_TEST_ROOT: "$(CHATGPTX_TEST_ROOT_PATH)"
+        HOME: "$(CHATGPTX_TEST_ROOT_PATH)/home"
+        CODEX_HOME: "$(CHATGPTX_TEST_ROOT_PATH)/codex-home"
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

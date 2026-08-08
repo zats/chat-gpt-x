@@ -1,6 +1,12 @@
 import AppKit
 import Darwin
 
+enum ChatGPTXRuntimeEnvironment {
+    static var isUnitTesting: Bool {
+        ProcessInfo.processInfo.environment["CHATGPTX_UNIT_TESTING"] == "1"
+    }
+}
+
 @main
 enum ChatGPTXApplication {
     static func main() {
@@ -17,7 +23,9 @@ enum ChatGPTXApplication {
             Darwin.exit(EXIT_FAILURE)
         }
         application.setActivationPolicy(
-            options.isAPITest ? .prohibited : .regular
+            options.isAPITest || ChatGPTXRuntimeEnvironment.isUnitTesting
+                ? .prohibited
+                : .regular
         )
         let delegate = AppDelegate(options: options)
 
@@ -38,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var checkForUpdatesAfterLaunch = false
     private var windowController: LauncherWindowController?
     private var systemMenuController: SystemMenuController?
+    private var launchRecoveryMonitor: ChatGPTLaunchRecoveryMonitor?
     private var statusMonitor: ChatGPTStatusMonitor?
     private var injectionMonitor: ChatGPTInjectionMonitor?
     private var notificationController: InjectionNotificationController?
@@ -48,6 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !ChatGPTXRuntimeEnvironment.isUnitTesting else { return }
+
         let installedChatGPTVersion: String?
         do {
             let componentStore = try ComponentStore()
@@ -98,15 +109,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.systemMenuController = systemMenuController
 
-        let statusMonitor = ChatGPTStatusMonitor(
-            applicationURL: options.applicationURL
-        ) { [weak self] snapshot in
-            self?.windowController?.showStatus(snapshot)
-            self?.systemMenuController?.showStatus(snapshot)
-        }
-        self.statusMonitor = statusMonitor
-        statusMonitor.start()
-
         let notificationController = InjectionNotificationController()
         notificationController.onRestart = { [weak self] in
             self?.openChatGPT(forceRestart: true)
@@ -115,6 +117,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.checkForUpdates()
         }
         self.notificationController = notificationController
+
+        let launchRecoveryMonitor = ChatGPTLaunchRecoveryMonitor(
+            approvedApplicationURL: { [weak self] in
+                self?.approvedChatGPTApplicationURL()
+            },
+            injectionEnabled: { application in
+                guard let application = application as? NSRunningApplication
+                else {
+                    return false
+                }
+                return ChatGPTRuntime.extensionsEnabled(for: application)
+            },
+            recoveryAllowed: { [weak self] in
+                guard let self else { return false }
+                return launchTask == nil
+            },
+            relaunch: { [weak self] applicationURL in
+                guard let self else {
+                    throw ComponentStoreUnavailable()
+                }
+                if let updateTask {
+                    await updateTask.value
+                }
+                guard launchTask == nil, updateTask == nil,
+                    let preparedComponents
+                else {
+                    throw AutomaticLaunchUnavailable()
+                }
+                return try await ChatGPTLauncher(
+                    componentStore: preparedComponents
+                ).launch(
+                    mode: .normal,
+                    localExtensionURLs: options.extensionURLs,
+                    runningApplicationPolicy: .requireNotRunning,
+                    applicationURL: applicationURL,
+                    beforeOpen: { [weak self] token in
+                        self?.launchRecoveryMonitor?.registerExpectedLaunch(
+                            token: token
+                        )
+                    }
+                )
+            },
+            launchErrorHandler: { [weak self] error in
+                self?.showLaunchError(error)
+            },
+            verificationFailureHandler: {
+                [weak notificationController] failure in
+                notificationController?.notify(failure)
+            }
+        )
+        self.launchRecoveryMonitor = launchRecoveryMonitor
+        launchRecoveryMonitor.start()
+
+        let statusMonitor = ChatGPTStatusMonitor(
+            applicationURL: options.applicationURL
+        ) { [weak self] snapshot in
+            self?.windowController?.showStatus(snapshot)
+            self?.systemMenuController?.showStatus(snapshot)
+        }
+        self.statusMonitor = statusMonitor
+        statusMonitor.start()
 
         let injectionMonitor = ChatGPTInjectionMonitor(
             expectedBinding: { [weak self] in
@@ -141,7 +204,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        guard !options.isAPITest else { return }
+        guard !ChatGPTXRuntimeEnvironment.isUnitTesting,
+            !options.isAPITest
+        else {
+            return
+        }
         windowController?.setLaunchAtLogin(LaunchAtLoginService.isEnabled)
         if !checkedAppManagementPermission {
             checkedAppManagementPermission = true
@@ -155,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         automaticUpdateTask?.cancel()
         automaticUpdateTask = nil
+        launchRecoveryMonitor?.stop()
         statusMonitor?.stop()
         injectionMonitor?.stop()
     }
@@ -163,6 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
+        guard !ChatGPTXRuntimeEnvironment.isUnitTesting else { return false }
         if !flag {
             windowController?.showWindow(nil)
         }
@@ -214,7 +283,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openChatGPT(forceRestart: Bool = false) {
-        guard launchTask == nil, updateTask == nil else { return }
+        guard launchTask == nil, updateTask == nil,
+            launchRecoveryMonitor?.isAutomaticRecoveryActive != true
+        else {
+            return
+        }
         guard let preparedComponents else {
             failStartup(ComponentStoreUnavailable())
             return
@@ -236,22 +309,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             do {
-                try await ChatGPTLauncher(
+                let application = try await ChatGPTLauncher(
                     componentStore: preparedComponents
                 ).launch(
                     mode: .normal,
                     localExtensionURLs: options.extensionURLs,
-                    forceRestart: forceRestart,
-                    applicationURL: options.applicationURL
+                    runningApplicationPolicy:
+                        forceRestart ? .forceRestart : .normal,
+                    applicationURL: options.applicationURL,
+                    beforeOpen: { [weak self] token in
+                        self?.launchRecoveryMonitor?.registerExpectedLaunch(
+                            token: token
+                        )
+                    }
                 )
+                launchRecoveryMonitor?.openedExpectedApplication(application)
             } catch {
+                launchRecoveryMonitor?.expectedLaunchFailed()
                 showLaunchError(error)
             }
         }
     }
 
+    private func approvedChatGPTApplicationURL() -> URL? {
+        guard let binding = preparedComponents?.versions.binding else {
+            return nil
+        }
+        let workspace = NSWorkspace.shared
+        guard let applicationURL = options.applicationURL
+            ?? ChatGPTLauncher.installedApplicationURL(workspace: workspace),
+            ChatGPTLauncher.bindingMatches(
+                applicationURL: applicationURL,
+                binding: binding
+            )
+        else {
+            return nil
+        }
+        return applicationURL
+    }
+
     private func checkForUpdates() {
-        guard updateTask == nil, launchTask == nil else { return }
+        guard updateTask == nil, launchTask == nil,
+            launchRecoveryMonitor?.isAutomaticRecoveryActive != true
+        else {
+            return
+        }
         guard let componentUpdateService else {
             failStartup(ComponentStoreUnavailable())
             return
@@ -292,6 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let plan = outcome.plan
                 let result = outcome.result
                 preparedComponents = result.preparedStore
+                launchRecoveryMonitor?.refreshApprovedApplication()
                 windowController?.showUpdateSummary(
                     plan.summary(installed: result.preparedStore.versions)
                 )
@@ -460,6 +563,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 private struct ComponentStoreUnavailable: LocalizedError {
     var errorDescription: String? {
         "The component store is unavailable."
+    }
+}
+
+private struct AutomaticLaunchUnavailable: LocalizedError {
+    var errorDescription: String? {
+        "ChatGPTX is already performing another launch or update."
     }
 }
 

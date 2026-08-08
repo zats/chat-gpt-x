@@ -87,6 +87,7 @@ APP_PATH="$OUTPUT_DIR/ChatGPTX.app"
 mkdir -p "$BUILD_ROOT/generated" "$BUILD_OUTPUT_DIR" "$OUTPUT_DIR"
 ln -s "$REPO_ROOT/src/platform" "$BUILD_ROOT/platform"
 ln -s "$MACOS_DIR/ChatGPTX" "$BUILD_ROOT/generated/ChatGPTX"
+ln -s "$MACOS_DIR/ChatGPTXTests" "$BUILD_ROOT/generated/ChatGPTXTests"
 ln -s "$MACOS_DIR/scripts" "$BUILD_ROOT/generated/scripts"
 
 xcodegen generate \
@@ -102,6 +103,31 @@ xcodebuild \
   CONFIGURATION_BUILD_DIR="$BUILD_OUTPUT_DIR" \
   CHATGPTX_REPO_ROOT="$REPO_ROOT" \
   build
+
+mkdir -p "$BUILD_ROOT/profiles"
+TEST_BUILD_OUTPUT_DIR="$BUILD_ROOT/test-products"
+TEST_CONFIGURATION="Debug"
+TEST_ROOT_DIR="$BUILD_ROOT/test-environment"
+TEST_HOME_DIR="$TEST_ROOT_DIR/home"
+TEST_CODEX_HOME_DIR="$TEST_ROOT_DIR/codex-home"
+mkdir -p \
+  "$TEST_BUILD_OUTPUT_DIR" \
+  "$TEST_HOME_DIR" \
+  "$TEST_CODEX_HOME_DIR"
+HOME="$TEST_HOME_DIR" \
+  CODEX_HOME="$TEST_CODEX_HOME_DIR" \
+  CHATGPTX_UNIT_TESTING=1 \
+  LLVM_PROFILE_FILE="$BUILD_ROOT/profiles/%p.profraw" \
+  xcodebuild \
+  -project "$BUILD_ROOT/generated/ChatGPTX.xcodeproj" \
+  -scheme ChatGPTX \
+  -configuration "$TEST_CONFIGURATION" \
+  -derivedDataPath "$BUILD_ROOT/TestDerivedData" \
+  CONFIGURATION_BUILD_DIR="$TEST_BUILD_OUTPUT_DIR" \
+  CHATGPTX_REPO_ROOT="$REPO_ROOT" \
+  CHATGPTX_TEST_ROOT_PATH="$TEST_ROOT_DIR" \
+  -only-testing:ChatGPTXTests \
+  test
 
 [[ -d "$BUILT_APP_PATH" ]] || {
   echo "build succeeded without producing $BUILT_APP_PATH" >&2
