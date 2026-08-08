@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchTask: Task<Void, Never>?
     private var updateTask: Task<Void, Never>?
     private var automaticUpdateTask: Task<Void, Never>?
+    private var checkForUpdatesAfterLaunch = false
     private var windowController: LauncherWindowController?
     private var systemMenuController: SystemMenuController?
     private var statusMonitor: ChatGPTStatusMonitor?
@@ -47,12 +48,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let installedChatGPTVersion: String?
         do {
             let componentStore = try ComponentStore()
             componentUpdateService = ComponentUpdateService(
                 componentStore: componentStore
             )
-            preparedComponents = try componentStore.prepare()
+            let applicationURL = options.applicationURL
+                ?? ChatGPTLauncher.installedApplicationURL(
+                    workspace: .shared
+                )
+            installedChatGPTVersion = applicationURL.flatMap {
+                ChatGPTLauncher.applicationVersion(at: $0)
+            }
+            preparedComponents = try componentStore.prepare(
+                forChatGPTVersion: installedChatGPTVersion
+            )
         } catch {
             failStartup(error)
             return
@@ -115,7 +126,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.injectionMonitor = injectionMonitor
         injectionMonitor.start()
-        startAutomaticUpdates()
+        if let preparedComponents,
+            let installedChatGPTVersion,
+            preparedComponents.bundledComponentsChanged,
+            preparedComponents.versions.binding.chatgpt
+                == installedChatGPTVersion
+        {
+            showComponentsInstalled { [weak self] restarted in
+                self?.startAutomaticUpdates(checkImmediately: !restarted)
+            }
+        } else {
+            startAutomaticUpdates()
+        }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -207,6 +229,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 windowController?.setLaunching(false)
                 systemMenuController?.setLaunching(false)
                 statusMonitor?.refresh()
+                if checkForUpdatesAfterLaunch {
+                    checkForUpdatesAfterLaunch = false
+                    checkForUpdates()
+                }
             }
 
             do {
@@ -289,8 +315,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func startAutomaticUpdates() {
-        checkForUpdates()
+    private func startAutomaticUpdates(checkImmediately: Bool = true) {
+        if checkImmediately {
+            checkForUpdates()
+        }
         automaticUpdateTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
@@ -307,8 +335,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showUpdateResult(_ result: ComponentUpdateResult) {
-        guard case .installed = result,
-            !ChatGPTRuntime.runningApplications.isEmpty else {
+        guard case .installed = result else { return }
+        showComponentsInstalled()
+    }
+
+    private func showComponentsInstalled(
+        completion: @escaping (Bool) -> Void = { _ in }
+    ) {
+        guard !ChatGPTRuntime.runningApplications.isEmpty else {
+            completion(false)
             return
         }
         let alert = NSAlert()
@@ -317,16 +352,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Restart ChatGPT")
         alert.addButton(withTitle: "Later")
 
+        let handleResponse: (NSApplication.ModalResponse) -> Void = {
+            [weak self] response in
+            let restarted = response == .alertFirstButtonReturn
+            if restarted {
+                self?.checkForUpdatesAfterLaunch = true
+                self?.openChatGPT(forceRestart: true)
+            }
+            completion(restarted)
+        }
         guard let window = windowController?.window else {
-            alert.runModal()
+            handleResponse(alert.runModal())
             return
         }
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn else {
-                return
-            }
-            self?.openChatGPT(forceRestart: true)
-        }
+        alert.beginSheetModal(for: window, completionHandler: handleResponse)
     }
 
     private func showLaunchError(_ error: any Error) {

@@ -387,7 +387,7 @@ private extension ComponentStore {
         _ index: ComponentUpdateIndex,
         chatgptVersion: String
     ) throws -> ComponentUpdatePlan {
-        let current = try prepare()
+        let current = try prepareInstalled()
         guard index.generation >= current.versions.generation else {
             throw ComponentUpdateError.olderGeneration(
                 index.generation,
@@ -555,7 +555,9 @@ private extension ComponentStore {
             || versions.binding != current.versions.binding
             || versions.extensions != current.versions.extensions
         if versions == current.versions {
-            return .upToDate(current)
+            return current.bundledComponentsChanged
+                ? .installed(current)
+                : .upToDate(current)
         }
         try validate(versions)
         try validateInstalledComponents(versions)
@@ -567,9 +569,12 @@ private extension ComponentStore {
         let prepared = PreparedComponentStore(
             rootURL: rootURL,
             versionsLockURL: versionsLockURL,
-            versions: versions
+            versions: versions,
+            bundledComponentsChanged: false
         )
-        return componentsChanged ? .installed(prepared) : .upToDate(prepared)
+        return componentsChanged || current.bundledComponentsChanged
+            ? .installed(prepared)
+            : .upToDate(prepared)
     }
 
     private func installArchive(

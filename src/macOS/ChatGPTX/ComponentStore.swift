@@ -55,6 +55,7 @@ struct PreparedComponentStore {
     let rootURL: URL
     let versionsLockURL: URL
     let versions: ComponentVersionsLock
+    let bundledComponentsChanged: Bool
 }
 
 struct ComponentStore {
@@ -92,7 +93,25 @@ struct ComponentStore {
         )
     }
 
-    func prepare() throws -> PreparedComponentStore {
+    func prepare(forChatGPTVersion chatGPTVersion: String?) throws
+        -> PreparedComponentStore
+    {
+        let installed = try prepareInstalled()
+        let bundled = try readBundledVersions()
+        if !shouldInstallBundledSeed(
+            installed: installed.versions,
+            bundled: bundled,
+            chatGPTVersion: chatGPTVersion
+        ) {
+            return installed
+        }
+        return try installBundledSeed(
+            versionsLockURL: installed.versionsLockURL,
+            replacing: installed.versions
+        )
+    }
+
+    func prepareInstalled() throws -> PreparedComponentStore {
         try createStoreLayout()
 
         let versionsLockURL = rootURL.appendingPathComponent(
@@ -101,7 +120,25 @@ struct ComponentStore {
         if fileManager.fileExists(atPath: versionsLockURL.path) {
             return try readVersions(at: versionsLockURL)
         }
-        return try installBundledSeed(versionsLockURL: versionsLockURL)
+        return try installBundledSeed(
+            versionsLockURL: versionsLockURL,
+            replacing: nil
+        )
+    }
+
+    private func shouldInstallBundledSeed(
+        installed: ComponentVersionsLock,
+        bundled: ComponentVersionsLock,
+        chatGPTVersion: String?
+    ) -> Bool {
+        guard let chatGPTVersion else { return false }
+
+        let installedMatches = installed.binding.chatgpt == chatGPTVersion
+        let bundledMatches = bundled.binding.chatgpt == chatGPTVersion
+        if installedMatches != bundledMatches {
+            return bundledMatches
+        }
+        return bundledMatches && bundled.generation > installed.generation
     }
 
     private func createStoreLayout() throws {
@@ -139,21 +176,23 @@ struct ComponentStore {
         return PreparedComponentStore(
             rootURL: rootURL,
             versionsLockURL: versionsLockURL,
-            versions: versions
+            versions: versions,
+            bundledComponentsChanged: false
         )
     }
 
-    private func installBundledSeed(versionsLockURL: URL) throws
+    private func installBundledSeed(
+        versionsLockURL: URL,
+        replacing installedVersions: ComponentVersionsLock?
+    ) throws
         -> PreparedComponentStore
     {
-        let seedVersionsLockURL = seedURL.appendingPathComponent(
-            "versions-lock.json"
-        )
-        let versions = try decode(
-            ComponentVersionsLock.self,
-            at: seedVersionsLockURL
-        )
-        try validate(versions)
+        let versions = try bundledVersionsApplyingSettings()
+        let componentsChanged = installedVersions.map {
+            versions.chatgptApi != $0.chatgptApi
+                || versions.binding != $0.binding
+                || versions.extensions != $0.extensions
+        } ?? true
 
         let downloadsURL = rootURL.appendingPathComponent(
             "downloads",
@@ -210,7 +249,70 @@ struct ComponentStore {
         return PreparedComponentStore(
             rootURL: rootURL,
             versionsLockURL: versionsLockURL,
-            versions: versions
+            versions: versions,
+            bundledComponentsChanged: componentsChanged
+        )
+    }
+
+    private func readBundledVersions() throws -> ComponentVersionsLock {
+        let seedVersionsLockURL = seedURL.appendingPathComponent(
+            "versions-lock.json"
+        )
+        let versions = try decode(
+            ComponentVersionsLock.self,
+            at: seedVersionsLockURL
+        )
+        try validate(versions)
+        return versions
+    }
+
+    private func bundledVersionsApplyingSettings() throws
+        -> ComponentVersionsLock
+    {
+        let versions = try readBundledVersions()
+        let settingsURL = rootURL.appendingPathComponent("settings.json")
+        guard fileManager.fileExists(atPath: settingsURL.path) else {
+            return versions
+        }
+
+        let settings = try decode(ExtensionSettings.self, at: settingsURL)
+        var seenIDs = Set<String>()
+        guard
+            settings.schemaVersion == Self.schemaVersion,
+            settings.extensions.allSatisfy({
+                seenIDs.insert($0.id).inserted
+            })
+        else {
+            throw ComponentStoreError.invalidSettings
+        }
+
+        let extensionsByID = Dictionary(
+            uniqueKeysWithValues: versions.extensions.map { ($0.id, $0) }
+        )
+        let configuredIDs = Set(settings.extensions.map(\.id))
+        let configuredExtensions = settings.extensions.compactMap { setting in
+            extensionsByID[setting.id].map { component in
+                StoredExtension(
+                    id: component.id,
+                    version: component.version,
+                    enabled: setting.enabled,
+                    compatibility: component.compatibility,
+                    release: component.release,
+                    sha256: component.sha256,
+                    path: component.path
+                )
+            }
+        }
+        let newExtensions = versions.extensions.filter {
+            !configuredIDs.contains($0.id)
+        }
+
+        return ComponentVersionsLock(
+            schemaVersion: versions.schemaVersion,
+            generation: versions.generation,
+            chatgptApi: versions.chatgptApi,
+            binding: versions.binding,
+            extensions: configuredExtensions + newExtensions
         )
     }
 
@@ -413,6 +515,7 @@ struct ComponentStore {
 private enum ComponentStoreError: LocalizedError {
     case resourcesMissing
     case invalidVersionsLock
+    case invalidSettings
     case invalidPath(String)
     case invalidJSON(URL, any Error)
     case seedComponentMissing(String)
@@ -424,6 +527,8 @@ private enum ComponentStoreError: LocalizedError {
             "ChatGPTX resources are missing."
         case .invalidVersionsLock:
             "The component versions lock is invalid."
+        case .invalidSettings:
+            "The extension settings are invalid."
         case .invalidPath(let path):
             "The component path is invalid: \(path)"
         case .invalidJSON(let url, let error):
