@@ -51,6 +51,7 @@ jobs:
           node --check scripts/build-component-releases.mjs
           node --check scripts/build-component-seed.mjs
           node --check scripts/component-releases.mjs
+          node --check scripts/materialize-ci-auth.mjs
           node --check scripts/trigger-chatgpt-rebind.mjs
           node --check scripts/validate-rebind-binding.mjs
           node --check scripts/validate-pinned-chatgpt.mjs
@@ -60,6 +61,7 @@ jobs:
           bash -n scripts/refresh-update-index-hashes.sh
           node --test scripts/build-component-releases.test.mjs
           node --test scripts/component-releases.test.mjs
+          node --test scripts/materialize-ci-auth.test.mjs
           node --test scripts/trigger-chatgpt-rebind.test.mjs
           node --test scripts/validate-rebind-binding.test.mjs
           node --test src/platform/runtime/extension-launch-config.test.cjs
@@ -97,34 +99,13 @@ jobs:
           PRIMARY_AUTH_JSON: ${{ secrets.CHATGPTX_PRIMARY_AUTH_JSON }}
           SECONDARY_AUTH_JSON: ${{ secrets.CHATGPTX_SECONDARY_AUTH_JSON }}
         run: |
-          [[ -n "$PRIMARY_AUTH_JSON" ]] || {
-            echo "CHATGPTX_PRIMARY_AUTH_JSON is required" >&2
-            exit 1
-          }
           auth_root="$RUNNER_TEMP/chatgptx-auth"
-          mkdir -p "$auth_root"
-          chmod 700 "$auth_root"
-          printf '%s' "$PRIMARY_AUTH_JSON" > "$auth_root/primary.json"
-          chmod 600 "$auth_root/primary.json"
+          auth_mode="$(node scripts/materialize-ci-auth.mjs "$auth_root")"
           echo "primary=$auth_root/primary.json" >> "$GITHUB_OUTPUT"
-          auth_mode="$(jq -er '.auth_mode' "$auth_root/primary.json")"
-          case "$auth_mode" in
-            apikey)
-              ;;
-            chatgpt)
-              [[ -n "$SECONDARY_AUTH_JSON" ]] || {
-                echo "CHATGPTX_SECONDARY_AUTH_JSON is required for ChatGPT authentication" >&2
-                exit 1
-              }
-              printf '%s' "$SECONDARY_AUTH_JSON" > "$auth_root/secondary.json"
-              chmod 600 "$auth_root/secondary.json"
-              echo "secondary=$auth_root/secondary.json" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              echo "unsupported authentication mode: $auth_mode" >&2
-              exit 1
-              ;;
-          esac
+          echo "auth-mode=$auth_mode" >> "$GITHUB_OUTPUT"
+          if [[ "$auth_mode" == "chatgpt" ]]; then
+            echo "secondary=$auth_root/secondary.json" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build launcher and run isolated end-to-end suite
         id: end-to-end
         env:

@@ -220,6 +220,7 @@ jobs:
       base-sha: ${{ steps.base.outputs.sha }}
       codex-version: ${{ steps.codex.outputs.version }}
       patch-artifact: ${{ steps.patch.outputs.artifact-name }}
+      auth-handoff-artifact: ${{ steps.authentication-handoff.outputs.artifact-name }}
       app-validation-error: ${{ steps.chatgpt.outputs.validation-error }}
     steps:
       - uses: actions/checkout@v4
@@ -332,10 +333,6 @@ jobs:
             echo "CODEX_AGENT_AUTH_JSON is required" >&2
             exit 1
           }
-          [[ -n "$PRIMARY_AUTH_JSON" && -n "$SECONDARY_AUTH_JSON" ]] || {
-            echo "burner authentication secrets are required" >&2
-            exit 1
-          }
           agent_home="$RUNNER_TEMP/codex-agent-home"
           auth_root="$RUNNER_TEMP/chatgptx-auth"
           candidate_root="$RUNNER_TEMP/chatgptx-refreshed-auth"
@@ -343,16 +340,12 @@ jobs:
           mkdir -p "$agent_home" "$auth_root" "$candidate_root" "$diagnostics_root"
           chmod 700 "$agent_home" "$auth_root" "$candidate_root"
           printf '%s' "$AGENT_AUTH_JSON" > "$agent_home/auth.json"
-          printf '%s' "$PRIMARY_AUTH_JSON" > "$auth_root/primary.json"
-          printf '%s' "$SECONDARY_AUTH_JSON" > "$auth_root/secondary.json"
-          cp "$auth_root/primary.json" "$candidate_root/primary.json"
-          cp "$auth_root/secondary.json" "$candidate_root/secondary.json"
-          chmod 600 \
-            "$agent_home/auth.json" \
-            "$auth_root/primary.json" \
-            "$auth_root/secondary.json" \
-            "$candidate_root/primary.json" \
-            "$candidate_root/secondary.json"
+          chmod 600 "$agent_home/auth.json"
+          auth_mode="$(
+            node scripts/materialize-ci-auth.mjs \
+              "$auth_root" \
+              "$candidate_root"
+          )"
           jq -e '.tokens | type == "object" and has("access_token") and has("refresh_token")' \
             "$agent_home/auth.json" >/dev/null
           cp scripts/auth-handoff.mjs "$RUNNER_TEMP/trusted-auth-handoff.mjs"
@@ -364,7 +357,12 @@ jobs:
             echo "auth-root=$auth_root"
             echo "candidate-root=$candidate_root"
             echo "diagnostics-root=$diagnostics_root"
+            echo "auth-mode=$auth_mode"
+            echo "primary=$auth_root/primary.json"
           } >> "$GITHUB_OUTPUT"
+          if [[ "$auth_mode" == "chatgpt" ]]; then
+            echo "secondary=$auth_root/secondary.json" >> "$GITHUB_OUTPUT"
+          fi
           CODEX_HOME="$agent_home" codex login status
 
       - name: Run Codex rebind agent
@@ -374,6 +372,7 @@ jobs:
           DOWNLOAD_URL: ${{ needs.request.outputs.download-url }}
           ISSUE_NUMBER: ${{ needs.request.outputs.issue-number }}
           BINDING_MODE: ${{ steps.binding-mode.outputs.mode }}
+          AUTH_MODE: ${{ steps.authentication.outputs.auth-mode }}
           CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
           AGENT_CODEX_HOME: ${{ steps.authentication.outputs.agent-home }}
           AUTH_ROOT: ${{ steps.authentication.outputs.auth-root }}
@@ -387,6 +386,16 @@ jobs:
             task="complete the new binding for ChatGPT $APP_VERSION"
             binding_instructions="Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, extension source files, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. After the live suites pass, increment each validated public extension version and expand its compatibility.chatgpt range in package.json. Update src/platform/bindings/manifest.json and the schema-v2 maps in updates/latest.json. Increment the update generation once, preserve every existing API and binding entry, add the new binding by ChatGPT version, and use predictable release tags. Set new sha256 fields to 64 zeroes; the workflow replaces them with deterministic archive hashes before validation."
           fi
+          if [[ "$AUTH_MODE" == "apikey" ]]; then
+            authentication_files="- $AUTH_ROOT/primary.json (API-key authentication)"
+            final_test="CHATGPT_APP_PATH=\"$CHATGPT_APP_PATH\" scripts/run-local-ci.sh \"$AUTH_ROOT/primary.json\""
+            authentication_scope="The harness disables profile-dependent gates in API-key mode. Complete every remaining gate."
+          else
+            authentication_files="- $AUTH_ROOT/primary.json
+          - $AUTH_ROOT/secondary.json"
+            final_test="CHATGPT_APP_PATH=\"$CHATGPT_APP_PATH\" scripts/run-local-ci.sh \"$AUTH_ROOT/primary.json\" \"$AUTH_ROOT/secondary.json\""
+            authentication_scope="Complete every gate, including profile-dependent gates and account switching."
+          fi
           cat > "$prompt_path" <<PROMPT
           Use \$rebind-chatgpt-version and $task.
 
@@ -396,15 +405,14 @@ jobs:
 
           Follow the skill's completion gate for $BINDING_MODE mode. $binding_instructions
 
-          The authenticated test accounts are available only as opaque files:
-          - $AUTH_ROOT/primary.json
-          - $AUTH_ROOT/secondary.json
+          Test authentication is available only through these opaque files:
+          $authentication_files
 
           Never inspect, print, summarize, copy into the repository, or expose authentication contents. Pass the paths directly to tests. For the final deterministic test use:
 
-          CHATGPT_APP_PATH="$CHATGPT_APP_PATH" scripts/run-local-ci.sh "$AUTH_ROOT/primary.json" "$AUTH_ROOT/secondary.json"
+          $final_test
 
-          Work until the binding passes the stable public API suite, current native UI suite, shipped-extension composition, manifest validation, and the skill's remaining gates. Do not commit, push, open a pull request, modify workflow files, or weaken tests. If genuinely blocked, leave the useful binding changes in the worktree and report the exact failure.
+          $authentication_scope Work until the binding passes the stable public API suite, current native UI suite, shipped-extension composition, manifest validation, and the skill's applicable remaining gates. Do not commit, push, open a pull request, modify workflow files, or weaken tests. If genuinely blocked, leave the useful binding changes in the worktree and report the exact failure.
           PROMPT
 
           set +e
@@ -475,11 +483,14 @@ jobs:
         run: |
           auth_paths=(
             "$AGENT_HOME/auth.json"
-            "$AUTH_ROOT/primary.json"
-            "$AUTH_ROOT/secondary.json"
-            "$CANDIDATE_ROOT/primary.json"
-            "$CANDIDATE_ROOT/secondary.json"
           )
+          for auth_path in \
+            "$AUTH_ROOT/primary.json" \
+            "$AUTH_ROOT/secondary.json" \
+            "$CANDIDATE_ROOT/primary.json" \
+            "$CANDIDATE_ROOT/secondary.json"; do
+            [[ ! -f "$auth_path" ]] || auth_paths+=("$auth_path")
+          done
           node scripts/check-auth-exposure.mjs \
             "${auth_paths[@]}" \
             -- \
@@ -503,26 +514,32 @@ jobs:
         id: authentication-handoff
         env:
           AGENT_HOME: ${{ steps.authentication.outputs.agent-home }}
+          AUTH_MODE: ${{ steps.authentication.outputs.auth-mode }}
           CANDIDATE_ROOT: ${{ steps.authentication.outputs.candidate-root }}
         run: |
           cp "$AGENT_HOME/auth.json" "$CANDIDATE_ROOT/agent.json"
           chmod 600 "$CANDIDATE_ROOT/agent.json"
           encrypted_root="$RUNNER_TEMP/chatgptx-auth-handoff"
+          labels=(agent)
+          artifact_name="rebind-agent-auth-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [[ "$AUTH_MODE" == "chatgpt" ]]; then
+            labels=(primary secondary agent)
+            artifact_name="ci-auth-refresh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          fi
           node "$RUNNER_TEMP/trusted-auth-handoff.mjs" \
             encrypt \
             .github/ci-auth-refresh-public.pem \
             "$CANDIDATE_ROOT" \
             "$encrypted_root" \
-            primary \
-            secondary \
-            agent
+            "${labels[@]}"
           echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"
 
       - name: Upload encrypted authentication handoff
         if: always() && steps.authentication-handoff.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ci-auth-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.authentication-handoff.outputs.artifact-name }}
           path: ${{ runner.temp }}/chatgptx-auth-handoff
           if-no-files-found: error
           retention-days: 1
@@ -660,11 +677,11 @@ jobs:
             > "$RUNNER_TEMP/rebase-index-before.txt"
           echo "conflicted=true" >> "$GITHUB_OUTPUT"
 
-      - name: Download refreshed authentication handoff
+      - name: Download authentication handoff
         if: steps.binding.outputs.conflicted == 'true'
         uses: actions/download-artifact@v4
         with:
-          name: ci-auth-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.generate.outputs.auth-handoff-artifact }}
           path: ${{ runner.temp }}/rebase-auth-handoff
 
       - name: Install rebase resolver Codex CLI

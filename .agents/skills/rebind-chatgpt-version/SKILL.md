@@ -64,9 +64,9 @@ Treat every old chunk filename and minified export as a hypothesis.
 
 Avoid broad reverse engineering until an anchor fails. Static inspection produces candidates; live behavior confirms them.
 
-### 4. Capture a stock behavioral baseline
+### 4. Capture the available stock behavioral baseline
 
-Before testing the binding, run the stock app with an isolated authenticated profile and a CDP port. Observe the profile menu without injection.
+Before testing the binding, run the stock app with an isolated authentication state and a CDP port. With ChatGPT account authentication, observe the profile menu without injection. With API-key authentication, use the harness-defined reduced path and omit profile-dependent observations.
 
 Inventory every safe built-in affordance relevant to the API:
 
@@ -92,7 +92,7 @@ When a built-in component is reconstructed:
 
 ### 6. Test against the real app
 
-Use a throwaway `--user-data-dir` and an authenticated profile copy as described in `app-facts.md`. Keep the stock app bundle untouched.
+Use a throwaway `--user-data-dir` and the supplied authentication mode as described in `app-facts.md`. Keep the stock app bundle untouched. Pass two authentication files for ChatGPT account mode. Pass one API-key authentication file for API-key mode; the harness disables only its declared profile-dependent gates.
 
 Validate in this order:
 
@@ -132,7 +132,7 @@ Finish only when all conditions hold:
 - The public API and extension source are unchanged. Non-target binding directories are unchanged.
 - In `new` mode, every validated extension manifest includes the new ChatGPT version and has an incremented version. In `correction` mode, all extension manifests are unchanged.
 - The unchanged public suite passes against the live app.
-- The target native UI suite passes, including every stock interactive affordance observed in the baseline.
+- The target native UI suite passes, including every stock interactive affordance available in the selected authentication mode.
 - Representative shipped extensions work together.
 - The packaged artifact matches source when packaging is in scope.
 - `DERIVATION.md` describes the final current solution.
