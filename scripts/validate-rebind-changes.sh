@@ -61,12 +61,10 @@ done < <(
   echo "the rebind agent produced no changes" >&2
   exit 1
 }
-git -C "$REPO_ROOT" diff --quiet "$BASE_SHA" -- "$BINDING_ROOT" && {
-  echo "the rebind agent did not change $BINDING_ROOT" >&2
-  exit 1
-}
 
+BINDING_CHANGED=false
 for changed_path in "${CHANGED_PATHS[@]}"; do
+  [[ "$changed_path" != "$BINDING_ROOT/"* ]] || BINDING_CHANGED=true
   if [[ "$MODE" == "new" ]]; then
     case "$changed_path" in
       "$BINDING_ROOT"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json)
@@ -87,6 +85,10 @@ for changed_path in "${CHANGED_PATHS[@]}"; do
     esac
   fi
 done
+[[ "$BINDING_CHANGED" == "true" ]] || {
+  echo "the rebind agent did not change $BINDING_ROOT" >&2
+  exit 1
+}
 
 jq -e \
   --arg version "$APP_VERSION" \
