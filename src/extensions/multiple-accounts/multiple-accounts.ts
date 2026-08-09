@@ -89,14 +89,13 @@ export function transformProfileMenuItems(items: readonly ProfileMenuItem[], cur
   if (!row && !logout) return items;
   const accountItems = row?.kind === "action"
     ? [
-        { kind: "action", id: PROFILE_ITEM_ID, label: "Profile", icon: "person", onClick: row.onClick } satisfies ProfileMenuActionItem,
+        { kind: "action", id: PROFILE_ITEM_ID, label: "Profile", onClick: row.onClick } satisfies ProfileMenuActionItem,
         ...accounts
           .filter((account) => account.userId !== currentUserId)
           .map((account): ProfileMenuActionItem => ({
             kind: "action",
             id: `${EXTENSION_ID}.account.${encodeURIComponent(account.userId)}`,
             label: account.label,
-            icon: "person",
             onClick: () => actions.selectAccount(account),
           })),
         ...(row.items ?? []),

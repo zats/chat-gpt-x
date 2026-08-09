@@ -80,7 +80,7 @@ test("the account row becomes a submenu whose Profile child preserves native nav
   if (parent?.kind !== "action") return;
   assert.equal(parent.label, "current@example.com");
   assert.equal(parent.items?.length, 2);
-  assert.deepEqual(parent.items?.[0], { kind: "action", id: "multiple-accounts.profile", label: "Profile", icon: "person", onClick: openProfile });
+  assert.deepEqual(parent.items?.[0], { kind: "action", id: "multiple-accounts.profile", label: "Profile", onClick: openProfile });
   assert.equal(result[1], settings);
 });
 
@@ -108,9 +108,9 @@ test("stored accounts exclude the current account and remain selectable", () => 
   assert.equal(parent?.kind, "action");
   if (parent?.kind !== "action") return;
   assert.deepEqual(parent.items?.map((item) => item.id), ["multiple-accounts.profile", "multiple-accounts.account.other-user", "multiple-accounts.add-account"]);
-  assert.equal(parent.items?.[0]?.kind === "action" ? parent.items[0].icon : undefined, "person");
+  assert.equal(parent.items?.[0]?.kind === "action" ? parent.items[0].icon : undefined, undefined);
   const otherItem = parent.items?.[1];
-  assert.equal(otherItem?.kind === "action" ? otherItem.icon : undefined, "person");
+  assert.equal(otherItem?.kind === "action" ? otherItem.icon : undefined, undefined);
   if (otherItem?.kind === "action") otherItem.onClick?.();
   assert.deepEqual(selected, [other]);
 });

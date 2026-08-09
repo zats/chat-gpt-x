@@ -105,6 +105,12 @@ const result = await evaluate(`(async () => {
       item.id.startsWith("multiple-accounts.account."),
   );
   if (!target) throw new Error("alternate account menu item is missing");
+  const profile = accountChildren().find(
+    (item) => item.id === "multiple-accounts.profile",
+  );
+  if (profile?.kind !== "action") throw new Error("Profile menu item is missing");
+  if (profile.icon !== undefined) throw new Error("Profile menu item has an icon");
+  if (target.icon !== undefined) throw new Error("alternate account menu item has an icon");
 
   let switched = false;
   try {
@@ -128,7 +134,14 @@ const result = await evaluate(`(async () => {
     );
     const restoreId =
       "multiple-accounts.account." + encodeURIComponent(original.userId);
-    if (!api.menus.profile.activateItem(restoreId)) {
+    const restore = accountChildren().find((item) => item.id === restoreId);
+    if (restore?.kind !== "action") {
+      throw new Error("default account menu item is missing");
+    }
+    if (restore.icon !== undefined) {
+      throw new Error("default account menu item has an icon");
+    }
+    if (!api.menus.profile.activateItem(restore.id)) {
       throw new Error("default account menu item did not activate");
     }
     await waitUntil("default account restoration", async () => {
@@ -142,13 +155,14 @@ const result = await evaluate(`(async () => {
 
   const restored = await api.authentication.getCurrent();
   return {
+    iconsAbsent: true,
     switched: true,
     restored: restored?.userId === original.userId,
   };
 })()`);
 socket.close();
 
-if (!result?.switched || !result?.restored) {
+if (!result?.iconsAbsent || !result?.switched || !result?.restored) {
   throw new Error(
     `multiple-accounts integration failed: ${JSON.stringify(result)}`,
   );

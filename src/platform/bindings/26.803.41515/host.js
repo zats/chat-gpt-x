@@ -2412,7 +2412,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     authModule.r();
     appInitialModule.XU();
     appInitialModule.Aht();
-    appInitialModule.cG();
+    appInitialModule.Nm();
     appInitialModule.yc();
     appInitialModule.I0();
     appInitialModule.pkt();
@@ -2454,7 +2454,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       useNavigate: appInitialModule.iut,
       iconComponents: new Map([
         ["chevron-right", appInitialModule.kht],
-        ["person", appInitialModule.sG],
+        ["person", appInitialModule.Mm],
         ["plus", PlusIcon],
         ["palette", paletteIconModule.t],
       ]),
