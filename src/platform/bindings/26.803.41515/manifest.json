@@ -1,8 +1,8 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "chatgpt": "26.803.41515",
-  "chatgptApi": "1.1.0",
+  "chatgptApi": "1.1.1",
   "asarSha256": "5f6e773aafd542d3cf09e10b5dca6cabd301d0a155f4b8ce870e3915fc3da25e",
   "electronVersion": "151.0.7922.76",
-  "boundAt": "2026-08-08"
+  "boundAt": "2026-08-09"
 }

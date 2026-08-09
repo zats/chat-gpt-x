@@ -41,7 +41,7 @@ function buildExtension(
   extensionId,
   version,
   targetRoot,
-  { allowPrivate = false } = {},
+  { allowPrivate = false, definitions = [] } = {},
 ) {
   const sourceRoot = path.join(
     repositoryRoot,
@@ -73,6 +73,9 @@ function buildExtension(
       "--target=browser",
       "--format=cjs",
       `--outfile=${path.join(targetRoot, "contents/main.js")}`,
+      ...definitions.map(([name, value]) =>
+        `--define=${name}=${JSON.stringify(value)}`,
+      ),
     ],
     { cwd: repositoryRoot, stdio: "inherit" },
   );
@@ -179,7 +182,10 @@ function run() {
     "api-test-suite",
     apiTestManifest.version,
     path.join(output, "api-test-suite"),
-    { allowPrivate: true },
+    {
+      allowPrivate: true,
+      definitions: [["process.env.CHATGPTX_TEST_NO_PROFILE", "0"]],
+    },
   );
 
   const versions = {

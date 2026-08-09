@@ -82,7 +82,9 @@ for manifest in "${manifests[@]}"; do
         exit 1
         ;;
     esac
-    build_arguments+=(--env='CHATGPTX_TEST_*')
+    build_arguments+=(
+      "--define=process.env.CHATGPTX_TEST_NO_PROFILE=\"${CHATGPTX_TEST_NO_PROFILE:-0}\""
+    )
   fi
 
   mkdir -p "$(dirname "$built_main")" "$(dirname "$extension_main_output")"

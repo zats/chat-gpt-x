@@ -17,7 +17,6 @@
   const PALETTE_ICON_MODULE = "./assets/palette-lzFbWMQk-kn_doBgm.js";
   const THREAD_MENU_MODULE = "./assets/thread-overflow-menu-Co1P8oAT.js";
   const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-C-A6pkYX.js";
-  const SETTINGS_PAGE_MODULE = "./assets/settings-page-mM-lHCsV.js";
   const SETTINGS_VISIBILITY_MODULE =
     "./assets/use-visible-settings-sections-1Vu4SC9J.js";
   const AUTHENTICATION_RESTART_TIMEOUT_MS = 20_000;
@@ -251,6 +250,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let nestedItemClassName = null;
   let refreshAuthentication = null;
   let openNativeProfile = null;
+  let openNativeSettings = null;
   let profileNavigationAttemptCount = 0;
   let profileNavigationLastRequestedPath = null;
   let profileMenuHasNativeProfileCallback = null;
@@ -267,7 +267,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let nextColorPickerId = 1;
   let colorPickerRenderError = null;
   let settingsNavigationRowTemplate = null;
-  let settingsNavigate = null;
+  let activeSettingsPaneId = null;
+  let activeCustomSettingsPaneId = null;
+  let pendingNativeSettingsPaneId = null;
+  let settingsContentBoundaryRenderCount = 0;
+  let settingsContentMountCount = 0;
   let settingsSearchQuery = "";
   let settingsSetSearchQuery = null;
   let settingsRefreshScheduled = false;
@@ -458,6 +462,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     if (typeof options.onChange !== "function") {
       throw new TypeError("color picker onChange must be a function");
     }
+    const header = document.querySelector(
+      'header[data-pip-obstacle="app-shell-header"]',
+    );
 
     let resolve;
     const result = new Promise((settle) => {
@@ -474,6 +481,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       resolve,
       status: "queued",
       left: Math.min(Math.max(lastPointerX - 100, 8), innerWidth - 208),
+      headerBottom: header?.getBoundingClientRect().bottom ?? null,
     };
     nextColorPickerId += 1;
     colorPickerQueue.push(request);
@@ -1162,6 +1170,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   function computeEffectiveThreadItems(model) {
+    synchronizeOpaqueThreadCache(model);
     let items = model.builtInCache;
     for (const { extId, transform } of threadTransformers) {
       try {
@@ -1718,20 +1727,20 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           nestedItemClassName = nestedProps.className;
         }
       }
-      const nativeHandler =
+      let nativeHandler;
+      if (
         id === "codex.profileDropdown.account" &&
         typeof openNativeProfile === "function"
-          ? () => openNativeProfile()
-          : submenuFiber
-          ? undefined
-          : id === "codex.profileDropdown.account" &&
-              typeof props.onSelect === "function"
-            ? props.onSelect
-            : typeof props.onClick === "function"
-              ? props.onClick
-              : typeof props.onSelect === "function"
-                ? props.onSelect
-                : undefined;
+      ) {
+        nativeHandler = () => openNativeProfile();
+      } else if (!submenuFiber) {
+        nativeHandler =
+          typeof props.onClick === "function"
+            ? props.onClick
+            : typeof props.onSelect === "function"
+              ? props.onSelect
+              : undefined;
+      }
       const handler =
         nativeHandler === props.onSelect
           ? publicSelectAction(nativeHandler)
@@ -1885,14 +1894,53 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
   function dynamicThreadCacheSignature(cache) {
     return JSON.stringify(
-      Array.from(cache.entries()).map(([index, entry]) => ({
-        index,
-        id: entry.descriptor.id,
-        label: entry.descriptor.label,
-        disabled: entry.descriptor.disabled,
-        keyboardShortcut: entry.descriptor.keyboardShortcut,
-      })),
+      Array.from(cache.entries()).flatMap(([index, entries]) =>
+        entries.map((entry) => ({
+          index,
+          id: entry.descriptor.id,
+          label: entry.descriptor.label,
+          disabled: entry.descriptor.disabled,
+          keyboardShortcut: entry.descriptor.keyboardShortcut,
+        })),
+      ),
     );
+  }
+
+  function synchronizeOpaqueThreadCache(model, cache = model.opaqueCache) {
+    const nextEntries = Array.from(cache.values()).flat();
+    if (nextEntries.length === 0) return false;
+    const previousOpaqueIds = model.opaqueIds;
+    const currentItems = [...model.builtInCache];
+    let insertionIndex = currentItems.findIndex((item) =>
+      previousOpaqueIds.has(item.id),
+    );
+    const retainedItems = currentItems.filter(
+      (item) => !previousOpaqueIds.has(item.id),
+    );
+    if (insertionIndex < 0) {
+      const nextKnownId = model.unboundOpaque[0]?.beforeId;
+      insertionIndex = retainedItems.findIndex(
+        (item) => item.id === nextKnownId,
+      );
+    }
+    if (insertionIndex < 0) insertionIndex = retainedItems.length;
+    const nextIds = nextEntries.map((entry) => entry.descriptor.id);
+    const currentIds = currentItems.map((item) => item.id);
+    const nextItems = [...retainedItems];
+    nextItems.splice(
+      insertionIndex,
+      0,
+      ...nextEntries.map((entry) => entry.descriptor),
+    );
+    if (
+      JSON.stringify(currentIds) ===
+      JSON.stringify(nextItems.map((item) => item.id))
+    ) {
+      return false;
+    }
+    model.builtInCache = freezeItems(nextItems);
+    model.opaqueIds = new Set(nextIds);
+    return true;
   }
 
   function captureDynamicThreadItemsFromOpenMenus() {
@@ -1905,7 +1953,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       const dynamic = [];
       for (const row of Array.from(column.querySelectorAll('[role="menuitem"]'))) {
         if (row.closest('[role="menu"]') !== column) continue;
-        const fiber = itemFiberOf(row);
+        const fiber = itemFiberOf(row) ?? fiberOf(row);
         if (!fiber) continue;
         const props = fiber.memoizedProps ?? {};
         const message = messageOf(props.children) ?? messageBelowFiber(fiberOf(row));
@@ -1944,18 +1992,47 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       }
 
       const nextCache = new Map();
-      for (
-        let index = 0;
-        index < model.opaqueCount && index < dynamic.length;
-        index += 1
-      ) {
-        nextCache.set(index, dynamic[index]);
+      if (model.opaqueCount === 1 && dynamic.length > 0) {
+        nextCache.set(0, dynamic);
+      } else {
+        for (
+          let index = 0;
+          index < model.opaqueCount && index < dynamic.length;
+          index += 1
+        ) {
+          nextCache.set(index, [dynamic[index]]);
+        }
       }
       if (
         dynamicThreadCacheSignature(nextCache) !==
         dynamicThreadCacheSignature(model.opaqueCache)
       ) {
         changed = true;
+        const previousOpaqueIds = model.opaqueIds;
+        const currentItems = [...model.builtInCache];
+        let insertionIndex = currentItems.findIndex((item) =>
+          previousOpaqueIds.has(item.id),
+        );
+        const retainedItems = currentItems.filter(
+          (item) => !previousOpaqueIds.has(item.id),
+        );
+        if (insertionIndex < 0) {
+          const nextKnownId = model.unboundOpaque[0]?.beforeId;
+          insertionIndex = retainedItems.findIndex(
+            (item) => item.id === nextKnownId,
+          );
+        }
+        if (insertionIndex < 0) insertionIndex = retainedItems.length;
+        const nextEntries = Array.from(nextCache.values()).flat();
+        retainedItems.splice(
+          insertionIndex,
+          0,
+          ...nextEntries.map((entry) => entry.descriptor),
+        );
+        model.builtInCache = freezeItems(retainedItems);
+        model.opaqueIds = new Set(
+          nextEntries.map((entry) => entry.descriptor.id),
+        );
       }
       model.opaqueCache = nextCache;
     }
@@ -1964,10 +2041,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   function currentSettingsPaneId() {
-    const custom = new URLSearchParams(location.search).get("cgptx-pane");
-    if (custom) return custom;
-    const match = location.pathname.match(/^\/settings\/([^/]+)/);
-    return match ? "codex.settings." + decodeURIComponent(match[1]) : null;
+    return activeSettingsPaneId;
   }
 
   function settingsSlug(paneId) {
@@ -2029,6 +2103,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     const children = childrenOf(source.props?.children);
     const rows = flattenedChildren(children[0]);
     const panes = [];
+    let activeBuiltInPaneId = null;
     for (const row of rows) {
       const captured = settingsPaneFromNavigationRow(row);
       if (!captured) continue;
@@ -2038,6 +2113,30 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         button: captured.button,
       });
       settingsNavigationRowTemplate ??= row;
+      if (captured.button.props.isActive === true) {
+        activeBuiltInPaneId = captured.pane.id;
+      }
+    }
+    if (activeBuiltInPaneId) {
+      if (pendingNativeSettingsPaneId !== null) {
+        if (activeBuiltInPaneId === pendingNativeSettingsPaneId) {
+          pendingNativeSettingsPaneId = null;
+        } else {
+          activeBuiltInPaneId = null;
+        }
+      }
+      if (
+        activeBuiltInPaneId &&
+        (activeCustomSettingsPaneId === null ||
+          activeBuiltInPaneId !== "codex.settings.appearance")
+      ) {
+        const changed =
+          activeSettingsPaneId !== activeBuiltInPaneId ||
+          activeCustomSettingsPaneId !== null;
+        activeSettingsPaneId = activeBuiltInPaneId;
+        activeCustomSettingsPaneId = null;
+        if (changed) scheduleSettingsRefresh();
+      }
     }
     const title = messageOf(source.props?.title);
     const category = freezeSettingsCategory({
@@ -2067,6 +2166,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     );
     if (!sourceButton) return null;
     const isBuiltIn = pane.origin === "app";
+    const sourceOnClick = sourceButton.props.onClick;
     const button = native.jsx(
       sourceButton.type,
       {
@@ -2077,7 +2177,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         disabled: pane.disabled === true,
         "data-settings-panel-slug": settingsSlug(pane.id) ?? pane.id,
         ...(isBuiltIn
-          ? {}
+          ? {
+              onClick: (...args) => {
+                activeSettingsPaneId = pane.id;
+                activeCustomSettingsPaneId = null;
+                pendingNativeSettingsPaneId = pane.id;
+                sourceOnClick?.(...args);
+                emitChange();
+              },
+            }
           : {
               icon: resolveIcon("settings"),
               onClick: () => {
@@ -2409,42 +2517,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     );
   }
 
-  function renderCustomSettingsPane(pane) {
+  function renderCustomSettingsChildren(pane) {
     const model =
       settingsGroupModels.get(pane.id) ?? {
         groups: Object.freeze([]),
         viewsById: new Map(),
         viewsByDescriptor: new WeakMap(),
-    };
-    return native.jsx(native.SettingsPage, {
-      title: pane.title ?? pane.label,
-      children: computeEffectiveSettingsGroups(pane.id).map((group) =>
-        renderSettingsGroup(pane.id, model, group),
-      ),
-    });
-  }
-
-  function replaceSettingsPageContent(value, pane) {
-    if (!isElement(value)) return value;
-    if (
-      Object.hasOwn(value.props ?? {}, "navigationKey") &&
-      Object.hasOwn(value.props ?? {}, "targetId")
-    ) {
-      return native.jsx(
-        value.type,
-        { ...value.props, children: renderCustomSettingsPane(pane) },
-        value.key ?? undefined,
-      );
-    }
-    return native.jsx(
-      value.type,
-      {
-        ...value.props,
-        children: flattenedChildren(value.props?.children).map((child) =>
-          replaceSettingsPageContent(child, pane),
-        ),
-      },
-      value.key ?? undefined,
+      };
+    return computeEffectiveSettingsGroups(pane.id).map((group) =>
+      renderSettingsGroup(pane.id, model, group),
     );
   }
 
@@ -2480,27 +2561,28 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     };
   }
 
-  function navigateToSettingsPath(path) {
-    if (settingsNavigate) {
-      settingsNavigate(path);
-      return;
-    }
-    history.pushState(history.state, "", path);
-    dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
-  }
-
-  function navigateSettingsPane(paneId, itemId) {
+  function navigateSettingsPane(paneId) {
     const slug = settingsSlug(paneId);
-    const hash = itemId ? "#" + encodeURIComponent(itemId) : "";
     if (slug !== null) {
-      navigateToSettingsPath("/settings/" + encodeURIComponent(slug) + hash);
-    } else {
-      navigateToSettingsPath(
-        "/settings/appearance?cgptx-pane=" +
-          encodeURIComponent(paneId) +
-          hash,
-      );
+      const action = settingsNavigationRows.get(paneId)?.button.props.onClick;
+      if (typeof action !== "function") return false;
+      activeSettingsPaneId = paneId;
+      activeCustomSettingsPaneId = null;
+      pendingNativeSettingsPaneId = paneId;
+      action();
+      emitChange();
+      return true;
     }
+    const action = settingsNavigationRows.get(
+      "codex.settings.appearance",
+    )?.button.props.onClick;
+    if (typeof action !== "function") return false;
+    activeSettingsPaneId = paneId;
+    activeCustomSettingsPaneId = paneId;
+    pendingNativeSettingsPaneId = "codex.settings.appearance";
+    action();
+    emitChange();
+    return true;
   }
 
   function waitForSettings(condition, timeoutMs = 5_000) {
@@ -2516,9 +2598,21 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   async function openSettingsPane(paneId, itemId) {
-    if (builtInSettingsCategories.size === 0) {
-      navigateSettingsPane("codex.settings.appearance");
-      await waitForSettings(() => builtInSettingsCategories.size > 0);
+    if (
+      settingsContentMountCount === 0 ||
+      builtInSettingsCategories.size === 0
+    ) {
+      const canOpen = await waitForSettings(
+        () => typeof openNativeSettings === "function",
+      );
+      if (!canOpen) return false;
+      openNativeSettings();
+      const opened = await waitForSettings(
+        () =>
+          settingsContentMountCount > 0 &&
+          builtInSettingsCategories.size > 0,
+      );
+      if (!opened) return false;
     }
     const pane = settingsPanesById(computeEffectiveSettingsCategories()).get(
       paneId,
@@ -2528,9 +2622,16 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     const itemExists =
       itemId === undefined ||
       groups.some((group) => group.items.some((item) => item.id === itemId));
-    navigateSettingsPane(paneId, itemId);
+    if (!navigateSettingsPane(paneId)) return false;
     if (!itemExists) return false;
     await waitForSettings(() => currentSettingsPaneId() === paneId);
+    if (itemId !== undefined) {
+      const rendered = await waitForSettings(
+        () => document.getElementById(itemId) !== null,
+      );
+      if (!rendered) return false;
+      document.getElementById(itemId)?.scrollIntoView({ block: "center" });
+    }
     return true;
   }
 
@@ -2833,15 +2934,18 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       const opaqueIndex = state.opaqueCount;
       state.opaqueCount += 1;
       const cached = model.opaqueCache.get(opaqueIndex);
-      if (cached) {
-        entries.push({ kind: "item", descriptor: cached.descriptor });
-        views.set(cached.descriptor.id, {
-          kind: "action",
-          props: cached.props,
-          sourceElement: value,
-          opaque: true,
-        });
-        state.opaqueIds.add(cached.descriptor.id);
+      if (cached?.length > 0) {
+        const groupIds = cached.map((entry) => entry.descriptor.id);
+        for (const entry of cached) {
+          entries.push({ kind: "item", descriptor: entry.descriptor });
+          views.set(entry.descriptor.id, {
+            kind: "opaque-group",
+            props: entry.props,
+            sourceElement: value,
+            groupIds,
+          });
+          state.opaqueIds.add(entry.descriptor.id);
+        }
       } else {
         entries.push({ kind: "opaque", element: value });
       }
@@ -2902,7 +3006,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
     const props = view?.kind === "action" ? { ...view.props } : {};
     props.children =
-      builtIn && item.label === builtIn.label
+      view && builtIn && item.label === builtIn.label
         ? view.props.children
         : item.label;
     props.disabled = item.disabled === true;
@@ -2953,7 +3057,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       const builtIn = deepItemsById(model.builtInCache).get(item.id);
       const props = view?.kind === "flyout" ? { ...view.props } : {};
       props.label =
-        builtIn && item.label === builtIn.label ? view.props.label : item.label;
+        view && builtIn && item.label === builtIn.label
+          ? view.props.label
+          : item.label;
       props.disabled = item.disabled === true;
       props["data-cgptx-id"] = item.id;
       props["data-cgptx-origin"] = item.origin ?? "";
@@ -2972,10 +3078,34 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function renderThreadMenuRoot(tree, context) {
     const model = updateThreadModel(context, tree.props.children);
     const effective = computeEffectiveThreadItems(model);
-    const rendered = effective.map((item) => ({
-      id: item.id,
-      element: renderThreadItem(model, item),
-    }));
+    const builtIns = deepItemsById(model.builtInCache);
+    const rendered = [];
+    for (let index = 0; index < effective.length; index += 1) {
+      const item = effective[index];
+      const view = model.builtInViews.get(item.id);
+      if (
+        view?.kind === "opaque-group" &&
+        view.groupIds[0] === item.id
+      ) {
+        const group = effective.slice(index, index + view.groupIds.length);
+        const unchanged =
+          group.length === view.groupIds.length &&
+          group.every(
+            (candidate, groupIndex) =>
+              candidate.id === view.groupIds[groupIndex] &&
+              sameThreadDescriptor(candidate, builtIns.get(candidate.id)),
+          );
+        if (unchanged) {
+          rendered.push({ id: item.id, element: view.sourceElement });
+          index += view.groupIds.length - 1;
+          continue;
+        }
+      }
+      rendered.push({
+        id: item.id,
+        element: renderThreadItem(model, item),
+      });
+    }
     for (const opaque of model.unboundOpaque) {
       const index = rendered.findIndex((entry) => entry.id === opaque.beforeId);
       rendered.splice(index < 0 ? rendered.length : index, 0, {
@@ -3038,6 +3168,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function ColorPickerSurface({ request }) {
     const { React } = native;
     const [color, setColor] = React.useState(request.initialColor);
+    const [headerBottom, setHeaderBottom] = React.useState(
+      request.headerBottom,
+    );
     const surface = React.useRef(null);
     const changeColor = (nextColor) => {
       const normalized = normalizePickerColor(nextColor);
@@ -3066,12 +3199,23 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         removeEventListener("keydown", finishFromKeyboard, true);
       };
     }, [request]);
+    React.useEffect(() => {
+      if (headerBottom !== null) return undefined;
+      let frame;
+      const captureHeader = () => {
+        const header = document.querySelector(
+          'header[data-pip-obstacle="app-shell-header"]',
+        );
+        if (header) setHeaderBottom(header.getBoundingClientRect().bottom);
+        else frame = requestAnimationFrame(captureHeader);
+      };
+      captureHeader();
+      return () => cancelAnimationFrame(frame);
+    }, [headerBottom]);
     React.useLayoutEffect(() => {
-      surface.current.querySelector('[role="slider"]').focus();
-    }, []);
-    const headerBottom = document
-      .querySelector('header[data-pip-obstacle="app-shell-header"]')
-      .getBoundingClientRect().bottom;
+      surface.current?.querySelector('[role="slider"]')?.focus();
+    }, [headerBottom]);
+    if (headerBottom === null) return null;
     return native.jsx("div", {
       ref: surface,
       role: "dialog",
@@ -3140,12 +3284,29 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       };
     }
 
-    function useNativeProfileNavigation() {
-      const navigate = native.useNavigate();
+    function useNativeProfileNavigation(profileProps) {
+      const dispatchHostMessage = native.messageBus?.dispatchHostMessage;
       openNativeProfile = () => {
         profileNavigationAttemptCount += 1;
         profileNavigationLastRequestedPath = "/settings/profile";
-        navigate(profileNavigationLastRequestedPath);
+        if (typeof dispatchHostMessage === "function") {
+          // Let the native submenu close before its focus restoration runs.
+          setTimeout(() => {
+            void openSettingsPane("codex.settings.profile");
+          }, 250);
+        } else {
+          profileProps?.onOpenProfile?.();
+        }
+      };
+      openNativeSettings = () => {
+        if (typeof dispatchHostMessage === "function") {
+          native.messageBus.dispatchHostMessage({
+            type: "navigate-to-route",
+            path: "/settings/general-settings",
+          });
+        } else {
+          profileProps?.onOpenSettings?.();
+        }
       };
     }
 
@@ -3205,7 +3366,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
     function ProfileComponentBoundary({ child }) {
       useNativePostAuthenticationRefresh();
-      useNativeProfileNavigation();
+      useNativeProfileNavigation(child.props);
       profileMenuHasNativeProfileCallback =
         typeof child.props?.onOpenProfile === "function";
       React.useSyncExternalStore(
@@ -3223,7 +3384,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
     function ProfileTreeBoundary({ child }) {
       useNativePostAuthenticationRefresh();
-      useNativeProfileNavigation();
+      useNativeProfileNavigation(child.props);
       React.useSyncExternalStore(
         subscribe,
         () => renderVersion,
@@ -3237,27 +3398,37 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       return renderProfileTree(child, captured);
     }
 
-    function SettingsPageBoundary({ child }) {
+    function SettingsContentBoundary({ child }) {
+      settingsContentBoundaryRenderCount += 1;
+      React.useEffect(() => {
+        settingsContentMountCount += 1;
+        return () => {
+          settingsContentMountCount -= 1;
+        };
+      }, []);
       React.useSyncExternalStore(
         subscribe,
         () => renderVersion,
         () => renderVersion,
       );
-      settingsNavigate = native.useNavigate();
-      const page = child.type(child.props);
-      const paneId = new URLSearchParams(location.search).get("cgptx-pane");
-      if (!paneId) return page;
+      const paneId = activeCustomSettingsPaneId;
+      if (!paneId) return child;
       const pane = settingsPanesById(
         computeEffectiveSettingsCategories(),
       ).get(paneId);
-      return pane ? replaceSettingsPageContent(page, pane) : page;
+      return pane
+        ? React.cloneElement(child, {
+            title: pane.title ?? pane.label,
+            children: renderCustomSettingsChildren(pane),
+          })
+        : child;
     }
 
     function wrap(original) {
       return function cgptxJsx(type, props, key) {
-        if (type === native.SettingsPageRoute) {
+        if (type === native.SettingsPage) {
           return originalJsx(
-            SettingsPageBoundary,
+            SettingsContentBoundary,
             { child: original(type, props, key) },
             key,
           );
@@ -3401,7 +3572,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       paletteIconModule,
       threadMenuModule,
       authModule,
-      settingsPageModule,
       settingsVisibilityModule,
     ] = await Promise.all([
       import(APP_INITIAL_MODULE),
@@ -3409,7 +3579,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       import(PALETTE_ICON_MODULE),
       import(THREAD_MENU_MODULE),
       import(AUTH_MODULE),
-      import(SETTINGS_PAGE_MODULE),
       import(SETTINGS_VISIBILITY_MODULE),
     ]);
     authModule.r();
@@ -3425,6 +3594,14 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     appInitialModule.ndt();
     appInitialModule.eut();
     appInitialModule.cG();
+    appInitialModule._r();
+    appInitialModule.UO();
+    appInitialModule.YO();
+    appInitialModule.$S();
+    appInitialModule.za();
+    appInitialModule.Ka();
+    appInitialModule.Fbt();
+    settingsVisibilityModule.i();
     plusIconModule.t();
     paletteIconModule.n();
     threadMenuModule.n();
@@ -3456,7 +3633,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       messageBus: appInitialModule.vxt,
       openInBrowser: appInitialModule.adt,
       useNavigate: appInitialModule.iut,
-      SettingsPageRoute: settingsPageModule.SettingsPage,
       SettingsPage: appInitialModule.Wa,
       SettingsGroup: appInitialModule.gr,
       SettingsRows: appInitialModule.HO,
@@ -4085,6 +4261,20 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       profileNavigationAttemptCount: () => profileNavigationAttemptCount,
       profileNavigationLastRequestedPath: () =>
         profileNavigationLastRequestedPath,
+      openNativeProfile: () => {
+        const navigate = openNativeProfile;
+        if (typeof navigate !== "function") return false;
+        navigate();
+        return true;
+      },
+      settingsState: () => ({
+        activePaneId: activeSettingsPaneId,
+        activeCustomPaneId: activeCustomSettingsPaneId,
+        pendingNativePaneId: pendingNativeSettingsPaneId,
+        currentPaneId: currentSettingsPaneId(),
+        contentBoundaryRenderCount: settingsContentBoundaryRenderCount,
+        contentMountCount: settingsContentMountCount,
+      }),
       nativeAccount: () => nativeAppServerRegistry?.getDefault().getAccount(),
       nativeSignInStartCount: () => nativeSignInStartCount,
       inspectAuthentication,

@@ -19,9 +19,9 @@
       "release": "chatgpt-api-v1.0.4",
       "sha256": "651fbcea2e08724af38c8a3f22ab299f022bee5dfc8377e2d401b7386782671d"
     },
-    "1.1.0": {
-      "release": "chatgpt-api-v1.1.0",
-      "sha256": "ab4b25d0696e62dd4ca0675495ac6376d641b423f9e12a6d88e8479cd948b311"
+    "1.1.1": {
+      "release": "chatgpt-api-v1.1.1",
+      "sha256": "558656938c219d6eeaa21bd600090703bc0a94f3c40b8ba1a09fdd519d6fbe2d"
     }
   },
   "bindings": {
@@ -80,10 +80,10 @@
       "sha256": "b8737484e4a30373c703eec0ab8fa37af5a8821b8349f3589b9789d9b3d79d1d"
     },
     "26.803.41515": {
-      "version": "1.1.0",
-      "chatgptApi": "1.1.0",
-      "release": "binding-26.803.41515-v1.1.0",
-      "sha256": "02911620d50e7dd24f47095feb44af854593232f2ffeb756889ed58f52df339f"
+      "version": "1.1.1",
+      "chatgptApi": "1.1.1",
+      "release": "binding-26.803.41515-v1.1.1",
+      "sha256": "ce6299b8f47f8ea156406c4d1a04e47dd3ec2d9550dadd902173658222d05107"
     },
     "26.803.61601": {
       "version": "1.0.0",

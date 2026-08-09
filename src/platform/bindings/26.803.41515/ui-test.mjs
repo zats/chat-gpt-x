@@ -294,6 +294,7 @@ async function validateUi(
         .getAttribute('data-app-action-sidebar-thread-id')
         ?.endsWith(threadId),
     );
+  await waitUntil(() => Boolean(findThreadRow(originalThread.threadId)));
   const originalThreadRow = findThreadRow(originalThread.threadId);
   if (!originalThreadRow) throw new Error('Original thread row missing');
   const originalThreadKind = originalThreadRow.getAttribute(
@@ -1130,15 +1131,26 @@ async function validateUi(
   root.classList.toggle('electron-dark', alternateHeaderTheme === 'dark');
   root.classList.toggle('electron-light', alternateHeaderTheme === 'light');
   await sleep(50);
+  colorFlyout = Array.from(document.querySelectorAll('[role="menu"]')).find(
+    (menu) =>
+      menu !== threadMenu &&
+      JSON.stringify(menuRows(menu).map(threadRowLabel)) ===
+        JSON.stringify(colorNames),
+  );
+  const alternateColorIcons = menuRows(colorFlyout).map((row) =>
+    row.querySelector('[data-cgptx-thread-menu-color-icon]'),
+  );
   check(
-    colorIcons.slice(0, expectedColors.length).every(
+    alternateColorIcons.slice(0, expectedColors.length).every(
       (icon, index) =>
         getComputedStyle(icon).backgroundColor ===
         expectedColors[index][alternateHeaderTheme],
     ),
     'Color icons follow ChatGPT appearance changes',
     {
-      colors: colorIcons.map((icon) => getComputedStyle(icon).backgroundColor),
+      colors: alternateColorIcons.map(
+        (icon) => getComputedStyle(icon).backgroundColor,
+      ),
       theme: alternateHeaderTheme,
     },
   );
@@ -1844,11 +1856,9 @@ async function validateUi(
   ).find((button) => button.textContent?.trim() === 'Run fixture');
   check(
     customPaneOpened &&
-      new URLSearchParams(location.search).get('cgptx-pane') ===
-        settingsPaneId &&
-      location.hash === `#${settingsToggleId}` &&
+      document.getElementById(settingsToggleId) != null &&
       document.body.textContent?.includes('Settings UI Fixture'),
-    'custom settings pane uses the native route and item deep link',
+    'custom settings pane uses the native host page and item deep link',
   );
   check(
     settingsToggle?.getAttribute('aria-checked') === 'false' &&
@@ -1873,11 +1883,28 @@ async function validateUi(
   await waitUntil(() => document.getElementById(settingsBuiltInItemId) != null);
   check(
     builtInPaneOpened &&
-      location.pathname === '/settings/general-settings' &&
       document.getElementById(settingsBuiltInItemId)?.textContent?.includes(
         'Built-in pane item',
       ),
     'an extension row renders inside the stable General settings pane',
+  );
+
+  await settingsApi.open('codex.settings.appearance');
+  await waitUntil(() => document.body.textContent?.includes('Light theme'));
+  const customSidebarRow = document.querySelector(
+    `button[data-settings-panel-slug="${settingsPaneId}"]`,
+  );
+  customSidebarRow?.click();
+  await waitUntil(
+    () => document.getElementById(settingsToggleId) != null,
+  );
+  check(
+    Boolean(customSidebarRow),
+    'a contributed settings pane has a native sidebar row',
+  );
+  check(
+    document.body.textContent?.includes('Settings UI Fixture'),
+    'selecting a contributed sidebar row opens its settings pane',
   );
 
   const setSettingsSearch = async (query) => {
@@ -1931,8 +1958,6 @@ async function validateUi(
   settingsSearchResult('Settings UI Fixture')?.click();
   await waitUntil(
     () =>
-      new URLSearchParams(location.search).get('cgptx-pane') ===
-        settingsPaneId &&
       document.querySelector('input#settings-search')?.value === '',
   );
   check(

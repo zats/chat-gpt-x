@@ -29,9 +29,9 @@ verified the behavior and prop contracts through the injected bridge.
 | Native menus | `app-initial-Biw83Aiz.js` | initializer `XU`; namespace `qU`; `qU.Item`, `qU.Separator`, `qU.SubmenuItem`, and `qU.FlyoutSubmenuItem`; `GU` dropdown root |
 | Native icons | `app-initial-Biw83Aiz.js` | initializer `Aht` and component `kht` for the menu chevron; initializer `Nm` and component `Mm` for the Profile person icon; initializer `cG` and component `sG` for the Settings gear icon |
 | Native color picker | `app-initial-Biw83Aiz.js` | initializer `yc`; controlled picker `vc` |
-| Settings page and search | `settings-page-mM-lHCsV.js` | `SettingsPage`; semantic category headings, sidebar rows, search input/results, routed content wrapper, and hash target handling |
+| Settings page and search | `settings-page-mM-lHCsV.js` | semantic category headings, sidebar rows, search input/results, and native pane-selection callbacks |
 | Settings section icons | `use-visible-settings-sections-1Vu4SC9J.js` | initialized section-icon map `r` |
-| Native settings components | `app-initial-Biw83Aiz.js` | `Wa` page; `gr` group with `Header`, `Content`, and `Footer`; `HO` row list; `JO` row; `QS` toggle; `Ia` select trigger; `GU` dropdown; `qU.Item`; `Mbt` button |
+| Native settings components | `app-initial-Biw83Aiz.js` | initializers `Ka`, `_r`, `UO`, `YO`, `$S`, `za`, and `Fbt`; `Wa` page; `gr` group with `Header`, `Content`, and `Footer`; `HO` row list; `JO` row; `QS` toggle; `Ia` select trigger; `GU` dropdown; `qU.Item`; `Mbt` button |
 | Authentication context | `app-initial-Biw83Aiz.js` | initializer `I0` and auth-nonce hook `z0`; initializer `U0` and app-server registry hook `q0` |
 | Query and message contracts | `app-initial-Biw83Aiz.js` | initializer `pkt` and query-client hook `mkt`; initializer `dxt` and account-info query-key builder `cxt`; initializer `_xt` and message bus `vxt` |
 | Browser and navigation bridges | `app-initial-Biw83Aiz.js` | initializer `ndt` and direct open-in-browser dispatch `adt`; initializer `eut` and React Router navigation hook `iut` |
@@ -80,6 +80,12 @@ namespaces and unique ids, preserve moved built-ins, and isolate failures. The
 API-key run exercised the harness-defined reduced path; account-profile menu,
 account switching, and ChatGPT-account authentication gates were intentionally
 not claimed for this authentication mode.
+
+The account identity action opens Profile through the settings pane navigator.
+On a cold launch, the binding first opens the native General settings route and
+waits for the settings model to mount. It then selects the native Profile row.
+A direct Profile route sent before the settings model mounts is ignored by this
+build.
 
 Binding `1.0.1` corrects the native `"person"` icon mapping. The
 `codex.profileDropdown.profile` row supplies `Mm` as its `LeftIcon`, initialized
@@ -156,25 +162,40 @@ stock General and Voice settings implementations confirmed the `QS`
 Native search input props are `searchQuery` and `onQueryChange`; result props
 are `searchResults`, `onSelect`, `intl`, and `listRef`. The binding adds one
 section result per matching effective pane. It indexes category, pane, group,
-and item labels, descriptions, and keywords. Selecting an extension pane uses
-the internal `cgptx-pane` route and clears the native query. Built-in panes keep
-their native slug. The route wrapper passes `location.hash` as `targetId`, and
-`Wa` scrolls the row whose native `id` matches that target.
+and item labels, descriptions, and keywords. Selecting a result clears the
+native query and invokes the same pane-selection path as a sidebar row.
+
+Settings pane selection is local app state. It does not change
+`window.location`. The binding stores the effective pane ID and invokes the
+app's captured native sidebar callback. Custom panes use Appearance as their
+native host selection. `SettingsContentBoundary` wraps each rendered `Wa`
+page, subscribes to binding invalidation, and replaces the Appearance page
+props with the custom title and native group tree. A pending native pane ID
+prevents the previous active row from winning during the app's asynchronous
+selection render. `open()` waits for a requested row and scrolls it into view.
+When Settings is closed, `open()` uses the main-process
+`navigate-to-route` host message to open General, waits for the native model,
+and then selects the requested pane. Entering or leaving a custom pane also
+invalidates the native host page when Appearance is already selected.
+
+The lazy `SettingsPage` route element is created before the mutable JSX hook
+is installed, so wrapping that exported route does not intercept its render.
+The `Wa` page element is created inside the route after installation and is
+the stable content boundary for this build.
 
 The stable API suite covers new panes and groups, insertion into General,
 standard control descriptors, transformer ordering and isolation, namespace
 enforcement, invalidation, disposal, and deep-link failure behavior. The
 version-specific UI suite covers native rendering, callbacks, General-pane
-insertion, deep links, all four search text levels, package title/description
-search for the Extensions manager, and search-result navigation. These new
-live checks were not run in this development session because the operator
-required that no application be launched or focused.
+insertion, deep links, sidebar navigation from Appearance, all four search
+text levels, package title/description search for the Extensions manager, and
+search-result navigation.
 
 Failure signatures include missing category captures, a missing
 `data-settings-panel-slug`, an empty `#settings-search` result for contributed
-text, a custom pane that stays on Appearance content, a row whose native `id`
-does not match its public item ID, or a control that does not use the stock
-component exports above.
+text, a custom pane that stays on the previous native content after selection,
+a row whose native `id` does not match its public item ID, or a control that
+does not use the stock component exports above.
 
 ## authentication
 
@@ -228,9 +249,9 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
 
 Results:
 
-- Extension and shared-utility unit tests: `23/23`.
-- Unchanged stable public API assertions: `39/39`.
-- Current native UI suite: `64/64`.
+- Extension and shared-utility unit tests: `28/28`.
+- Stable public API assertions: `44/44`.
+- Current native UI suite: `70/70`.
 - The Multiple Accounts extension switched to another account and restored the
   original account.
 - Shipped-extension composition with the API suite enabled: passed.
@@ -242,7 +263,8 @@ The native run specifically covered Profile artwork reuse, native Profile
 navigation, thread navigation/restoration, thread-list composition, effective
 native menu ordering, project-action capture, the Palette flyout and keyboard
 interaction, header painting, theme switching, the native color picker,
-runtime preload, and activation ordering.
+settings controls, cold pane navigation, contributed search results, runtime
+preload, and activation ordering.
 
 ## Failure signatures
 
