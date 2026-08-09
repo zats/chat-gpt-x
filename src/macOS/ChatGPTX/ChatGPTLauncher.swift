@@ -1,6 +1,5 @@
 import AppKit
 import CryptoKit
-import Darwin
 import Foundation
 
 enum ChatGPTLaunchMode {
@@ -218,8 +217,9 @@ struct ChatGPTLauncher {
     private func stopUncoordinatedChatGPT(
         _ application: NSRunningApplication
     ) async throws {
-        let processIdentifier = application.processIdentifier
-        guard !Self.isProcessRunning(processIdentifier)
+        let liveness = ChatGPTApplicationProcessLiveness()
+        liveness.observe(application)
+        guard !liveness.isRunning(application)
             || application.terminate()
             || application.forceTerminate()
         else {
@@ -227,38 +227,40 @@ struct ChatGPTLauncher {
         }
 
         var deadline = Date().addingTimeInterval(Self.quitTimeout)
-        while Self.isProcessRunning(processIdentifier), Date() < deadline {
+        while liveness.isRunning(application), Date() < deadline {
             try await Task.sleep(for: .milliseconds(100))
         }
-        guard Self.isProcessRunning(processIdentifier) else { return }
+        guard liveness.isRunning(application) else { return }
         guard application.forceTerminate() else {
             throw LaunchError.chatGPTWouldNotQuit
         }
 
         deadline = Date().addingTimeInterval(Self.quitTimeout)
-        while Self.isProcessRunning(processIdentifier), Date() < deadline {
+        while liveness.isRunning(application), Date() < deadline {
             try await Task.sleep(for: .milliseconds(100))
         }
-        guard !Self.isProcessRunning(processIdentifier) else {
+        guard !liveness.isRunning(application) else {
             throw LaunchError.chatGPTQuitTimedOut
         }
     }
 
     private func quitRunningChatGPT() async throws {
-        let runningApplications = NSRunningApplication.runningApplications(
+        let applications = NSRunningApplication.runningApplications(
             withBundleIdentifier: Self.chatGPTBundleIdentifier
         )
+        let liveness = ChatGPTApplicationProcessLiveness()
+        let runningApplications = applications.filter {
+            Self.status(of: $0, liveness: liveness) != .stopped
+        }
 
         guard !runningApplications.isEmpty else { return }
-
-        let processIdentifiers = runningApplications.map(\.processIdentifier)
 
         for application in runningApplications where !application.terminate() {
             throw LaunchError.chatGPTWouldNotQuit
         }
 
         let deadline = Date().addingTimeInterval(Self.quitTimeout)
-        while processIdentifiers.contains(where: Self.isProcessRunning) {
+        while runningApplications.contains(where: liveness.isRunning) {
             guard Date() < deadline else {
                 throw LaunchError.chatGPTQuitTimedOut
             }
@@ -267,9 +269,41 @@ struct ChatGPTLauncher {
     }
 
     private static var isChatGPTRunning: Bool {
-        !NSRunningApplication.runningApplications(
+        let applications = NSRunningApplication.runningApplications(
             withBundleIdentifier: chatGPTBundleIdentifier
-        ).isEmpty
+        )
+        let liveness = ChatGPTApplicationProcessLiveness()
+        return applications.contains {
+            status(of: $0, liveness: liveness) != .stopped
+        }
+    }
+
+    private static func status(
+        of application: NSRunningApplication,
+        liveness: ChatGPTApplicationProcessLiveness
+    ) -> ChatGPTApplicationProcessStatus {
+        liveness.observe(application)
+        let processStatus = liveness.status(of: application)
+        guard processStatus == .running else { return processStatus }
+        guard let bundleURL = application.bundleURL,
+            let executableURL = Bundle(url: bundleURL)?.executableURL
+        else {
+            return .unavailable
+        }
+        switch ChatGPTProcessInspection.executablePath(
+            for: application.processIdentifier
+        ) {
+        case .notRunning:
+            return .stopped
+        case .unavailable:
+            return .unavailable
+        case .found(let runningExecutablePath):
+            return URL(fileURLWithPath: runningExecutablePath)
+                .standardizedFileURL.resolvingSymlinksInPath()
+                == executableURL.standardizedFileURL.resolvingSymlinksInPath()
+                ? .running
+                : .stopped
+        }
     }
 
     static func installedApplicationURL(workspace: NSWorkspace) -> URL? {
@@ -337,10 +371,6 @@ struct ChatGPTLauncher {
             return false
         }
         return FileManager.default.isExecutableFile(atPath: executableURL.path)
-    }
-
-    private static func isProcessRunning(_ processIdentifier: pid_t) -> Bool {
-        Darwin.kill(processIdentifier, 0) == 0 || errno != ESRCH
     }
 
     private func launchConfiguration(

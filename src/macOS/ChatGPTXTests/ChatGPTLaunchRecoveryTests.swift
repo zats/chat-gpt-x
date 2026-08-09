@@ -350,6 +350,196 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
+    func testRecoveryUsesPIDWhenLaunchObjectTerminationIsStale() async {
+        let source = MockLifecycleSource()
+        let direct = MockApplication(pid: 33, url: applicationURL)
+        let terminationEvent = MockApplication(pid: 33, url: applicationURL)
+        let injected = MockApplication(
+            pid: 34,
+            url: applicationURL,
+            injected: true
+        )
+        var runningProcessIdentifiers: Set<pid_t> = [
+            direct.processIdentifier
+        ]
+        direct.onTerminate = {
+            runningProcessIdentifiers.remove(direct.processIdentifier)
+            source.applications = []
+            source.emitTermination(terminationEvent)
+        }
+        var relaunchCount = 0
+        let monitor = makeMonitor(
+            source: source,
+            applicationIsRunning: { application in
+                runningProcessIdentifiers.contains(
+                    application.processIdentifier
+                )
+            }
+        ) { _ in
+            relaunchCount += 1
+            runningProcessIdentifiers.insert(injected.processIdentifier)
+            source.applications = [injected]
+            return injected
+        }
+        monitor.start()
+
+        source.applications = [direct]
+        source.emitLaunch(direct)
+        await waitUntil { monitor.recoveryPhase == .armed }
+
+        XCTAssertFalse(direct.isTerminated)
+        XCTAssertFalse(terminationEvent.isTerminated)
+        XCTAssertEqual(direct.terminateCount, 1)
+        XCTAssertEqual(relaunchCount, 1)
+    }
+
+    @MainActor
+    func testProcessLivenessRejectsInvalidPID() {
+        let application = MockApplication(pid: -1, url: applicationURL)
+        var processWasProbed = false
+        let liveness = ChatGPTApplicationProcessLiveness { _ in
+            processWasProbed = true
+            return .found(ChatGPTProcessStartIdentifier(
+                seconds: 1,
+                microseconds: 1
+            ))
+        }
+
+        liveness.observe(application)
+
+        XCTAssertFalse(liveness.isRunning(application))
+        XCTAssertFalse(processWasProbed)
+    }
+
+    @MainActor
+    func testProcessLivenessRejectsReusedPID() {
+        let application = MockApplication(pid: 35, url: applicationURL)
+        var currentStartIdentifier = ChatGPTProcessStartIdentifier(
+            seconds: 1,
+            microseconds: 1
+        )
+        let liveness = ChatGPTApplicationProcessLiveness { _ in
+            .found(currentStartIdentifier)
+        }
+        liveness.observe(application)
+        currentStartIdentifier = ChatGPTProcessStartIdentifier(
+            seconds: 2,
+            microseconds: 1
+        )
+        liveness.observe(application)
+
+        XCTAssertFalse(liveness.isRunning(application))
+    }
+
+    @MainActor
+    func testProcessLivenessDoesNotRequireLaunchDate() {
+        let application = MockApplication(
+            pid: 36,
+            url: applicationURL,
+            launchDateAvailable: false
+        )
+        let startIdentifier = ChatGPTProcessStartIdentifier(
+            seconds: 1,
+            microseconds: 1
+        )
+        let liveness = ChatGPTApplicationProcessLiveness { _ in
+            .found(startIdentifier)
+        }
+        liveness.observe(application)
+
+        XCTAssertTrue(liveness.isRunning(application))
+    }
+
+    @MainActor
+    func testProcessLivenessKeepsUnavailableProbeConservative() {
+        let application = MockApplication(pid: 37, url: applicationURL)
+        let startIdentifier = ChatGPTProcessStartIdentifier(
+            seconds: 1,
+            microseconds: 1
+        )
+        var inspectionResult: ChatGPTProcessInspectionResult<
+            ChatGPTProcessStartIdentifier
+        > = .found(startIdentifier)
+        let liveness = ChatGPTApplicationProcessLiveness { _ in
+            inspectionResult
+        }
+        liveness.observe(application)
+        inspectionResult = .unavailable
+
+        XCTAssertEqual(liveness.status(of: application), .unavailable)
+        XCTAssertTrue(liveness.isRunning(application))
+    }
+
+    @MainActor
+    func testProcessLivenessKeepsMissingObservationConservative() {
+        let application = MockApplication(pid: 38, url: applicationURL)
+        let liveness = ChatGPTApplicationProcessLiveness { _ in
+            .unavailable
+        }
+
+        XCTAssertEqual(liveness.status(of: application), .unavailable)
+        XCTAssertTrue(liveness.isRunning(application))
+    }
+
+    @MainActor
+    func testRecoveryObservesDistinctRelaunchResult() async {
+        let source = MockLifecycleSource()
+        let direct = MockApplication(pid: 37, url: applicationURL)
+        let launchNotification = MockApplication(
+            pid: 38,
+            url: applicationURL,
+            injected: true
+        )
+        let relaunchResult = MockApplication(
+            pid: 38,
+            url: applicationURL,
+            injected: true
+        )
+        let directStart = ChatGPTProcessStartIdentifier(
+            seconds: 1,
+            microseconds: 1
+        )
+        let relaunchedStart = ChatGPTProcessStartIdentifier(
+            seconds: 2,
+            microseconds: 1
+        )
+        var startIdentifiers = [direct.processIdentifier: directStart]
+        let liveness = ChatGPTApplicationProcessLiveness {
+            guard let startIdentifier = startIdentifiers[$0] else {
+                return .notRunning
+            }
+            return .found(startIdentifier)
+        }
+        direct.onTerminate = {
+            startIdentifiers[direct.processIdentifier] = nil
+            source.applications = []
+            source.emitTermination(
+                MockApplication(pid: 37, url: self.applicationURL)
+            )
+        }
+        var relaunchCount = 0
+        let monitor = makeMonitor(
+            source: source,
+            applicationLiveness: liveness,
+            applicationIsRunning: nil
+        ) { _ in
+            relaunchCount += 1
+            startIdentifiers[relaunchResult.processIdentifier] =
+                relaunchedStart
+            source.applications = [launchNotification]
+            source.emitLaunch(launchNotification)
+            return relaunchResult
+        }
+        monitor.start()
+
+        source.applications = [direct]
+        source.emitLaunch(direct)
+        await waitUntil { monitor.recoveryPhase == .armed }
+
+        XCTAssertEqual(relaunchCount, 1)
+    }
+
+    @MainActor
     func testTerminationRefusalBlocksRepeatedRecovery() async {
         let source = MockLifecycleSource()
         let direct = MockApplication(pid: 40, url: applicationURL)
@@ -876,6 +1066,13 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
         applicationBuildIdentity: @escaping (URL) -> String? = { _ in
             "approved"
         },
+        applicationLiveness: ChatGPTApplicationProcessLiveness =
+            ChatGPTApplicationProcessLiveness(),
+        applicationIsRunning: ((
+            any ChatGPTApplicationProcess
+        ) -> Bool)? = { application in
+            !application.isTerminated
+        },
         verificationPollLimit: Int = 2,
         pollDelay: @escaping () async -> Void = { await Task.yield() },
         reservationPollDelay: @escaping () async -> Void = {
@@ -904,6 +1101,8 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
             injectionEnabled: { application in
                 (application as? MockApplication)?.injected == true
             },
+            applicationLiveness: applicationLiveness,
+            applicationIsRunning: applicationIsRunning,
             recoveryAllowed: { true },
             launchReservationState: launchReservationState,
             acquireRecoveryClaim: acquireRecoveryClaim,
@@ -998,10 +1197,13 @@ private final class MockApplication: ChatGPTApplicationProcess {
         url: URL,
         active: Bool = false,
         finished: Bool = false,
-        injected: Bool = false
+        injected: Bool = false,
+        launchDateAvailable: Bool = true
     ) {
         processIdentifier = pid
-        launchDate = Date(timeIntervalSince1970: TimeInterval(pid))
+        launchDate = launchDateAvailable
+            ? Date(timeIntervalSince1970: TimeInterval(pid))
+            : nil
         bundleURL = url
         isActive = active
         isFinishedLaunching = finished

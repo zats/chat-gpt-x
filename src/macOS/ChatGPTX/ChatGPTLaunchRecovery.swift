@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 
 protocol ChatGPTApplicationProcess: AnyObject {
@@ -16,6 +17,160 @@ protocol ChatGPTApplicationProcess: AnyObject {
 }
 
 extension NSRunningApplication: ChatGPTApplicationProcess {}
+
+struct ChatGPTProcessStartIdentifier: Equatable {
+    let seconds: UInt64
+    let microseconds: UInt64
+}
+
+enum ChatGPTProcessInspectionResult<Value> {
+    case found(Value)
+    case notRunning
+    case unavailable
+}
+
+enum ChatGPTProcessInspection {
+    static func startIdentifier(
+        for processIdentifier: pid_t
+    ) -> ChatGPTProcessInspectionResult<ChatGPTProcessStartIdentifier> {
+        guard processIdentifier > 0 else { return .notRunning }
+        var information = proc_bsdinfo()
+        let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.stride)
+        errno = 0
+        let actualSize = withUnsafeMutablePointer(to: &information) {
+            proc_pidinfo(
+                processIdentifier,
+                PROC_PIDTBSDINFO,
+                0,
+                $0,
+                expectedSize
+            )
+        }
+        if actualSize == expectedSize {
+            return .found(ChatGPTProcessStartIdentifier(
+                seconds: information.pbi_start_tvsec,
+                microseconds: information.pbi_start_tvusec
+            ))
+        }
+        return actualSize == 0 && errno == ESRCH
+            ? .notRunning
+            : .unavailable
+    }
+
+    static func executablePath(
+        for processIdentifier: pid_t
+    ) -> ChatGPTProcessInspectionResult<String> {
+        guard processIdentifier > 0 else { return .notRunning }
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        errno = 0
+        let pathLength = proc_pidpath(
+            processIdentifier,
+            &buffer,
+            UInt32(buffer.count)
+        )
+        if pathLength > 0 {
+            return .found(String(cString: buffer))
+        }
+        return errno == ESRCH ? .notRunning : .unavailable
+    }
+}
+
+enum ChatGPTApplicationProcessStatus: Equatable {
+    case running
+    case stopped
+    case unavailable
+}
+
+final class ChatGPTApplicationProcessLiveness {
+    private final class Observation {
+        let processIdentifier: pid_t
+        let startIdentifier: ChatGPTProcessStartIdentifier
+
+        init(
+            processIdentifier: pid_t,
+            startIdentifier: ChatGPTProcessStartIdentifier
+        ) {
+            self.processIdentifier = processIdentifier
+            self.startIdentifier = startIdentifier
+        }
+    }
+
+    private let startIdentifier:
+        (pid_t) -> ChatGPTProcessInspectionResult<
+            ChatGPTProcessStartIdentifier
+        >
+    private let observations = NSMapTable<AnyObject, Observation>(
+        keyOptions: [.weakMemory, .objectPointerPersonality],
+        valueOptions: .strongMemory
+    )
+
+    init(
+        startIdentifier: @escaping (
+            pid_t
+        ) -> ChatGPTProcessInspectionResult<ChatGPTProcessStartIdentifier> = {
+            ChatGPTProcessInspection.startIdentifier(for: $0)
+        }
+    ) {
+        self.startIdentifier = startIdentifier
+    }
+
+    func observe(_ application: any ChatGPTApplicationProcess) {
+        let processIdentifier = application.processIdentifier
+        guard processIdentifier > 0 else { return }
+        guard observations.object(forKey: application) == nil else { return }
+        guard case .found(let startIdentifier) = startIdentifier(
+            processIdentifier
+        ) else { return }
+        observations.setObject(
+            Observation(
+                processIdentifier: processIdentifier,
+                startIdentifier: startIdentifier
+            ),
+            forKey: application
+        )
+    }
+
+    func status(
+        of application: any ChatGPTApplicationProcess
+    ) -> ChatGPTApplicationProcessStatus {
+        let processIdentifier = application.processIdentifier
+        guard processIdentifier > 0 else { return .stopped }
+        guard let observation = observations.object(forKey: application) else {
+            switch startIdentifier(processIdentifier) {
+            case .found(let currentStartIdentifier):
+                observations.setObject(
+                    Observation(
+                        processIdentifier: processIdentifier,
+                        startIdentifier: currentStartIdentifier
+                    ),
+                    forKey: application
+                )
+                return .running
+            case .notRunning:
+                return .stopped
+            case .unavailable:
+                return .unavailable
+            }
+        }
+        guard observation.processIdentifier == processIdentifier else {
+            return .stopped
+        }
+        switch startIdentifier(observation.processIdentifier) {
+        case .found(let currentStartIdentifier):
+            return currentStartIdentifier == observation.startIdentifier
+                ? .running
+                : .stopped
+        case .notRunning:
+            return .stopped
+        case .unavailable:
+            return .unavailable
+        }
+    }
+
+    func isRunning(_ application: any ChatGPTApplicationProcess) -> Bool {
+        status(of: application) != .stopped
+    }
+}
 
 protocol ChatGPTLifecycleSource: AnyObject {
     var runningApplications: [any ChatGPTApplicationProcess] { get }
@@ -112,6 +267,8 @@ final class ChatGPTLaunchRecoveryMonitor {
     private let approvedApplicationURL: () -> URL?
     private let applicationBuildIdentity: (URL) -> String?
     private let injectionEnabled: (any ChatGPTApplicationProcess) -> Bool
+    private let observeApplication: (any ChatGPTApplicationProcess) -> Void
+    private let applicationIsRunning: (any ChatGPTApplicationProcess) -> Bool
     private let recoveryAllowed: () -> Bool
     private let launchReservationState:
         (any ChatGPTApplicationProcess) -> ChatGPTLaunchReservationState
@@ -149,6 +306,11 @@ final class ChatGPTLaunchRecoveryMonitor {
             ChatGPTLaunchRecoveryMonitor.buildIdentity(applicationURL)
         },
         injectionEnabled: @escaping (any ChatGPTApplicationProcess) -> Bool,
+        applicationLiveness: ChatGPTApplicationProcessLiveness =
+            ChatGPTApplicationProcessLiveness(),
+        applicationIsRunning: ((
+            any ChatGPTApplicationProcess
+        ) -> Bool)? = nil,
         recoveryAllowed: @escaping () -> Bool,
         launchReservationState: @escaping (
             any ChatGPTApplicationProcess
@@ -184,6 +346,13 @@ final class ChatGPTLaunchRecoveryMonitor {
         self.approvedApplicationURL = approvedApplicationURL
         self.applicationBuildIdentity = applicationBuildIdentity
         self.injectionEnabled = injectionEnabled
+        if let applicationIsRunning {
+            observeApplication = { _ in }
+            self.applicationIsRunning = applicationIsRunning
+        } else {
+            observeApplication = applicationLiveness.observe
+            self.applicationIsRunning = applicationLiveness.isRunning
+        }
         self.recoveryAllowed = recoveryAllowed
         self.launchReservationState = launchReservationState
         self.acquireRecoveryClaim = acquireRecoveryClaim
@@ -205,8 +374,10 @@ final class ChatGPTLaunchRecoveryMonitor {
     }
 
     func start() {
+        let preexistingApplications = lifecycleSource.runningApplications
+        preexistingApplications.forEach(observeApplication)
         let preexistingSnapshot = Dictionary(
-            uniqueKeysWithValues: lifecycleSource.runningApplications.map {
+            uniqueKeysWithValues: preexistingApplications.map {
                 (Self.identity($0), $0)
             }
         )
@@ -219,8 +390,10 @@ final class ChatGPTLaunchRecoveryMonitor {
             }
         )
 
+        let observedApplications = lifecycleSource.runningApplications
+        observedApplications.forEach(observeApplication)
         let observedSnapshot = Dictionary(
-            uniqueKeysWithValues: lifecycleSource.runningApplications.map {
+            uniqueKeysWithValues: observedApplications.map {
                 (Self.identity($0), $0)
             }
         )
@@ -247,7 +420,7 @@ final class ChatGPTLaunchRecoveryMonitor {
         bootstrapTerminations.removeAll()
 
         for application in launchesAfterInitialSnapshot.values
-            where !application.isTerminated
+            where applicationIsRunning(application)
         {
             applicationLaunched(application)
         }
@@ -302,6 +475,7 @@ final class ChatGPTLaunchRecoveryMonitor {
             return
         }
 
+        observeApplication(application)
         pendingLaunchTasks[application.processIdentifier]?.cancel()
         pendingLaunchTasks[application.processIdentifier] = nil
         expectedLaunchReservationToken = nil
@@ -326,6 +500,7 @@ final class ChatGPTLaunchRecoveryMonitor {
             return
         }
 
+        observeApplication(application)
         let identity = Self.identity(application)
         if state.phase == .bootstrapping {
             bootstrapLaunches[identity] = application
@@ -398,7 +573,7 @@ final class ChatGPTLaunchRecoveryMonitor {
         let processIdentifier = application.processIdentifier
         defer { pendingLaunchTasks[processIdentifier] = nil }
 
-        while !application.isTerminated {
+        while applicationIsRunning(application) {
             guard !Task.isCancelled else { return }
             switch launchReservationState(application) {
             case .bound(let reservationToken):
@@ -424,7 +599,9 @@ final class ChatGPTLaunchRecoveryMonitor {
             }
             break
         }
-        guard !application.isTerminated, !Task.isCancelled else { return }
+        guard applicationIsRunning(application), !Task.isCancelled else {
+            return
+        }
         classifyUnreservedLaunch(
             application,
             candidate: candidate,
@@ -500,11 +677,11 @@ final class ChatGPTLaunchRecoveryMonitor {
         }
 
         let terminationRequested = application.terminate()
-        guard terminationRequested || application.isTerminated else {
+        guard terminationRequested || !applicationIsRunning(application) else {
             state.candidateStopFailed(candidate.identity)
             return
         }
-        if !application.isTerminated {
+        if applicationIsRunning(application) {
             _ = application.hide()
         }
 
@@ -535,8 +712,10 @@ final class ChatGPTLaunchRecoveryMonitor {
     ) {
         guard unexpectedStopTasks[identity] == nil else { return }
         let terminationRequested = application.terminate()
-        guard terminationRequested || application.isTerminated else { return }
-        if !application.isTerminated {
+        guard terminationRequested || !applicationIsRunning(application) else {
+            return
+        }
+        if applicationIsRunning(application) {
             _ = application.hide()
         }
         unexpectedStopTasks[identity] = Task { [weak self] in
@@ -553,7 +732,7 @@ final class ChatGPTLaunchRecoveryMonitor {
     ) async {
         defer { unexpectedStopTasks[identity] = nil }
         var remainingPolls = quitPollLimit
-        while !application.isTerminated, remainingPolls > 0 {
+        while applicationIsRunning(application), remainingPolls > 0 {
             guard !Task.isCancelled else {
                 restore(application)
                 return
@@ -561,7 +740,7 @@ final class ChatGPTLaunchRecoveryMonitor {
             remainingPolls -= 1
             await pollDelay()
         }
-        if !application.isTerminated {
+        if applicationIsRunning(application) {
             restore(application)
         }
     }
@@ -597,7 +776,7 @@ final class ChatGPTLaunchRecoveryMonitor {
         }
 
         var remainingPolls = quitPollLimit
-        while !application.isTerminated, remainingPolls > 0 {
+        while applicationIsRunning(application), remainingPolls > 0 {
             guard !Task.isCancelled else {
                 restore(application)
                 return
@@ -605,7 +784,7 @@ final class ChatGPTLaunchRecoveryMonitor {
             remainingPolls -= 1
             await pollDelay()
         }
-        guard application.isTerminated else {
+        guard !applicationIsRunning(application) else {
             restore(application)
             state.candidateStopFailed(identity)
             return
@@ -621,6 +800,7 @@ final class ChatGPTLaunchRecoveryMonitor {
                 expectedLaunchFailed()
                 return
             }
+            observeApplication(launchedApplication)
             pendingLaunchTasks[
                 launchedApplication.processIdentifier
             ]?.cancel()
@@ -640,7 +820,7 @@ final class ChatGPTLaunchRecoveryMonitor {
         let identity = Self.identity(application)
         var remainingPolls = verificationPollLimit
 
-        while !application.isTerminated, remainingPolls > 0 {
+        while applicationIsRunning(application), remainingPolls > 0 {
             guard !Task.isCancelled else { return }
             if injectionEnabled(application) {
                 state.verificationSucceeded(identity)
@@ -650,7 +830,7 @@ final class ChatGPTLaunchRecoveryMonitor {
             await pollDelay()
         }
 
-        guard !application.isTerminated else {
+        guard applicationIsRunning(application) else {
             state.applicationDidTerminate(identity)
             return
         }
@@ -676,7 +856,7 @@ final class ChatGPTLaunchRecoveryMonitor {
     }
 
     private func restore(_ application: any ChatGPTApplicationProcess) {
-        guard !application.isTerminated else { return }
+        guard applicationIsRunning(application) else { return }
         _ = application.unhide()
     }
 
