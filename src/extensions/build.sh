@@ -68,7 +68,12 @@ for manifest in "${manifests[@]}"; do
   built_main="$BUILD_ROOT/$extension_id/main.js"
   extension_build_dir="$OUTPUT_ROOT/$extension_id"
   extension_main_output="$extension_build_dir/$CANONICAL_MAIN"
-  build_arguments=()
+  build_arguments=(
+    "$extension_source"
+    --target=browser
+    --format=cjs
+    --outfile="$built_main"
+  )
   if [[ "$extension_id" == "api-test-suite" ]]; then
     case "${CHATGPTX_TEST_NO_PROFILE:-0}" in
       0 | 1) ;;
@@ -82,11 +87,7 @@ for manifest in "${manifests[@]}"; do
 
   mkdir -p "$(dirname "$built_main")" "$(dirname "$extension_main_output")"
   CHATGPTX_TEST_NO_PROFILE="${CHATGPTX_TEST_NO_PROFILE:-0}" bun build \
-    "$extension_source" \
-    --target=browser \
-    --format=cjs \
-    "${build_arguments[@]}" \
-    --outfile="$built_main"
+    "${build_arguments[@]}"
   cp "$built_main" "$extension_main_output"
   cp "$manifest" "$extension_build_dir/package.json"
 

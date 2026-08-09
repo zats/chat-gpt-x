@@ -10,9 +10,10 @@ Pinned build:
 - Binding date: `2026-08-08`
 
 Research used an extracted copy of this exact stock build and live CDP
-inspection of an isolated stock profile. Authentication was API-key based, so
-the harness-defined profile-dependent observations were omitted. The stock app
-bundle and installed user state were never modified.
+inspection of isolated stock profiles. API-key authentication covered the
+reduced profile-independent path. ChatGPT account authentication covered the
+complete profile menu, account switch, and native UI path. The stock app bundle
+and installed user state were never modified.
 
 ## Verified module map
 
@@ -26,7 +27,7 @@ verified the behavior and prop contracts through the injected bridge.
 | --- | --- | --- |
 | React, JSX, and React DOM | `app-initial-Biw83Aiz.js` | `Skt()` is React 19.2.7; `hkt()` supplies mutable `jsx` and `jsxs`; `OCt()` supplies `createRoot` |
 | Native menus | `app-initial-Biw83Aiz.js` | initializer `XU`; namespace `qU`; `qU.Item`, `qU.Separator`, `qU.SubmenuItem`, and `qU.FlyoutSubmenuItem`; `GU` dropdown root |
-| Native icons | `app-initial-Biw83Aiz.js` | initializer `Aht` and component `kht` for the menu chevron; initializer `cG` and component `sG` for the Profile person icon |
+| Native icons | `app-initial-Biw83Aiz.js` | initializer `Aht` and component `kht` for the menu chevron; initializer `Nm` and component `Mm` for the Profile person icon; initializer `cG` and component `sG` for the Settings gear icon |
 | Native color picker | `app-initial-Biw83Aiz.js` | initializer `yc`; controlled picker `vc` |
 | Authentication context | `app-initial-Biw83Aiz.js` | initializer `I0` and auth-nonce hook `z0`; initializer `U0` and app-server registry hook `q0` |
 | Query and message contracts | `app-initial-Biw83Aiz.js` | initializer `pkt` and query-client hook `mkt`; initializer `dxt` and account-info query-key builder `cxt`; initializer `_xt` and message bus `vxt` |
@@ -77,6 +78,13 @@ API-key run exercised the harness-defined reduced path; account-profile menu,
 account switching, and ChatGPT-account authentication gates were intentionally
 not claimed for this authentication mode.
 
+Binding `1.0.1` corrects the native `"person"` icon mapping. The
+`codex.profileDropdown.profile` row supplies `Mm` as its `LeftIcon`, initialized
+by `Nm`. The adjacent `codex.profileDropdown.settingsPage` row proves that the
+prior `sG` candidate is the Settings gear. The version-specific visual suite
+renders the public `"person"` descriptor and verifies the stock Profile SVG
+path, so a swapped or stale export fails closed.
+
 ## menus.thread, threads, and threads.list
 
 The local overflow component continues to receive `conversationId`, `title`,
@@ -107,7 +115,7 @@ leftward without changing title geometry.
 
 ## Renderer bootstrap
 
-Binding `1.0.0` installs the main-world JSX hook from ChatGPTX's external
+Binding `1.0.1` installs the main-world JSX hook from ChatGPTX's external
 session preload before page scripts run. The preload requests this exact
 version-pinned host source from the injected main-process bridge and executes
 it through Electron's privileged `webFrame` path. The stock bundle remains
@@ -161,30 +169,31 @@ shasum -a 256 "$CHATGPT_APP_PATH/Contents/Resources/app.asar"
 The exact stock app reported version `26.803.41515`, Electron
 `151.0.7922.76`, and the pinned SHA-256 above.
 
-The deterministic API-key completion command was run with the authentication
-file passed by path directly to the harness:
+The complete ChatGPT-account command used isolated copies of current and saved
+credentials through the harness:
 
 ```bash
 CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
-  scripts/run-local-ci.sh "$PRIMARY_AUTH"
+  scripts/run-local-ci.sh --use-current-accounts
 ```
 
 Results:
 
 - Extension and shared-utility unit tests: `23/23`.
-- Unchanged stable public API assertions applicable in API-key mode: `20/20`.
-- Current native UI suite applicable in API-key mode: `35/35`.
+- Unchanged stable public API assertions: `39/39`.
+- Current native UI suite: `64/64`.
+- The Multiple Accounts extension switched to another account and restored the
+  original account.
 - Shipped-extension composition with the API suite enabled: passed.
 - Normal shipped-extension flow: passed.
 - Release build and strict signature verification: passed.
 - Packaged binding and bridge files matched source.
 
-The native run specifically covered thread navigation/restoration, thread-list
-composition, effective native menu ordering, project-action capture, the
-Palette flyout and keyboard interaction, header painting, theme switching,
-the native color picker, runtime preload, and activation ordering. The
-harness disabled only its declared account-profile and account-switching gates
-for API-key authentication.
+The native run specifically covered Profile artwork reuse, native Profile
+navigation, thread navigation/restoration, thread-list composition, effective
+native menu ordering, project-action capture, the Palette flyout and keyboard
+interaction, header painting, theme switching, the native color picker,
+runtime preload, and activation ordering.
 
 ## Failure signatures
 
@@ -192,6 +201,8 @@ for API-key authentication.
   changed.
 - Empty profile model: profile semantic props, Item fibers, or FormatJS ids
   changed.
+- Incorrect Profile artwork: the `codex.profileDropdown.profile` `LeftIcon`
+  initializer or exported component changed.
 - Visible profile chevron without expansion: the SubmenuItem owner boundary or
   trigger/children contract changed.
 - Empty thread model: local overflow export, remote action anchors, menu root,
