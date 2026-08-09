@@ -151,6 +151,49 @@ final class ComponentStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testOlderUpdateIndexKeepsInstalledComponentsCurrent() async throws {
+        let store = try makeStore()
+        let installed = try store.prepareInstalled()
+        let indexData = try JSONSerialization.data(
+            withJSONObject: [
+                "schemaVersion": 2,
+                "generation": installed.versions.generation - 1,
+                "releaseBaseURL":
+                    "https://github.com/zats/chat-gpt-x/releases/download",
+                "chatgptApis": [:],
+                "bindings": [:],
+                "extensions": [:],
+            ]
+        )
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ComponentIndexURLProtocol.self]
+        ComponentIndexURLProtocol.responseData = indexData
+        let service = ComponentUpdateService(
+            componentStore: store,
+            session: URLSession(configuration: configuration),
+            indexURL: URL(string: "https://updates.invalid/latest.json")!
+        )
+
+        let outcome = try await service.update(
+            for: installed.versions.binding.chatgpt
+        )
+
+        guard case .upToDate(let prepared) = outcome.result else {
+            return XCTFail("An older update index must be ignored.")
+        }
+        XCTAssertEqual(
+            prepared.versions.generation,
+            installed.versions.generation
+        )
+        XCTAssertFalse(outcome.summary.items.isEmpty)
+        XCTAssertTrue(
+            outcome.summary.items.allSatisfy {
+                $0.localVersion == .current
+            }
+        )
+    }
+
+    @MainActor
     private func makeStore() throws -> ComponentStore {
         try ComponentStore(
             environment: ["CODEX_HOME": codexHomeURL.path],
@@ -164,4 +207,30 @@ final class ComponentStoreTests: XCTestCase {
                 as? [String: Any]
         )
     }
+}
+
+private final class ComponentIndexURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var responseData = Data()
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.responseData)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

@@ -391,13 +391,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self?.windowController?.showUpdateProgress(progress)
                     }
                 )
-                let plan = outcome.plan
                 let result = outcome.result
                 preparedComponents = result.preparedStore
                 launchRecoveryMonitor?.refreshApprovedApplication()
-                windowController?.showUpdateSummary(
-                    plan.summary(installed: result.preparedStore)
-                )
+                windowController?.showUpdateSummary(outcome.summary)
                 let installed: Bool
                 switch result {
                 case .upToDate:

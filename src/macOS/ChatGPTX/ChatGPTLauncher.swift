@@ -174,6 +174,7 @@ struct ChatGPTLauncher {
             versionsLockURL: componentStore.versionsLockURL
         )
         configuration.createsNewApplicationInstance = true
+        configuration.activates = mode == .normal
 
         let application: NSRunningApplication
         do {

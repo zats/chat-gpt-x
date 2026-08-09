@@ -216,6 +216,35 @@ struct ComponentUpdateItem: Equatable {
 
 struct ComponentUpdateSummary: Equatable {
     let items: [ComponentUpdateItem]
+
+    init(items: [ComponentUpdateItem]) {
+        self.items = items
+    }
+
+    init(installed store: PreparedComponentStore) {
+        let versions = store.versions
+        items = [
+            ComponentUpdateItem(
+                id: "chatgpt-api",
+                name: "ChatGPT API",
+                latestVersion: versions.chatgptApi.version,
+                localVersion: .current
+            ),
+            ComponentUpdateItem(
+                id: "binding",
+                name: "Binding",
+                latestVersion: versions.binding.version,
+                localVersion: .current
+            ),
+        ] + store.extensions.map {
+            ComponentUpdateItem(
+                id: "extension:\($0.id)",
+                name: $0.id,
+                latestVersion: $0.version,
+                localVersion: .current
+            )
+        }
+    }
 }
 
 enum ComponentUpdateProgress: Equatable {
@@ -330,7 +359,7 @@ enum ComponentUpdateResult {
 }
 
 struct ComponentUpdateOutcome {
-    let plan: ComponentUpdatePlan
+    let summary: ComponentUpdateSummary
     let result: ComponentUpdateResult
 }
 
@@ -355,9 +384,17 @@ final class ComponentUpdateService {
         progress: @escaping ComponentUpdateProgressHandler = { _ in }
     ) async throws -> ComponentUpdateOutcome {
         let index = try await fetchIndex()
+        let current = try componentStore.prepareInstalled()
+        guard index.generation >= current.versions.generation else {
+            return ComponentUpdateOutcome(
+                summary: ComponentUpdateSummary(installed: current),
+                result: .upToDate(current)
+            )
+        }
         let plan = try componentStore.planUpdate(
             index,
-            chatgptVersion: chatgptVersion
+            chatgptVersion: chatgptVersion,
+            current: current
         )
         planned(plan)
         let result = try await componentStore.install(
@@ -365,7 +402,10 @@ final class ComponentUpdateService {
             session: session,
             progress: progress
         )
-        return ComponentUpdateOutcome(plan: plan, result: result)
+        return ComponentUpdateOutcome(
+            summary: plan.summary(installed: result.preparedStore),
+            result: result
+        )
     }
 
     private func fetchIndex() async throws -> ComponentUpdateIndex {
@@ -385,15 +425,9 @@ final class ComponentUpdateService {
 private extension ComponentStore {
     func planUpdate(
         _ index: ComponentUpdateIndex,
-        chatgptVersion: String
+        chatgptVersion: String,
+        current: PreparedComponentStore
     ) throws -> ComponentUpdatePlan {
-        let current = try prepareInstalled()
-        guard index.generation >= current.versions.generation else {
-            throw ComponentUpdateError.olderGeneration(
-                index.generation,
-                current.versions.generation
-            )
-        }
         guard let binding = index.bindings[chatgptVersion] else {
             throw ComponentUpdateError.bindingUnavailable(chatgptVersion)
         }
@@ -948,7 +982,6 @@ private struct BindingPackageManifest: Decodable {
 enum ComponentUpdateError: LocalizedError {
     case indexRequestFailed
     case indexInvalid(String)
-    case olderGeneration(Int, Int)
     case bindingUnavailable(String)
     case apiUnavailable(String)
     case settingsInvalid
@@ -964,8 +997,6 @@ enum ComponentUpdateError: LocalizedError {
             "The update index could not be downloaded."
         case .indexInvalid(let field):
             "The update index is invalid: \(field)."
-        case .olderGeneration(let remote, let installed):
-            "Update generation \(remote) is older than installed generation \(installed)."
         case .bindingUnavailable(let version):
             "No binding is available for ChatGPT \(version)."
         case .apiUnavailable(let version):
