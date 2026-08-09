@@ -321,7 +321,7 @@ function classifyChanges(changedPaths, root) {
     bindings: new Set(),
     extensions: new Set(),
   };
-  let utilitiesChanged = false;
+  const changedUtilities = new Set();
 
   for (const filePath of changedPaths) {
     const component = classifyPath(filePath);
@@ -332,12 +332,12 @@ function classifyChanges(changedPaths, root) {
     } else if (component.kind === "extension") {
       affected.extensions.add(component.id);
     } else if (component.kind === "utilities") {
-      utilitiesChanged = true;
+      changedUtilities.add(filePath);
     }
   }
 
-  if (utilitiesChanged) {
-    for (const id of findUtilityConsumers(root)) {
+  if (changedUtilities.size > 0) {
+    for (const id of findUtilityConsumers(root, changedUtilities)) {
       affected.extensions.add(id);
     }
   }
@@ -369,7 +369,14 @@ function markAllComponentsAffected(affected, root) {
   }
 }
 
-function findUtilityConsumers(root) {
+export function findUtilityConsumers(root, changedUtilities) {
+  const importTokens = [...changedUtilities]
+    .filter((filePath) => /\.[cm]?[jt]sx?$/.test(filePath))
+    .map((filePath) =>
+      filePath
+        .replace(/^src\//, "")
+        .replace(/\.[cm]?[jt]sx?$/, ""),
+    );
   const extensionsRoot = path.join(root, "src/extensions");
   return readdirSync(extensionsRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -377,7 +384,8 @@ function findUtilityConsumers(root) {
       const directory = path.join(extensionsRoot, entry.name);
       return walkFiles(directory).some((filePath) => {
         if (!/\.[cm]?[jt]sx?$/.test(filePath)) return false;
-        return readFileSync(filePath, "utf8").includes("platform/utilities/");
+        const source = readFileSync(filePath, "utf8");
+        return importTokens.some((token) => source.includes(token));
       });
     })
     .map((entry) => entry.name);

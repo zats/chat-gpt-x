@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   classifyPath,
   compareVersions,
+  findUtilityConsumers,
   isBootstrap,
   releaseTag,
   validateUpdateIndex,
 } from "./component-releases.mjs";
+
+const repositoryRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
 test("classifies predictable component paths", () => {
   assert.deepEqual(classifyPath("src/platform/types.d.ts"), {
@@ -41,6 +49,23 @@ test("compares strict semantic versions", () => {
   assert.ok(compareVersions("1.0.1", "1.0.0") > 0);
   assert.ok(compareVersions("2.0.0", "1.99.99") > 0);
   assert.throws(() => compareVersions("1.0", "1.0.0"));
+});
+
+test("marks only consumers of the changed utility module", () => {
+  assert.deepEqual(
+    findUtilityConsumers(
+      repositoryRoot,
+      new Set(["src/platform/utilities/extension-management.ts"]),
+    ),
+    ["extensions"],
+  );
+  assert.deepEqual(
+    findUtilityConsumers(
+      repositoryRoot,
+      new Set(["src/platform/utilities/extension-storage.ts"]),
+    ).sort(),
+    ["multiple-accounts", "thread-colors"],
+  );
 });
 
 test("uses predictable release tags", () => {

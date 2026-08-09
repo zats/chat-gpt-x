@@ -360,23 +360,27 @@ launch_app() {
     if [[ "$mode" == "composition" ]]; then
       launch_configuration="$WORK_ROOT/$name-launch.json"
       jq \
+        -n \
         --arg root "$CODEX_ROOT/extensions" \
         --arg apiTest "$LOCAL_API_TEST_ROOT/contents/main.js" \
+        --slurpfile settings "$CODEX_ROOT/extensions/settings.json" \
         '{
           schemaVersion: 1,
           extensions: (
             [
-              .extensions[]
-              | select(.enabled)
+              $settings[0].extensions
+              | to_entries[]
+              | select(.value.enabled)
               | {
-                  id,
-                  path: ($root + "/" + .path + "/contents/main.js")
+                  id: .key,
+                  path: ($root + "/components/extensions/" + .key + "/contents/main.js")
                 }
             ]
+            | sort_by(.id)
             + [{id: "api-test-suite", path: $apiTest}]
           )
         }' \
-        "$versions_lock" > "$launch_configuration"
+        > "$launch_configuration"
       chmod 600 "$launch_configuration"
     fi
     env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
@@ -587,8 +591,10 @@ INSERT INTO threads (
 SQL
 
 run_logged unit-tests bun test \
+  "$REPO_ROOT/src/extensions/extensions/extensions.test.ts" \
   "$REPO_ROOT/src/extensions/multiple-accounts/multiple-accounts.test.ts" \
   "$REPO_ROOT/src/extensions/thread-colors/thread-colors.test.ts" \
+  "$REPO_ROOT/src/platform/utilities/extension-management.test.ts" \
   "$REPO_ROOT/src/platform/utilities/extension-storage.test.ts"
 
 if [[ "$USE_CURRENT_ACCOUNTS" == "1" && "$NO_PROFILE" == "0" ]]; then
@@ -653,6 +659,16 @@ SEED_API_PATH="$(jq -er '.chatgptApi.path' "$SEED_VERSIONS_LOCK")"
 SEED_BINDING_PATH="$(jq -er '.binding.path' "$SEED_VERSIONS_LOCK")"
 diff -rq "$BINDING_DIR" "$SEED_ROOT/$SEED_BINDING_PATH" >"$LOG_ROOT/binding-diff.log"
 diff -q "$REPO_ROOT/src/platform/bridge/main.cjs" "$SEED_ROOT/$SEED_API_PATH/bridge/main.cjs" >"$LOG_ROOT/bridge-diff.log"
+jq -e 'has("extensions") | not' "$SEED_VERSIONS_LOCK" >"$LOG_ROOT/seed-lock.log"
+jq -e \
+  --slurpfile index "$REPO_ROOT/updates/latest.json" \
+  '(.extensions | keys | sort) == ($index[0].extensions | keys | sort)
+   and ([.extensions[].enabled] | all)' \
+  "$SEED_ROOT/settings.json" >"$LOG_ROOT/seed-settings.log"
+while IFS= read -r extension_id; do
+  test -f "$SEED_ROOT/components/extensions/$extension_id/package.json"
+  test -f "$SEED_ROOT/components/extensions/$extension_id/contents/main.js"
+done < <(jq -r '.extensions | keys[]' "$REPO_ROOT/updates/latest.json")
 progress "verified release artifact"
 
 UNIT_PASSED="$(awk '/[0-9]+ pass/{passed=$1} END{print passed}' "$LOG_ROOT/unit-tests.log")"
