@@ -934,6 +934,351 @@ test("thread-list: throwing providers are isolated and disposal is final", async
 });
 
 // --------------------------------------------------------------------------
+// Tests: settings API
+// --------------------------------------------------------------------------
+
+const SETTINGS_PANE_ID = `${EXT_ID}.settings`;
+const SETTINGS_GROUP_ID = `${EXT_ID}.general`;
+const SETTINGS_TOGGLE_ID = `${EXT_ID}.enabled`;
+const SETTINGS_SELECT_ID = `${EXT_ID}.mode`;
+const SETTINGS_BUTTON_ID = `${EXT_ID}.action`;
+const SETTINGS_BUILT_IN_PANE_ID = "codex.settings.general-settings";
+const SETTINGS_EXISTING_GROUP_ID = `${EXT_ID}.existing-pane-group`;
+const SETTINGS_EXISTING_ITEM_ID = `${EXT_ID}.existing-pane-item`;
+
+function settingPane(id: string) {
+  return api.settings
+    .getCategories()
+    .flatMap((category) => category.panes)
+    .find((pane) => pane.id === id);
+}
+
+test("settings: adds a native pane, group, rows, and standard controls", async () => {
+  const navigation = api.settings.transformCategories((categories) =>
+    categories.map((category) =>
+      category.id === "integrations"
+        ? {
+            ...category,
+            panes: [
+              ...category.panes,
+              {
+                id: SETTINGS_PANE_ID,
+                label: "API Settings",
+                title: "API Settings",
+                description: "Mechanical settings API fixture.",
+                keywords: ["fixture-category"],
+              },
+            ],
+          }
+        : category,
+    ),
+  );
+  const groups = api.settings.transformGroups((current, pane) =>
+    pane.id === SETTINGS_PANE_ID
+      ? [
+          ...current,
+          {
+            id: SETTINGS_GROUP_ID,
+            title: "General",
+            description: "Fixture group description.",
+            footer: "Fixture group footer.",
+            keywords: ["fixture-group"],
+            items: [],
+          },
+        ]
+      : current,
+  );
+  const items = api.settings.transformItems((current, context) =>
+    context.group.id === SETTINGS_GROUP_ID
+      ? [
+          ...current,
+          {
+            id: SETTINGS_TOGGLE_ID,
+            label: "Fixture toggle",
+            description: "Searchable toggle description.",
+            keywords: ["fixture-toggle"],
+            control: api.settings.ui.toggle({
+              checked: true,
+              onChange() {},
+            }),
+          },
+          {
+            id: SETTINGS_SELECT_ID,
+            label: "Fixture select",
+            control: api.settings.ui.select({
+              value: "one",
+              options: [
+                { value: "one", label: "One" },
+                { value: "two", label: "Two", disabled: true },
+              ],
+              onChange() {},
+            }),
+          },
+          {
+            id: SETTINGS_BUTTON_ID,
+            label: "Fixture button",
+            control: api.settings.ui.button({
+              label: "Run",
+              appearance: "secondary",
+              onClick() {},
+            }),
+          },
+        ]
+      : current,
+  );
+  activeTestDisposables?.push(navigation, groups, items);
+
+  assert(
+    await api.settings.open(SETTINGS_PANE_ID, {
+      itemId: SETTINGS_TOGGLE_ID,
+    }),
+    "a contributed pane opens and resolves its item deep link",
+  );
+  assert(
+    await waitFor(
+      () => api.settings.getGroups(SETTINGS_PANE_ID).length === 1,
+      5000,
+    ),
+    "the contributed pane renders its group",
+  );
+  const pane = settingPane(SETTINGS_PANE_ID);
+  assert(pane?.origin === EXT_ID, "the contributed pane origin is stamped");
+  assert(
+    pane?.keywords?.includes("fixture-category"),
+    "pane search keywords are preserved",
+  );
+  const [group] = api.settings.getGroups(SETTINGS_PANE_ID);
+  assert(group?.origin === EXT_ID, "the contributed group origin is stamped");
+  assert(
+    group?.keywords?.includes("fixture-group"),
+    "group search keywords are preserved",
+  );
+  assert(group?.items.length === 3, "every contributed row is effective");
+  assert(
+    group?.items.every(
+      (item) => item.origin === EXT_ID && item.control !== undefined,
+    ),
+    "rows are stamped and retain native control descriptors",
+  );
+  assert(
+    group?.items[0]?.description === "Searchable toggle description." &&
+      group.items[0]?.keywords?.includes("fixture-toggle"),
+    "item search text is preserved",
+  );
+});
+
+test("settings: transformers chain, isolate failures, and validate ids", async () => {
+  const first = api.settings.transformCategories((categories) => [
+    ...categories,
+    {
+      id: `${EXT_ID}.category`,
+      label: "API Category",
+      keywords: ["fixture-category-keyword"],
+      panes: [
+        {
+          id: SETTINGS_PANE_ID,
+          label: "First label",
+        },
+        {
+          id: SETTINGS_PANE_ID,
+          label: "Duplicate label",
+        },
+        {
+          id: "foreign.settings",
+          label: "Foreign pane",
+        },
+      ],
+    },
+    {
+      id: "foreign.category",
+      label: "Foreign category",
+      panes: [],
+    },
+  ]);
+  const throwing = api.settings.transformCategories(() => {
+    throw new Error("intentional settings transformer failure");
+  });
+  const second = api.settings.transformCategories((categories) =>
+    categories.map((category) => ({
+      ...category,
+      panes: category.panes.map((pane) =>
+        pane.id === SETTINGS_PANE_ID
+          ? { ...pane, label: "Second label" }
+          : pane,
+      ),
+    })),
+  );
+  activeTestDisposables?.push(first, throwing, second);
+
+  assert(
+    await waitFor(() => settingPane(SETTINGS_PANE_ID) !== undefined, 5000),
+    "the valid pane remains after a throwing transformer",
+  );
+  assert(
+    settingPane(SETTINGS_PANE_ID)?.label === "Second label",
+    "later transformers receive and change earlier output",
+  );
+  assert(
+    api.settings
+      .getCategories()
+      .flatMap((category) => category.panes)
+      .filter((pane) => pane.id === SETTINGS_PANE_ID).length === 1,
+    "duplicate pane ids are dropped",
+  );
+  assert(!settingPane("foreign.settings"), "foreign pane ids are dropped");
+  assert(
+    !api.settings
+      .getCategories()
+      .some((category) => category.id === "foreign.category"),
+    "foreign category ids are dropped",
+  );
+  assert(
+    api.settings
+      .getCategories()
+      .find((category) => category.id === `${EXT_ID}.category`)?.origin ===
+      EXT_ID,
+    "contributed category origins are stamped",
+  );
+});
+
+test("settings: inserts a searchable fixture into an existing pane", async () => {
+  assert(
+    settingPane(SETTINGS_BUILT_IN_PANE_ID)?.origin === "app",
+    "the native General pane has a stable public id",
+  );
+  const groups = api.settings.transformGroups((current, pane) =>
+    pane.id === SETTINGS_BUILT_IN_PANE_ID
+      ? [
+          ...current,
+          {
+            id: SETTINGS_EXISTING_GROUP_ID,
+            title: "Settings API fixture",
+            keywords: ["existing pane fixture"],
+            items: [],
+          },
+        ]
+      : current,
+  );
+  let enabled = true;
+  let items: ReturnType<PlatformApi["settings"]["transformItems"]>;
+  items = api.settings.transformItems((current, context) =>
+    context.group.id === SETTINGS_EXISTING_GROUP_ID
+      ? [
+          ...current,
+          {
+            id: SETTINGS_EXISTING_ITEM_ID,
+            label: "Existing pane fixture",
+            description: "Mechanical row inserted into a built-in pane.",
+            keywords: ["searchable settings fixture"],
+            control: api.settings.ui.toggle({
+              checked: enabled,
+              onChange(value) {
+                enabled = value;
+                items.invalidate();
+              },
+            }),
+          },
+        ]
+      : current,
+  );
+  activeTestDisposables?.push(groups, items);
+
+  assert(
+    await api.settings.open(SETTINGS_BUILT_IN_PANE_ID, {
+      itemId: SETTINGS_EXISTING_ITEM_ID,
+    }),
+    "an extension fixture in an existing pane can be opened directly",
+  );
+  assert(
+    await waitFor(
+      () =>
+        api.settings
+          .getGroups(SETTINGS_BUILT_IN_PANE_ID)
+          .some((group) => group.id === SETTINGS_EXISTING_GROUP_ID),
+      5000,
+    ),
+    "the fixture group is present in the existing native pane",
+  );
+  const group = api.settings
+    .getGroups(SETTINGS_BUILT_IN_PANE_ID)
+    .find((candidate) => candidate.id === SETTINGS_EXISTING_GROUP_ID);
+  assert(
+    group?.items[0]?.label === "Existing pane fixture" &&
+      group.items[0]?.description?.includes("built-in pane"),
+    "the inserted row exposes searchable title and description text",
+  );
+});
+
+test("settings: invalidation recomputes rows and disposal removes contributions", async () => {
+  let revision = 1;
+  const navigation = api.settings.transformCategories((categories) => [
+    ...categories,
+    {
+      id: `${EXT_ID}.invalidate-category`,
+      label: "Invalidation",
+      panes: [{ id: SETTINGS_PANE_ID, label: "Invalidation" }],
+    },
+  ]);
+  const groups = api.settings.transformGroups((current, pane) =>
+    pane.id === SETTINGS_PANE_ID
+      ? [
+          ...current,
+          {
+            id: SETTINGS_GROUP_ID,
+            items: [
+              {
+                id: SETTINGS_TOGGLE_ID,
+                label: `Revision ${revision}`,
+              },
+            ],
+          },
+        ]
+      : current,
+  );
+  activeTestDisposables?.push(navigation, groups);
+  assert(await api.settings.open(SETTINGS_PANE_ID), "fixture pane opens");
+  assert(
+    api.settings.getGroups(SETTINGS_PANE_ID)[0]?.items[0]?.label ===
+      "Revision 1",
+    "initial row state is effective",
+  );
+  revision = 2;
+  groups.invalidate();
+  assert(
+    api.settings.getGroups(SETTINGS_PANE_ID)[0]?.items[0]?.label ===
+      "Revision 2",
+    "invalidation recomputes the affected rows",
+  );
+  groups.dispose();
+  assert(
+    api.settings.getGroups(SETTINGS_PANE_ID).length === 0,
+    "disposing the group transformer removes its contribution",
+  );
+});
+
+test("settings: unknown panes and rows fail closed", async () => {
+  assert(
+    !(await api.settings.open(`${EXT_ID}.missing`)),
+    "an unknown pane does not open",
+  );
+  const navigation = api.settings.transformCategories((categories) => [
+    ...categories,
+    {
+      id: `${EXT_ID}.missing-category`,
+      label: "Missing item fixture",
+      panes: [{ id: SETTINGS_PANE_ID, label: "Missing item fixture" }],
+    },
+  ]);
+  activeTestDisposables?.push(navigation);
+  assert(
+    !(await api.settings.open(SETTINGS_PANE_ID, {
+      itemId: `${EXT_ID}.missing-item`,
+    })),
+    "an unknown row reports failure after opening its pane",
+  );
+});
+
+// --------------------------------------------------------------------------
 // Tests: appearance API
 // --------------------------------------------------------------------------
 

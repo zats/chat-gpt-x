@@ -1708,6 +1708,237 @@ async function validateUi(
       );
     }
   }
+
+  markProgress('settings');
+  const settingsFixtureId = 'settings-ui-fixture';
+  const settingsPaneId = `${settingsFixtureId}.pane`;
+  const settingsGroupId = `${settingsFixtureId}.group`;
+  const settingsToggleId = `${settingsFixtureId}.toggle`;
+  const settingsSelectId = `${settingsFixtureId}.select`;
+  const settingsButtonId = `${settingsFixtureId}.button`;
+  const settingsBuiltInGroupId = `${settingsFixtureId}.built-in-group`;
+  const settingsBuiltInItemId = `${settingsFixtureId}.built-in-item`;
+  let settingsApi;
+  let settingsToggleChecked = false;
+  let settingsSelectedValue = 'first';
+  let settingsButtonClicks = 0;
+  let settingsItemRegistration;
+  globalThis.__CGPTX_HOST__.registerExtension(settingsFixtureId, {
+    activate(api) {
+      settingsApi = api.settings;
+      settingsApi.transformCategories((categories) =>
+        categories.map((category) =>
+          category.id === 'integrations'
+            ? {
+                ...category,
+                keywords: [
+                  ...(category.keywords ?? []),
+                  'settings-category-marker',
+                ],
+                panes: [
+                  ...category.panes,
+                  {
+                    id: settingsPaneId,
+                    label: 'Settings UI Fixture',
+                    title: 'Settings UI Fixture',
+                    description: 'settings-pane-marker',
+                  },
+                ],
+              }
+            : category,
+        ),
+      );
+      settingsApi.transformGroups((groups, pane) => {
+        if (pane.id === settingsPaneId) {
+          return [
+            ...groups,
+            {
+              id: settingsGroupId,
+              title: 'Settings fixture group',
+              description: 'settings-group-marker',
+              footer: 'Settings fixture footer',
+              items: [],
+            },
+          ];
+        }
+        if (pane.id === 'codex.settings.general-settings') {
+          return [
+            ...groups,
+            {
+              id: settingsBuiltInGroupId,
+              title: 'Built-in pane fixture',
+              items: [],
+            },
+          ];
+        }
+        return groups;
+      });
+      settingsItemRegistration = settingsApi.transformItems(
+        (items, context) => {
+          if (context.group.id === settingsBuiltInGroupId) {
+            return [
+              ...items,
+              {
+                id: settingsBuiltInItemId,
+                label: 'Built-in pane item',
+              },
+            ];
+          }
+          if (context.group.id !== settingsGroupId) return items;
+          return [
+            ...items,
+            {
+              id: settingsToggleId,
+              label: 'Settings fixture toggle',
+              description: 'settings-item-marker',
+              control: settingsApi.ui.toggle({
+                checked: settingsToggleChecked,
+                onChange(checked) {
+                  settingsToggleChecked = checked;
+                  settingsItemRegistration.invalidate();
+                },
+              }),
+            },
+            {
+              id: settingsSelectId,
+              label: 'Settings fixture select',
+              control: settingsApi.ui.select({
+                value: settingsSelectedValue,
+                options: [
+                  { value: 'first', label: 'First choice' },
+                  { value: 'second', label: 'Second choice' },
+                ],
+                onChange(value) {
+                  settingsSelectedValue = value;
+                  settingsItemRegistration.invalidate();
+                },
+              }),
+            },
+            {
+              id: settingsButtonId,
+              label: 'Settings fixture action',
+              control: settingsApi.ui.button({
+                label: 'Run fixture',
+                onClick() {
+                  settingsButtonClicks += 1;
+                },
+              }),
+            },
+          ];
+        },
+      );
+    },
+  });
+
+  const customPaneOpened = await settingsApi.open(settingsPaneId, {
+    itemId: settingsToggleId,
+  });
+  await waitUntil(() => document.getElementById(settingsToggleId) != null);
+  const settingsToggleRow = document.getElementById(settingsToggleId);
+  const settingsToggle = settingsToggleRow?.querySelector('[role="switch"]');
+  const settingsSelect = document
+    .getElementById(settingsSelectId)
+    ?.querySelector('button');
+  const settingsButton = Array.from(
+    document.getElementById(settingsButtonId)?.querySelectorAll('button') ?? [],
+  ).find((button) => button.textContent?.trim() === 'Run fixture');
+  check(
+    customPaneOpened &&
+      new URLSearchParams(location.search).get('cgptx-pane') ===
+        settingsPaneId &&
+      location.hash === `#${settingsToggleId}` &&
+      document.body.textContent?.includes('Settings UI Fixture'),
+    'custom settings pane uses the native route and item deep link',
+  );
+  check(
+    settingsToggle?.getAttribute('aria-checked') === 'false' &&
+      Boolean(settingsSelect) &&
+      Boolean(settingsButton),
+    'custom settings rows render native toggle, select, and button controls',
+  );
+  activateButton(settingsToggle);
+  await waitUntil(
+    () => settingsToggleRow?.querySelector('[role="switch"]')?.getAttribute('aria-checked') === 'true',
+  );
+  invokeNativeButton(settingsButton);
+  check(
+    settingsToggleChecked && settingsButtonClicks === 1,
+    'native settings controls call extension handlers and invalidate state',
+  );
+
+  const builtInPaneOpened = await settingsApi.open(
+    'codex.settings.general-settings',
+    { itemId: settingsBuiltInItemId },
+  );
+  await waitUntil(() => document.getElementById(settingsBuiltInItemId) != null);
+  check(
+    builtInPaneOpened &&
+      location.pathname === '/settings/general-settings' &&
+      document.getElementById(settingsBuiltInItemId)?.textContent?.includes(
+        'Built-in pane item',
+      ),
+    'an extension row renders inside the stable General settings pane',
+  );
+
+  const setSettingsSearch = async (query) => {
+    const input = document.querySelector('input#settings-search');
+    if (!input) throw new Error('Native settings search input missing');
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    valueSetter.call(input, query);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    await waitUntil(
+      () =>
+        document.querySelector('input#settings-search')?.value === query &&
+        document.querySelectorAll('[data-list-navigation-item]').length > 0,
+    );
+  };
+  const settingsSearchResult = (panelLabel) =>
+    Array.from(
+      document.querySelectorAll('button[data-list-navigation-item]'),
+    ).find((button) =>
+      button.getAttribute('aria-label')?.endsWith(`, ${panelLabel}`),
+    );
+  const searchMarkers = [
+    'settings-category-marker',
+    'settings-pane-marker',
+    'settings-group-marker',
+    'settings-item-marker',
+  ];
+  const searchableLevels = [];
+  for (const marker of searchMarkers) {
+    await setSettingsSearch(marker);
+    searchableLevels.push(Boolean(settingsSearchResult('Settings UI Fixture')));
+  }
+  check(
+    searchableLevels.every(Boolean),
+    'settings search indexes contributed category, pane, group, and item text',
+    { searchableLevels },
+  );
+
+  await setSettingsSearch('Multiple Accounts');
+  const extensionTitleResult = settingsSearchResult('Extensions');
+  await setSettingsSearch('saved-account');
+  const extensionDescriptionResult = settingsSearchResult('Extensions');
+  check(
+    Boolean(extensionTitleResult) && Boolean(extensionDescriptionResult),
+    'Extensions settings search indexes installed package titles and descriptions',
+  );
+
+  await setSettingsSearch('settings-item-marker');
+  settingsSearchResult('Settings UI Fixture')?.click();
+  await waitUntil(
+    () =>
+      new URLSearchParams(location.search).get('cgptx-pane') ===
+        settingsPaneId &&
+      document.querySelector('input#settings-search')?.value === '',
+  );
+  check(
+    document.getElementById(settingsToggleId) != null,
+    'selecting a contributed search result opens its owning settings pane',
+  );
   markProgress('complete');
   return checks;
 }

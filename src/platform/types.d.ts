@@ -13,7 +13,7 @@
  *   shapes, or minified identifiers.
  * - Full TSDoc required: intent, behavior, parameter semantics,
  *   multi-consumer semantics, `@example`, and exactly one `@group`:
- *   Lifecycle | Menus | Authentication | Appearance | Conversation | Commands | Windows | Events.
+ *   Lifecycle | Menus | Authentication | Appearance | Settings | Threads | Commands | Windows | Events.
  * - Designed for N concurrent extensions: transformers for state-shaping
  *   APIs (full state in, new state out, chained in load order), registration
  *   for notifications (invoked in load order, isolated). Extensions never
@@ -75,6 +75,9 @@ export interface Disposable {
 export interface PlatformApi {
   /** Menu contribution APIs. */
   readonly menus: MenusApi;
+
+  /** Native ChatGPT settings navigation, content, and controls. */
+  readonly settings: SettingsApi;
 
   /** Current ChatGPT thread lifecycle. */
   readonly threads: ThreadsApi;
@@ -406,6 +409,472 @@ export interface HeaderAppearanceApi {
    * empty when no registration contributes either property.
    */
   getProperties(): ResolvedHeaderCssProperties;
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/**
+ * APIs for extending ChatGPT's native Settings window.
+ *
+ * The model has four levels: categories such as Personal, panes such as
+ * Appearance, groups inside a pane, and item rows inside a group. The
+ * binding renders each level with ChatGPT's own settings components. Native
+ * Settings search indexes the effective category, pane, group, and item text
+ * and opens the owning pane for the best matching result.
+ *
+ * @group Settings
+ */
+export interface SettingsApi {
+  /** Factories for controls rendered by ChatGPT's native settings rows. */
+  readonly ui: SettingsUiApi;
+
+  /**
+   * Transform the complete settings navigation tree.
+   *
+   * `transform` receives the currently visible categories and panes whenever
+   * ChatGPT renders its settings navigation. Return the final tree to keep,
+   * remove, reorder, modify, or add categories and panes. The built-in
+   * category ids are `"personal"`, `"integrations"`, `"coding"`, and
+   * `"archived"`. Built-in pane ids use the `"codex.settings."` namespace.
+   *
+   * A new category or pane id must use `"<extension-id>.<name>"`. The
+   * platform drops and logs foreign or duplicate ids. A throwing transformer
+   * is skipped and logged. Transformers run in extension load and
+   * registration order, and each receives the previous transformer's output.
+   * Disposing or invalidating the returned registration updates an open
+   * Settings window.
+   *
+   * @example
+   * const navigation = api.settings.transformCategories((categories) =>
+   *   categories.map((category) =>
+   *     category.id === "personal"
+   *       ? {
+   *           ...category,
+   *           panes: [
+   *             ...category.panes,
+   *             {
+   *               id: "my-extension.preferences",
+   *               label: "My Extension",
+   *               title: "My Extension",
+   *               description: "Configure My Extension.",
+   *             },
+   *           ],
+   *         }
+   *       : category,
+   *   ),
+   * );
+   */
+  transformCategories(
+    transform: SettingsCategoryTransform,
+  ): SettingsTransformRegistration;
+
+  /**
+   * Transform the groups in each settings pane.
+   *
+   * The callback runs when a pane's content is rendered. It receives the
+   * groups produced by ChatGPT and earlier transformers, plus the effective
+   * pane descriptor. A new pane starts with an empty group list. Return the
+   * final groups. Extension-created ids must be namespaced; duplicate or
+   * foreign ids are dropped and logged.
+   *
+   * Group transformers run in extension load and registration order. A
+   * throwing transformer is skipped and logged. Item transformers run after
+   * all group transformers have produced the final group list.
+   *
+   * @example
+   * const groups = api.settings.transformGroups((current, pane) =>
+   *   pane.id === "my-extension.preferences"
+   *     ? [
+   *         ...current,
+   *         {
+   *           id: "my-extension.general",
+   *           title: "General",
+   *           items: [],
+   *         },
+   *       ]
+   *     : current,
+   * );
+   */
+  transformGroups(
+    transform: SettingsGroupTransform,
+  ): SettingsTransformRegistration;
+
+  /**
+   * Transform every native settings row list.
+   *
+   * `transform` receives the complete item list for one effective group and
+   * its pane and group context. Return the final list to keep, remove,
+   * reorder, modify, or add rows. Built-in rows have stable semantic ids when
+   * ChatGPT supplies a semantic identity; otherwise their `id` is undefined
+   * and the same object must be returned to preserve them. Every new item
+   * requires an extension-namespaced id.
+   *
+   * Transformers run in extension load and registration order for each
+   * group. A throwing transformer is skipped and logged. Control callbacks
+   * are also isolated and logged.
+   *
+   * @example
+   * let enabled = true;
+   * let items: SettingsTransformRegistration;
+   * items = api.settings.transformItems((current, context) =>
+   *   context.group.id === "my-extension.general"
+   *     ? [
+   *         ...current,
+   *         {
+   *           id: "my-extension.enabled",
+   *           label: "Enabled",
+   *           description: "Enable My Extension.",
+   *           control: api.settings.ui.toggle({
+   *             checked: enabled,
+   *             onChange(value) {
+   *               enabled = value;
+   *               items.invalidate();
+   *             },
+   *           }),
+   *         },
+   *       ]
+   *     : current,
+   * );
+   */
+  transformItems(
+    transform: SettingsItemTransform,
+  ): SettingsTransformRegistration;
+
+  /**
+   * Return the latest effective settings navigation tree.
+   *
+   * The result includes all active category transformers and reflects the
+   * latest navigation rendered by ChatGPT. It is empty until Settings has
+   * rendered in this app window.
+   */
+  getCategories(): readonly SettingsCategory[];
+
+  /**
+   * Return the latest effective groups for a pane.
+   *
+   * The groups include all active group and item transforms. The result is
+   * empty until that pane has rendered in this app window.
+   *
+   * @param paneId stable built-in id or extension-namespaced pane id
+   */
+  getGroups(paneId: string): readonly SettingsGroup[];
+
+  /**
+   * Open a settings pane through ChatGPT's native settings route.
+   *
+   * When `itemId` is present, the native page scrolls the matching row into
+   * view after it renders. Calls from all extensions run in invocation order.
+   * The promise resolves to `false` when the pane is unknown or disabled, or
+   * when a requested item does not exist. An unknown item does not close the
+   * pane that was opened.
+   *
+   * @example
+   * await api.settings.open("my-extension.preferences", {
+   *   itemId: "my-extension.enabled",
+   * });
+   */
+  open(paneId: string, options?: SettingsOpenOptions): Promise<boolean>;
+}
+
+/**
+ * Controls one settings transformer.
+ *
+ * `invalidate()` recomputes the affected settings state without changing
+ * transformer precedence. `dispose()` removes the transformer and is safe to
+ * call more than once.
+ *
+ * @group Settings
+ */
+export interface SettingsTransformRegistration extends Disposable {
+  /** Recompute the transformed settings state and update native settings UI. */
+  invalidate(): void;
+}
+
+/**
+ * Maps the complete settings category and pane navigation tree.
+ * See {@link SettingsApi.transformCategories}.
+ *
+ * @group Settings
+ */
+export type SettingsCategoryTransform = (
+  categories: readonly SettingsCategory[],
+) => readonly SettingsCategory[];
+
+/**
+ * One native Settings navigation category and its ordered panes.
+ *
+ * @group Settings
+ */
+export interface SettingsCategory {
+  /** Stable built-in id or extension-namespaced id. */
+  readonly id: string;
+
+  /** Visible category heading. */
+  readonly label: string;
+
+  /** Extra native settings-search terms shared by panes in this category. */
+  readonly keywords?: readonly string[];
+
+  /** Ordered navigation panes in this category. */
+  readonly panes: readonly SettingsPane[];
+
+  /** Contributor id assigned by the platform; `"app"` denotes ChatGPT. */
+  readonly origin?: "app" | string;
+}
+
+/**
+ * One Settings sidebar entry and its native routed page.
+ *
+ * Extension-created panes are internal settings routes. The binding creates
+ * the page from ChatGPT's native page component and obtains its groups from
+ * {@link SettingsApi.transformGroups}.
+ *
+ * @group Settings
+ */
+export interface SettingsPane {
+  /** Stable built-in id or extension-namespaced id. */
+  readonly id: string;
+
+  /** Visible sidebar label. */
+  readonly label: string;
+
+  /** Native page title; defaults to {@link label}. */
+  readonly title?: string;
+
+  /** Descriptive pane text included in native settings search. */
+  readonly description?: string;
+
+  /** Extra native settings-search terms for this pane. */
+  readonly keywords?: readonly string[];
+
+  /** Whether the native sidebar entry is disabled. */
+  readonly disabled?: boolean;
+
+  /** Whether a built-in pane opens an external destination. */
+  readonly external?: boolean;
+
+  /** Contributor id assigned by the platform; `"app"` denotes ChatGPT. */
+  readonly origin?: "app" | string;
+}
+
+/**
+ * Maps the groups rendered in one effective settings pane.
+ * See {@link SettingsApi.transformGroups}.
+ *
+ * @group Settings
+ */
+export type SettingsGroupTransform = (
+  groups: readonly SettingsGroup[],
+  pane: SettingsPane,
+) => readonly SettingsGroup[];
+
+/**
+ * One native titled content group inside a settings pane.
+ *
+ * The binding renders the group, header, content, footer, bordered row list,
+ * and row separators with ChatGPT's own settings components. Some built-in
+ * groups have no semantic identity and therefore have no `id`. New groups
+ * always require an extension-namespaced id.
+ *
+ * @group Settings
+ */
+export interface SettingsGroup {
+  /** Stable semantic id, when available. */
+  readonly id?: string;
+
+  /** Native group heading. Omit it for a group without a heading. */
+  readonly title?: string;
+
+  /** Secondary text shown in the native group header. */
+  readonly description?: string;
+
+  /** Text shown in the native group footer. */
+  readonly footer?: string;
+
+  /** Extra native settings-search terms for rows in this group. */
+  readonly keywords?: readonly string[];
+
+  /** Ordered rows in the group. */
+  readonly items: readonly SettingsItem[];
+
+  /** Contributor id assigned by the platform; `"app"` denotes ChatGPT. */
+  readonly origin?: "app" | string;
+}
+
+/**
+ * Context supplied while one settings item list is transformed.
+ *
+ * @group Settings
+ */
+export interface SettingsItemContext {
+  /** Effective pane that owns the group. */
+  readonly pane: SettingsPane;
+
+  /** Effective group that owns the item list. */
+  readonly group: SettingsGroup;
+}
+
+/**
+ * Maps the native settings rows in one group.
+ * See {@link SettingsApi.transformItems}.
+ *
+ * @group Settings
+ */
+export type SettingsItemTransform = (
+  items: readonly SettingsItem[],
+  context: SettingsItemContext,
+) => readonly SettingsItem[];
+
+/**
+ * One row rendered by ChatGPT's native settings-row component.
+ *
+ * A built-in row can omit `id` when ChatGPT gives it no semantic identity.
+ * New rows require an extension-namespaced id. The platform indexes an
+ * extension row for native settings search from its label, description, and
+ * keywords, together with its owning category, pane, and group text. Search
+ * opens the owning pane. Use {@link SettingsApi.open} with `itemId` when a
+ * caller must also scroll directly to one row.
+ *
+ * @group Settings
+ */
+export interface SettingsItem {
+  /** Stable semantic id, when available. */
+  readonly id?: string;
+
+  /** Visible row label. */
+  readonly label: string;
+
+  /** Secondary text shown below or beside the label. */
+  readonly description?: string;
+
+  /** Native control rendered at the trailing edge of the row. */
+  readonly control?: SettingsControl;
+
+  /** Extra native settings-search terms for this row. */
+  readonly keywords?: readonly string[];
+
+  /** Contributor id assigned by the platform; `"app"` denotes ChatGPT. */
+  readonly origin?: "app" | string;
+}
+
+/** Options for {@link SettingsApi.open}. @group Settings */
+export interface SettingsOpenOptions {
+  /** Optional row id to scroll into view after its pane renders. */
+  readonly itemId?: string;
+}
+
+declare const settingsControlBrand: unique symbol;
+
+/**
+ * An opaque control created by {@link SettingsUiApi} or supplied by ChatGPT.
+ *
+ * Extensions cannot construct this value. The binding renders the matching
+ * native ChatGPT control and preserves its focus, keyboard, state, animation,
+ * and accessibility behavior.
+ *
+ * @group Settings
+ */
+export interface SettingsControl {
+  readonly [settingsControlBrand]: true;
+}
+
+/**
+ * Factories for standard native controls used in ChatGPT settings rows.
+ *
+ * The returned values are opaque and can only be used as a
+ * {@link SettingsItem.control}. Factories do not create DOM or expose React.
+ * Callback failures are isolated and logged.
+ *
+ * @group Settings
+ */
+export interface SettingsUiApi {
+  /** Create ChatGPT's native controlled toggle. */
+  toggle(options: SettingsToggleOptions): SettingsControl;
+
+  /** Create ChatGPT's native single-value dropdown. */
+  select(options: SettingsSelectOptions): SettingsControl;
+
+  /** Create ChatGPT's native settings button. */
+  button(options: SettingsButtonOptions): SettingsControl;
+}
+
+/**
+ * Options for a native settings toggle.
+ *
+ * The native control changes immediately. The extension owns the durable
+ * value and calls its settings registration's `invalidate()` when external
+ * state changes.
+ *
+ * @group Settings
+ */
+export interface SettingsToggleOptions {
+  /** Current controlled value. */
+  readonly checked: boolean;
+
+  /** Disable native pointer and keyboard interaction. */
+  readonly disabled?: boolean;
+
+  /** Called with the next value after native activation. */
+  readonly onChange: (checked: boolean) => void | Promise<void>;
+}
+
+/**
+ * Options for a native single-value settings dropdown.
+ *
+ * @group Settings
+ */
+export interface SettingsSelectOptions {
+  /** Value of the selected option. */
+  readonly value?: string;
+
+  /** Placeholder shown when no option is selected. */
+  readonly placeholder?: string;
+
+  /** Ordered native dropdown options. */
+  readonly options: readonly SettingsSelectOption[];
+
+  /** Disable native pointer and keyboard interaction. */
+  readonly disabled?: boolean;
+
+  /** Called with the newly selected value. */
+  readonly onChange: (value: string) => void | Promise<void>;
+}
+
+/**
+ * One option in a native settings dropdown.
+ *
+ * @group Settings
+ */
+export interface SettingsSelectOption {
+  /** Stable option value supplied to the change callback. */
+  readonly value: string;
+
+  /** Visible option label. */
+  readonly label: string;
+
+  /** Disable selection while keeping the option visible. */
+  readonly disabled?: boolean;
+}
+
+/**
+ * Options for a native settings button.
+ *
+ * @group Settings
+ */
+export interface SettingsButtonOptions {
+  /** Visible button label. */
+  readonly label: string;
+
+  /** Stable semantic appearance mapped to ChatGPT's native button variants. */
+  readonly appearance?: "primary" | "secondary" | "danger";
+
+  /** Disable native pointer and keyboard interaction. */
+  readonly disabled?: boolean;
+
+  /** Called after native activation. */
+  readonly onClick: () => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

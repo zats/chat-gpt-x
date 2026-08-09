@@ -29,6 +29,9 @@ verified the behavior and prop contracts through the injected bridge.
 | Native menus | `app-initial-Biw83Aiz.js` | initializer `XU`; namespace `qU`; `qU.Item`, `qU.Separator`, `qU.SubmenuItem`, and `qU.FlyoutSubmenuItem`; `GU` dropdown root |
 | Native icons | `app-initial-Biw83Aiz.js` | initializer `Aht` and component `kht` for the menu chevron; initializer `Nm` and component `Mm` for the Profile person icon; initializer `cG` and component `sG` for the Settings gear icon |
 | Native color picker | `app-initial-Biw83Aiz.js` | initializer `yc`; controlled picker `vc` |
+| Settings page and search | `settings-page-mM-lHCsV.js` | `SettingsPage`; semantic category headings, sidebar rows, search input/results, routed content wrapper, and hash target handling |
+| Settings section icons | `use-visible-settings-sections-1Vu4SC9J.js` | initialized section-icon map `r` |
+| Native settings components | `app-initial-Biw83Aiz.js` | `Wa` page; `gr` group with `Header`, `Content`, and `Footer`; `HO` row list; `JO` row; `QS` toggle; `Ia` select trigger; `GU` dropdown; `qU.Item`; `Mbt` button |
 | Authentication context | `app-initial-Biw83Aiz.js` | initializer `I0` and auth-nonce hook `z0`; initializer `U0` and app-server registry hook `q0` |
 | Query and message contracts | `app-initial-Biw83Aiz.js` | initializer `pkt` and query-client hook `mkt`; initializer `dxt` and account-info query-key builder `cxt`; initializer `_xt` and message bus `vxt` |
 | Browser and navigation bridges | `app-initial-Biw83Aiz.js` | initializer `ndt` and direct open-in-browser dispatch `adt`; initializer `eut` and React Router navigation hook `iut` |
@@ -126,6 +129,52 @@ binding waits for the committed application root and submits its current root
 element once through the native React DOM renderer. Extension activation waits
 for `__CGPTX_NATIVE_READY__`, including that reconciliation, before
 registration.
+
+## settings
+
+`settings-page-mM-lHCsV.js` defines the complete native settings shell. The
+four navigation groups use the semantic messages
+`settings.nav.heading.personal`, `.integrations`, `.coding`, and `.archived`.
+Their native rows expose `data-settings-panel-slug`, which maps to public pane
+IDs in the `codex.settings.<slug>` namespace. The mechanical existing-pane
+fixture uses `codex.settings.general-settings`, a core pane listed in the
+Personal group for every supported account mode. The binding does not import
+or depend on the optional Voice settings module.
+
+The JSX boundary captures native categories, pane rows, groups, and semantic
+row messages. Category, group, and item transformers compose in extension load
+and registration order. Normalization preserves native descriptors, enforces
+extension namespaces and unique IDs, stamps origins, isolates failures, and
+re-renders an open settings window after invalidation or disposal. New panes
+reuse `Wa`; new groups and rows reuse `gr`, `HO`, and `JO`.
+
+The public control factories render the stock `QS` controlled toggle, the
+`GU`/`Ia`/`qU.Item` dropdown composition, and `Mbt`. Source inspection of the
+stock General and Voice settings implementations confirmed the `QS`
+`checked`/`onChange` contract. Control callbacks are isolated by the binding.
+
+Native search input props are `searchQuery` and `onQueryChange`; result props
+are `searchResults`, `onSelect`, `intl`, and `listRef`. The binding adds one
+section result per matching effective pane. It indexes category, pane, group,
+and item labels, descriptions, and keywords. Selecting an extension pane uses
+the internal `cgptx-pane` route and clears the native query. Built-in panes keep
+their native slug. The route wrapper passes `location.hash` as `targetId`, and
+`Wa` scrolls the row whose native `id` matches that target.
+
+The stable API suite covers new panes and groups, insertion into General,
+standard control descriptors, transformer ordering and isolation, namespace
+enforcement, invalidation, disposal, and deep-link failure behavior. The
+version-specific UI suite covers native rendering, callbacks, General-pane
+insertion, deep links, all four search text levels, package title/description
+search for the Extensions manager, and search-result navigation. These new
+live checks were not run in this development session because the operator
+required that no application be launched or focused.
+
+Failure signatures include missing category captures, a missing
+`data-settings-panel-slug`, an empty `#settings-search` result for contributed
+text, a custom pane that stays on Appearance content, a row whose native `id`
+does not match its public item ID, or a control that does not use the stock
+component exports above.
 
 ## authentication
 
