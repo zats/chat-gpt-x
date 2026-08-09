@@ -6,7 +6,7 @@
 
 - [x] Publish the update index and component releases
 - [x] Build atomic component storage under `~/.codex/extensions`
-- [x] Load platform components and extensions from a versions lock
+- [x] Load platform components from a versions lock and extensions from startup settings
 - [x] Support local launch-scoped extensions and `--test-api`
 - [x] Add manual updates, restart activation, and status notifications
 - [x] Remove legacy loading and release fixtures
@@ -33,9 +33,9 @@ Launcher binary updates require a separate mechanism.
 ## Milestones
 
 Milestone 1 delivers the update index, component store, manual updater,
-versions-locked injection, launch-scoped development extensions, and
-disabled-injection notifications. Installed changes activate on the next
-ChatGPT launch.
+version-locked platform injection, startup extension settings, launch-scoped
+development extensions, and disabled-injection notifications. Installed
+changes activate on the next ChatGPT launch.
 
 Milestone 2 adds runtime extension loading, unloading, replacement, and local
 development reload. It ships after milestone 1.
@@ -118,7 +118,7 @@ Every installed component lives under `~/.codex/extensions`:
   components/
     chatgpt-api/<api-version>/
     bindings/<chatgpt-version>/<binding-version>/
-    extensions/<extension-id>/<extension-version>/
+    extensions/<extension-id>/
   state/<extension-id>/
   versions-lock.json
   settings.json
@@ -126,12 +126,25 @@ Every installed component lives under `~/.codex/extensions`:
 
 `CODEX_HOME` changes the `~/.codex` root for development and CI.
 
-Component directories are immutable. Extension state is stored separately from
-extension code. `settings.json` contains user-selected IDs, enablement, and
-order; it contains no executable paths. The updater reads it without mutation.
-Compatible extensions absent from settings use enabled-by-default virtual
-entries. Development builds remain outside the component store and enter a
-launch only through an explicit `--extension` path.
+API and binding directories are immutable. Each extension ID has one active
+package directory, which an update replaces. Extension state is stored
+separately from extension code. `settings.json` contains every installed ID and
+an extensible settings record:
+
+```json
+{
+  "schemaVersion": 1,
+  "extensions": {
+    "multiple-accounts": { "enabled": true }
+  }
+}
+```
+
+The updater adds new IDs as enabled, removes records for packages that are no
+longer installed, and preserves unknown fields in retained records. A required
+extension is always enabled. Executable paths come from the predictable flat
+package directories. Development builds remain outside the component store and
+enter a launch only through an explicit `--extension` path.
 
 ## Installation transaction
 
@@ -141,13 +154,16 @@ An update runs as one transaction:
 2. Reject an older generation.
 3. Select the binding for the installed ChatGPT version.
 4. Select compatible extension versions.
-5. Create `downloads/` for one missing archive.
+5. Create `downloads/` for one required archive.
 6. Verify each SHA-256 and archive layout.
-7. Extract into new immutable component directories.
-8. Remove `downloads/` and atomically replace `versions-lock.json` with exact
-   component paths and extension order.
+7. Install immutable API and binding directories, build the complete compatible
+   extension set in a staging directory, and replace the flat extension root.
+8. Reconcile `settings.json` with the installed package IDs; restore the prior
+   extension root if this write fails.
+9. Remove `downloads/` and atomically replace `versions-lock.json` with the
+   exact API and binding paths.
 
-Failures before step 8 preserve the active versions lock. A generation-only
+Failures before step 9 preserve the active versions lock. A generation-only
 index change updates the lock without requesting a ChatGPT restart.
 
 ## Startup and injection
@@ -158,9 +174,12 @@ and launches ChatGPT with:
 - `NODE_OPTIONS` requiring the selected API bridge
 - `CHATGPTX_VERSIONS_LOCK` pointing to the versions lock
 
-The bridge resolves its runtime, binding, and extensions exclusively through
-that lock. A running ChatGPT process retains the locked versions it launched
-with. Milestone 1 activates updates on the next ChatGPT launch.
+The bridge resolves its runtime and binding through that lock. It reads
+`settings.json`, loads package metadata from
+`components/extensions/<extension-id>/package.json`, and activates enabled
+extensions in lexical ID order. A running ChatGPT process keeps the extension
+code and enabled set that it started with. Milestone 1 activates updates and
+enablement changes on the next ChatGPT launch.
 
 The application imports bundled seed components into the store when no versions
 lock exists. This supports first launch without network access.
@@ -205,17 +224,17 @@ timers, listeners, UI sessions, and guards any unfinished asynchronous work.
 Shared lifecycle helpers move into platform infrastructure only after at least
 two extensions need the same implementation.
 
-The main-process bridge owns the desired extension set, configured order, source
-hashes, and active storage authorization. It observes `versions-lock.json` and
-explicit development extension paths. When the active API and binding remain
-unchanged, it
+The main-process bridge owns the desired extension set, source hashes, and
+active storage authorization. It observes `settings.json`, flat extension
+packages, and explicit development extension paths. When the active API and
+binding remain unchanged, it
 reconciles the complete enabled extension set:
 
 1. Evaluate candidate modules without activation.
 2. Stage the same candidates in every renderer.
 3. Wait for every renderer to acknowledge staging.
 4. Deactivate previous modules in reverse order.
-5. Activate candidates in configured order.
+5. Activate candidates in deterministic ID order.
 6. Commit after every renderer reports success.
 
 An activation failure deactivates the candidates and restores the previous
@@ -238,7 +257,7 @@ It writes resolved IDs and paths to a mode-`0600` ephemeral launch
 configuration. These entries:
 
 - Override an installed extension with the same ID for that launch
-- Leave `versions-lock.json` and persistent settings unchanged
+- Leave `versions-lock.json`, flat installed packages, and persistent settings unchanged
 - Participate in the same compatibility checks
 - Reload after restart in milestone 1
 - Reload when their compiled entry point changes in milestone 2

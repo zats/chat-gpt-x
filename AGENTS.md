@@ -46,12 +46,14 @@ the listed extensions, under
 development. `CHATGPTX_EXTENSION_BUILD_DIR` overrides that output root.
 Manifests declare `contents/main.js`, their semantic version, and
 `compatibility.chatgpt` plus `compatibility.chatgptApi` ranges.
-Released code lives under
-`<Codex home>/extensions/components/extensions/<extension-id>/<version>/`;
+Installed extension code lives under
+`<Codex home>/extensions/components/extensions/<extension-id>/`;
 persistent state lives under
 `<Codex home>/extensions/state/<extension-id>/`. The global
-`<Codex home>/extensions/settings.json` contains IDs, enablement, and order
-without executable paths. `resolveCodexHome()` defines Codex home from
+`<Codex home>/extensions/settings.json` maps every installed extension ID to
+an extensible settings object with `enabled`; startup reads package metadata
+from each flat extension directory and loads enabled extensions in lexical ID
+order. `resolveCodexHome()` defines Codex home from
 `CODEX_HOME`, defaulting to `$HOME/.codex`.
 
 Run the packaged launcher with `--test-api` to restart ChatGPT with only its

@@ -8,10 +8,10 @@
  *
  * Responsibilities:
  *  - load the exact API, binding, and extension set selected by the launch
- *    versions lock
+ *    versions lock and startup extension settings
  *  - install the binding host from the external preload before app page code
  *    (webFrame.executeJavaScript is privileged and bypasses the page CSP)
- *  - activate locked extensions in order through the host
+ *  - activate enabled extensions in deterministic id order through the host
  *  - report api-test-suite results in separate files per launch and renderer
  *
  * Logs JSON lines beneath the resolved Codex home.
@@ -34,7 +34,9 @@ function init() {
     resolveExtensionsDirectory,
   } = require("../runtime/codex-paths.cjs");
   const {
+    listInstalledExtensions,
     readExtensionEntries,
+    setExtensionEnabled,
   } = require("../runtime/extension-launch-config.cjs");
 
   const CODEX_HOME = resolveCodexHome();
@@ -111,27 +113,12 @@ function init() {
       typeof value.binding?.chatgpt !== "string" ||
       typeof value.binding?.version !== "string" ||
       value.binding?.chatgptApi !== value.chatgptApi.version ||
-      typeof value.binding?.path !== "string" ||
-      !Array.isArray(value.extensions)
+      typeof value.binding?.path !== "string"
     ) {
       throw new Error("Invalid component versions lock");
     }
     componentPath(value.chatgptApi.path);
     componentPath(value.binding.path);
-    const ids = new Set();
-    for (const extension of value.extensions) {
-      if (
-        typeof extension?.id !== "string" ||
-        !/^[a-z0-9][a-z0-9._-]*$/i.test(extension.id) ||
-        ids.has(extension.id) ||
-        typeof extension?.path !== "string" ||
-        typeof extension?.enabled !== "boolean"
-      ) {
-        throw new Error("Invalid locked extension");
-      }
-      ids.add(extension.id);
-      componentPath(extension.path);
-    }
   }
 
   const Module = require("node:module");
@@ -207,7 +194,6 @@ function init() {
 
     const extensionEntries = readExtensionEntries({
       configurationFile: LAUNCH_CONFIGURATION_FILE,
-      versions,
       extensionsDirectory: STATE_DIR,
     });
     const extensions = extensionEntries
@@ -367,6 +353,15 @@ function init() {
           }
           return null;
         }
+        case "extensions.list":
+          return listInstalledExtensions(STATE_DIR);
+        case "extensions.set-enabled":
+          setExtensionEnabled(
+            STATE_DIR,
+            parameters.extensionId,
+            parameters.enabled,
+          );
+          return listInstalledExtensions(STATE_DIR);
         default:
           throw new Error(`Unknown ChatGPTX runtime method: ${String(method)}`);
       }

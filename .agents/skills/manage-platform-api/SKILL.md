@@ -23,7 +23,7 @@ Layout conventions (paths, manifests, runtime settings): read `references/file-l
 Design every API assuming multiple extensions use it simultaneously. Never let extensions address, detect, or depend on each other — the platform defines composition. Apply these patterns:
 
 - **State-shaping APIs → transformer pattern.** The extension receives the full current state and returns the new state. Example: a profile-menu API hands the extension the list of menu items; it returns items to keep, add, remove, or reorder — the extension controls placement. Transformers chain in extension load order, each seeing the previous one's output. This makes N extensions deterministic by construction.
-- **Notification APIs → registration pattern.** Extensions register callbacks (e.g. "assistant turn completed"); invocation order equals extension load order, which the platform (loader/settings) defines — never negotiated between extensions. Isolate callbacks: one throwing must not affect the others.
+- **Notification APIs → registration pattern.** Extensions register callbacks (e.g. "assistant turn completed"); invocation order equals extension load order, which the loader defines — never negotiated between extensions. Isolate callbacks: one throwing must not affect the others.
 - State the chosen semantics explicitly in the API's TSDoc: ordering guarantees, isolation behavior, what happens on conflicting changes.
 
 ## Reuse the app's own components

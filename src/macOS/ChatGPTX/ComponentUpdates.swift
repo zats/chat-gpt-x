@@ -244,12 +244,13 @@ struct ComponentUpdatePlan {
     fileprivate let extensions: [PlannedExtensionUpdate]
 
     var summary: ComponentUpdateSummary {
-        summary(installed: current.versions)
+        summary(installed: current)
     }
 
     func summary(
-        installed versions: ComponentVersionsLock
+        installed store: PreparedComponentStore
     ) -> ComponentUpdateSummary {
+        let versions = store.versions
         var items = [
             ComponentUpdateItem(
                 id: "chatgpt-api",
@@ -269,7 +270,7 @@ struct ComponentUpdatePlan {
         ]
 
         let installedExtensions = Dictionary(
-            uniqueKeysWithValues: versions.extensions.map { ($0.id, $0) }
+            uniqueKeysWithValues: store.extensions.map { ($0.id, $0) }
         )
         items.append(contentsOf: extensions.map { planned in
             let localVersion: ComponentLocalVersion
@@ -313,7 +314,6 @@ struct ComponentUpdatePlan {
 
 private struct PlannedExtensionUpdate {
     let id: String
-    let enabled: Bool
     let update: ExtensionUpdate
 }
 
@@ -409,32 +409,10 @@ private extension ComponentStore {
                     chatgptAPIVersion: binding.chatgptApi
                 )
             }
-        let settings = try decode(
-            ExtensionSettings.self,
-            at: rootURL.appendingPathComponent("settings.json")
-        )
-        guard settings.schemaVersion == 1 else {
-            throw ComponentUpdateError.settingsInvalid
-        }
-        var seenSettings = Set<String>()
-        guard settings.extensions.allSatisfy({
-            seenSettings.insert($0.id).inserted
-        }) else {
-            throw ComponentUpdateError.settingsInvalid
-        }
-
-        var orderedSettings = settings.extensions
-        let configuredIDs = Set(orderedSettings.map(\.id))
-        for id in compatibleExtensions.keys.sorted()
-            where !configuredIDs.contains(id)
-        {
-            orderedSettings.append(ExtensionSetting(id: id, enabled: true))
-        }
-        let extensions = orderedSettings.compactMap { setting in
-            compatibleExtensions[setting.id].map {
+        let extensions = compatibleExtensions.keys.sorted().compactMap { id in
+            compatibleExtensions[id].map {
                 PlannedExtensionUpdate(
-                    id: setting.id,
-                    enabled: setting.enabled,
+                    id: id,
                     update: $0
                 )
             }
@@ -498,16 +476,36 @@ private extension ComponentStore {
             )
         )
 
-        var storedExtensions: [StoredExtension] = []
+        let installedByID = Dictionary(
+            uniqueKeysWithValues: current.extensions.map { ($0.id, $0) }
+        )
+        let extensionStagingPath =
+            "components/.extensions-stage-\(UUID().uuidString)"
+        let extensionStagingURL = try resolveStorePath(extensionStagingPath)
+        try fileManager.createDirectory(
+            at: extensionStagingURL,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? fileManager.removeItem(at: extensionStagingURL) }
+
         for planned in plan.extensions {
             let extensionUpdate = planned.update
-            let extensionPath =
-                "components/extensions/\(planned.id)/\(extensionUpdate.version)"
+            let stagedPath = "\(extensionStagingPath)/\(planned.id)"
+            if installedByID[planned.id]?.version == extensionUpdate.version {
+                try fileManager.copyItem(
+                    at: try resolveStorePath(
+                        "components/extensions/\(planned.id)"
+                    ),
+                    to: try resolveStorePath(stagedPath)
+                )
+                continue
+            }
             try await installArchive(
                 release: extensionUpdate.release,
                 sha256: extensionUpdate.sha256,
                 baseURL: index.releaseBaseURL,
-                destinationPath: extensionPath,
+                destinationPath: stagedPath,
                 kind: .extensionComponent(
                     id: planned.id,
                     version: extensionUpdate.version
@@ -517,17 +515,19 @@ private extension ComponentStore {
                 session: session,
                 progress: progress
             )
-            storedExtensions.append(
-                StoredExtension(
-                    id: planned.id,
-                    version: extensionUpdate.version,
-                    enabled: planned.enabled,
-                    compatibility: extensionUpdate.compatibility,
-                    release: extensionUpdate.release,
-                    sha256: extensionUpdate.sha256,
-                    path: extensionPath
-                )
+        }
+        let stagedExtensions = try extensionSettingsSnapshot(
+            at: extensionStagingURL
+        )
+        let installedExtensions: [StoredExtension]
+        if stagedExtensions.extensions != current.extensions {
+            try replaceExtensionPackages(
+                with: extensionStagingURL,
+                settingsData: stagedExtensions.data
             )
+            installedExtensions = stagedExtensions.extensions
+        } else {
+            installedExtensions = current.extensions
         }
 
         let versions = ComponentVersionsLock(
@@ -547,14 +547,13 @@ private extension ComponentStore {
                 release: binding.release,
                 sha256: binding.sha256,
                 path: bindingPath
-            ),
-            extensions: storedExtensions
+            )
         )
         let componentsChanged =
             versions.chatgptApi != current.versions.chatgptApi
             || versions.binding != current.versions.binding
-            || versions.extensions != current.versions.extensions
-        if versions == current.versions {
+            || installedExtensions != current.extensions
+        if versions == current.versions && !componentsChanged {
             return current.bundledComponentsChanged
                 ? .installed(current)
                 : .upToDate(current)
@@ -570,6 +569,7 @@ private extension ComponentStore {
             rootURL: rootURL,
             versionsLockURL: versionsLockURL,
             versions: versions,
+            extensions: installedExtensions,
             bundledComponentsChanged: false
         )
         return componentsChanged || current.bundledComponentsChanged
@@ -673,7 +673,14 @@ private extension ComponentStore {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        try fileManager.moveItem(at: stagingURL, to: destinationURL)
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            _ = try fileManager.replaceItemAt(
+                destinationURL,
+                withItemAt: stagingURL
+            )
+        } else {
+            try fileManager.moveItem(at: stagingURL, to: destinationURL)
+        }
     }
 
     private func downloadArchive(
@@ -936,12 +943,6 @@ private struct BindingPackageManifest: Decodable {
     let chatgpt: String
     let chatgptApi: String
     let asarSha256: String
-}
-
-private struct ExtensionPackageManifest: Decodable {
-    let id: String
-    let version: String
-    let main: String
 }
 
 enum ComponentUpdateError: LocalizedError {

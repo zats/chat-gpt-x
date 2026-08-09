@@ -396,7 +396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 preparedComponents = result.preparedStore
                 launchRecoveryMonitor?.refreshApprovedApplication()
                 windowController?.showUpdateSummary(
-                    plan.summary(installed: result.preparedStore.versions)
+                    plan.summary(installed: result.preparedStore)
                 )
                 let installed: Bool
                 switch result {

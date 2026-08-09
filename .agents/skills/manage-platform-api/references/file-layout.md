@@ -46,10 +46,16 @@ GitHub Releases retain versioned contents. CI then verifies every release and pu
   components/
     chatgpt-api/<api-version>/
     bindings/<chatgpt-version>/<binding-version>/
-    extensions/<extension-id>/<extension-version>/
+    extensions/<extension-id>/   # active package.json and contents
   state/<extension-id>/         # extension-owned persistent state
-  versions-lock.json            # exact active component paths and order
-  settings.json                 # global extension enablement and load order
+  versions-lock.json            # exact active API and binding paths
+  settings.json                 # every installed extension id and its settings
 ```
 
-Extension **load order** is defined by the platform (settings), and is the ordering guarantee referenced by the multi-consumer API semantics (transformer chains and callback invocation order).
+`settings.json` has an object root. Its `extensions` object maps each installed
+ID to an extensible record such as `{ "enabled": true }`. The runtime preserves
+unknown fields in each record. It derives executable paths and package metadata
+from `components/extensions/<extension-id>/package.json`; neither
+`settings.json` nor `versions-lock.json` stores extension paths. Startup loads
+enabled extensions in lexical ID order. Registration order within each loaded
+extension remains the multi-consumer API ordering guarantee.

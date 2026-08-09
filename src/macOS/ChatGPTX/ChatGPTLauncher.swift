@@ -413,7 +413,7 @@ struct ChatGPTLauncher {
         } else {
             guard !localExtensions.isEmpty else { return nil }
             selectedExtensions = merge(
-                installedExtensions: componentStore.versions.extensions
+                installedExtensions: componentStore.extensions
                     .filter(\.enabled)
                     .map {
                     LaunchExtension(

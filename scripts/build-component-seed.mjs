@@ -167,17 +167,9 @@ function run() {
       const manifest = buildExtension(
         id,
         release.version,
-        path.join(extensionRoot, id, release.version),
+        path.join(extensionRoot, id),
       );
-      return {
-        id,
-        version: release.version,
-        enabled: true,
-        compatibility: manifest.compatibility,
-        release: release.release,
-        sha256: release.sha256,
-        path: componentPath("extensions", id, release.version),
-      };
+      return manifest;
     });
 
   const apiTestManifest = readJson(
@@ -208,12 +200,27 @@ function run() {
       sha256: bindingRelease.sha256,
       path: bindingPath,
     },
-    extensions,
   };
 
   writeFileSync(
     path.join(output, "versions-lock.json"),
     `${JSON.stringify(versions, null, 2)}\n`,
+  );
+  writeFileSync(
+    path.join(output, "settings.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        extensions: Object.fromEntries(
+          extensions.map((extension) => [
+            extension.id,
+            { enabled: true },
+          ]),
+        ),
+      },
+      null,
+      2,
+    )}\n`,
   );
 }
 
