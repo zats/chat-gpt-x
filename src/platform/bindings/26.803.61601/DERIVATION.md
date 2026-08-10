@@ -1,0 +1,200 @@
+# Derivation — bindings for 26.803.61601
+
+Pinned build:
+
+- App version: `26.803.61601`
+- app.asar SHA-256: `928129601e8b36eccba603114d6912352f2b13182f3a7d60b32166d0e81aafb5`
+- Electron: `151.0.7922.76`
+- Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.803.61601.zip`
+- Version-watcher reference: issue `#24`
+- Binding date: `2026-08-10`
+
+Research used an extracted copy of this exact stock build. Static candidates
+were confirmed by live imports and behavior in an isolated API-key profile.
+API-key authentication used the harness-defined reduced path, so
+profile-dependent stock affordances and account switching were unavailable and
+are not claimed. The stock app bundle and installed user state were never
+modified.
+
+## Verified module map
+
+The shared implementations are consolidated in
+`app-initial-BYOVlUBL.js`. Every path below exists in the extracted build.
+FormatJS and protocol anchors identified the candidates, current ESM import
+edges verified their ownership, and the packaged public and native suites
+verified their behavior and prop contracts through the injected bridge.
+
+| Capability | Current asset | Verified exports |
+| --- | --- | --- |
+| React, JSX, and React DOM | `app-initial-BYOVlUBL.js` | `Skt()` is React 19.2.7; `hkt()` supplies mutable `jsx` and `jsxs`; `OCt()` supplies `createRoot` |
+| Native menus | `app-initial-BYOVlUBL.js` | initializer `XU`; namespace `qU`; `qU.Item`, `qU.Separator`, `qU.SubmenuItem`, and `qU.FlyoutSubmenuItem`; `GU` dropdown root |
+| Native icons | `app-initial-BYOVlUBL.js` | initializer `Aht` and component `kht` for the menu chevron; initializer `Nm` and component `Mm` for the Profile person icon |
+| Native color picker | `app-initial-BYOVlUBL.js` | initializer `yc`; controlled picker `vc` |
+| Authentication context | `app-initial-BYOVlUBL.js` | initializer `I0` and auth-nonce hook `z0`; initializer `U0` and app-server registry hook `q0` |
+| Query and message contracts | `app-initial-BYOVlUBL.js` | initializer `pkt` and query-client hook `mkt`; initializer `dxt` and account-info query-key builder `cxt`; initializer `_xt` and message bus `vxt` |
+| Browser and navigation bridges | `app-initial-BYOVlUBL.js` | initializer `ndt` and direct open-in-browser dispatch `adt`; initializer `eut` and React Router navigation hook `iut` |
+| Plus icon | `plus-BgCJgEEs-7s9H-MS-.js` | initializer `t`; component `n` |
+| Palette icon | `palette-lzFbWMQk-B4SU6uJL.js` | initializer `n`; component `t` |
+| Persisted-thread overflow | `thread-overflow-menu-B-VGw6kp.js` | initializer `n`; component `t` |
+| ChatGPT sign-in | `chatgpt-desktop-auth-url-CzuzXpan.js` | initializer `r`; `o` starts `login-with-chatgpt`; `t` decorates the URL |
+
+The new build retained the prior semantic export aliases but changed every
+referenced hashed module path. Matching aliases were not accepted by name
+alone: their current definitions, callers, and live behavior were rechecked.
+
+Additional semantic anchors:
+
+- `codex.profileDropdown.*`, `codex.profileFooter.*`, and
+  `composer.mode.rateLimit.heading` locate the current profile implementation.
+  The native namespace is still `CH`, its Item is `_H`, and the Profile row
+  supplies `Q4` through public export `Mm`.
+- `threadHeader.*`, `sidebarElectron.*`, and `sidebar.threadProject.*` identify
+  native thread actions. Remote actions retain the co-located
+  `toggle-thread-pin`, `copy-session-id`, and `copy-deeplink` anchors.
+- `data-app-action-sidebar-thread-row`, scoped thread attributes, and
+  `data-thread-title-trigger` identify persisted sidebar rows.
+- `codex.projectAppearance.color.option.aria_label` and
+  `codex.remoteHostColorPicker.*` locate the app-owned color-circle and picker
+  precedents.
+- `login-route-CMdMLFHN.js` imports and uses `z0`, `mkt`,
+  `cxt("account-info")`, `adt`, and `iut` around the stock sign-in flow.
+- `codex-app-server-restart`, `codex-app-server-initialized`, and
+  `open-in-browser` verify the authentication message contracts.
+- The current application header is the `pJr` implementation rendered as
+  `header[data-pip-obstacle="app-shell-header"]`. Its five-region topology and
+  styles in `app-initial-AYgnwUwc.css` remain compatible with the appearance
+  API.
+- `app-DuLjgNkx.css` still sets `--cursor-interaction: default` in Electron.
+
+## menus.profile
+
+The binding wraps the shared JSX runtime, identifies the profile root by
+semantic props and FormatJS messages, captures native Item fibers, and renders
+transformed descriptors inside the original Radix root. Stateful native
+submenu owners and their children remain intact. Extension submenus reuse the
+app's own Item and SubmenuItem implementations.
+
+The profile root continues to supply current identity and avatar data.
+Transformers compose in registration order, recursively enforce extension
+namespaces and unique ids, preserve moved built-ins, and isolate failures. The
+Profile person component remains the exact `LeftIcon` of
+`codex.profileDropdown.profile`; the native visual assertion stays fail-closed
+for that artwork. API-key mode intentionally skipped the live profile menu and
+post-authentication checks.
+
+## menus.thread, threads, and threads.list
+
+The local overflow component continues to receive `conversationId`, `title`,
+and optional `cwd`. Remote menus expose the same identity through their action
+tree. Both are wrapped by one boundary, and remote titles come from the
+matching native sidebar row.
+
+Native leaf rows use `qU.Item`; native flyouts use
+`qU.FlyoutSubmenuItem` with the app's trigger and portal behavior. Dynamic
+`sidebar.threadProject.*` items remain captured and reinserted at their source
+position so the public model and rendered order agree.
+
+The API-key stock path exposed the local persisted-thread row and its current
+context-dependent actions. The native suite exercised navigation and
+restoration, effective action ordering, the Palette flyout, keyboard
+interaction, sidebar leading-view composition, and removal of the selected
+thread color. Native rows retain their original trees, focus behavior, and
+handlers.
+
+## Renderer bootstrap
+
+The main-world JSX hook is installed from ChatGPTX's external session preload
+before page scripts run. Native imports may complete on either side of the
+first React render, so the binding waits for the committed application root,
+reconciles it once through the native React DOM renderer, and resolves
+`__CGPTX_NATIVE_READY__` before extension activation.
+
+## authentication
+
+`startSignIn` uses the native `login-with-chatgpt` URL construction and direct
+`adt` open-in-browser dispatch. Successful sign-in retains the stock sequence:
+remove the exact `account-info` query and update the auth nonce under native
+providers.
+
+Credential replacement atomically updates `auth.json` under the resolved
+Codex home, dispatches `codex-app-server-restart` for host `local`, waits for
+`codex-app-server-initialized`, and then applies the query and nonce refresh.
+Public listeners preserve registration order and error isolation. These
+profile-dependent interactions were statically re-derived but not claimed by
+the API-key live run.
+
+## appearance
+
+Header registrations compose independently per property. The version-pinned
+selector paints the five semantic header regions, title, right-panel toolbar,
+and remote action surfaces. Content-panel controls remain app-owned, and the
+`electron-light` and `electron-dark` root classes select registered values.
+
+The controlled native color picker mounts through the app's React DOM renderer
+below the semantic header. Requests serialize, previews normalize to six-digit
+colors, outside click or Enter confirms, and Escape cancels. The API-key native
+suite verified header painting, theme switching, the native picker, and cursor
+parity with a current built-in Item.
+
+## Validation commands and results
+
+Extraction and exact-build pinning:
+
+```bash
+.agents/skills/manage-platform-api/scripts/extract-app.sh \
+  --app "$CHATGPT_APP_PATH" \
+  --expect-version 26.803.61601
+shasum -a 256 "$CHATGPT_APP_PATH/Contents/Resources/app.asar"
+```
+
+The exact stock app reported version `26.803.61601`, Electron
+`151.0.7922.76`, and the pinned SHA-256 above. The hash was rechecked after the
+live run.
+
+The deterministic completion command passed one opaque API-key authentication
+path directly to the harness:
+
+```bash
+CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
+  scripts/run-local-ci.sh "$PRIMARY_AUTH"
+```
+
+Results in API-key mode:
+
+- Extension and shared-utility unit tests: `23/23`.
+- Unchanged stable public API assertions applicable to this mode: `20/20`.
+- Current native UI assertions applicable to this mode: `35/35`.
+- Shipped-extension composition with the API suite enabled: passed.
+- Release build and strict signature verification: passed.
+- Packaged binding and bridge files matched source.
+- Profile menu, ChatGPT-account switching, and profile-dependent
+  authentication assertions were disabled by the harness and are not claimed.
+
+Only the private suite's version and compatibility manifest changed so the
+launcher could admit it on the new app version; its deterministic test source
+is unchanged.
+
+## Failure signatures
+
+- Native installation failure: a current hashed path, initializer, or export
+  changed.
+- Empty profile model: profile semantic props, Item fibers, or FormatJS ids
+  changed.
+- Incorrect Profile artwork: the Profile row's `LeftIcon` initializer or
+  exported component changed.
+- Visible profile chevron without expansion: the SubmenuItem owner boundary or
+  trigger/children contract changed.
+- Empty or reordered thread model: the local overflow export, remote action
+  anchors, menu root, thread message namespaces, or source-position
+  reinsertion changed.
+- Native UI navigation timeout: sidebar-row kind/id attributes or current
+  thread synchronization changed.
+- Missing thread-list marker: sidebar-row or title-trigger attributes changed.
+- Authentication startup failure: sign-in initializer, URL decoration, browser
+  dispatch, query key, message bus, or provider boundary changed.
+- Missing or unpainted header: the `app-shell-header` locator, its five-region
+  topology, remote surfaces, or theme root classes changed.
+- Picker mismatch: the header anchor, React DOM root, or native picker export
+  changed.
+- Native readiness failure: preload bootstrap, current native imports,
+  application-root discovery, or reconciliation changed.
