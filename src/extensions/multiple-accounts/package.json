@@ -1,11 +1,11 @@
 {
   "id": "multiple-accounts",
   "name": "Multiple Accounts",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Adds native profile, add-account, and saved-account actions beneath the profile identity row.",
   "main": "contents/main.js",
   "compatibility": {
-    "chatgpt": ">=26.715.52143 <=26.803.61601",
+    "chatgpt": ">=26.715.52143 <=26.803.81509",
     "chatgptApi": "^1.0.0"
   },
   "capabilities": [
