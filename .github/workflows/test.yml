@@ -33,6 +33,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - name: Test Codex auth refresher
+        run: |
+          pnpm --dir backend/auth-refresher install --frozen-lockfile
+          pnpm --dir backend/auth-refresher test
+          pnpm --dir backend/auth-refresher typecheck
       - name: Validate pinned ChatGPT manifest
         run: node scripts/validate-pinned-chatgpt.mjs
       - name: Validate scripts and extension launch configuration

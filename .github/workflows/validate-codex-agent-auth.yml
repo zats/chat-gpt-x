@@ -1,0 +1,50 @@
+name: Validate Codex agent authentication
+
+on:
+  push:
+    branches:
+      - codex/auth-refresher
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    environment: codex-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Materialize access-only authentication
+        env:
+          AGENT_AUTH_JSON: ${{ secrets.CODEX_AGENT_AUTH_JSON }}
+        run: |
+          [[ -n "$AGENT_AUTH_JSON" ]]
+          agent_home="$RUNNER_TEMP/codex-agent-home"
+          mkdir -p "$agent_home"
+          chmod 700 "$agent_home"
+          printf '%s' "$AGENT_AUTH_JSON" > "$agent_home/auth.json"
+          chmod 600 "$agent_home/auth.json"
+          jq -e '
+            .auth_mode == "chatgptAuthTokens" and
+            (.tokens.access_token | type == "string" and length > 0) and
+            .tokens.id_token == .tokens.access_token and
+            .tokens.refresh_token == "" and
+            (.tokens.account_id | type == "string" and length > 0)
+          ' "$agent_home/auth.json" >/dev/null
+          echo "CODEX_HOME=$agent_home" >> "$GITHUB_ENV"
+      - name: Run Codex with the refreshed token
+        run: |
+          npm install --global @openai/codex@0.147.0
+          codex login status
+          codex exec \
+            --skip-git-repo-check \
+            --sandbox read-only \
+            --output-last-message "$RUNNER_TEMP/codex-result.txt" \
+            "Reply with exactly TOKEN_OK."
+          grep -Fx TOKEN_OK "$RUNNER_TEMP/codex-result.txt"
+      - name: Remove authentication files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/codex-agent-home"
