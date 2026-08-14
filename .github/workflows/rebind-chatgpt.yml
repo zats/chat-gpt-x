@@ -220,7 +220,6 @@ jobs:
       base-sha: ${{ steps.base.outputs.sha }}
       codex-version: ${{ steps.codex.outputs.version }}
       patch-artifact: ${{ steps.patch.outputs.artifact-name }}
-      auth-handoff-artifact: ${{ steps.authentication-handoff.outputs.artifact-name }}
       app-validation-error: ${{ steps.chatgpt.outputs.validation-error }}
     steps:
       - uses: actions/checkout@v4
@@ -349,7 +348,13 @@ jobs:
               "$auth_root" \
               "$candidate_root"
           )"
-          jq -e '.tokens | type == "object" and has("access_token") and has("refresh_token")' \
+          jq -e '
+            .auth_mode == "chatgptAuthTokens" and
+            (.tokens.access_token | type == "string" and length > 0) and
+            .tokens.id_token == .tokens.access_token and
+            .tokens.refresh_token == "" and
+            (.tokens.account_id | type == "string" and length > 0)
+          ' \
             "$agent_home/auth.json" >/dev/null
           cp scripts/auth-handoff.mjs "$RUNNER_TEMP/trusted-auth-handoff.mjs"
           : > "$diagnostics_root/agent.jsonl"
@@ -512,23 +517,18 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Encrypt authentication handoff
-        if: always() && steps.authentication.outcome == 'success'
+      - name: Encrypt CI authentication handoff
+        if: >-
+          always() &&
+          steps.authentication.outcome == 'success' &&
+          steps.authentication.outputs.auth-mode == 'chatgpt'
         id: authentication-handoff
         env:
-          AGENT_HOME: ${{ steps.authentication.outputs.agent-home }}
-          AUTH_MODE: ${{ steps.authentication.outputs.auth-mode }}
           CANDIDATE_ROOT: ${{ steps.authentication.outputs.candidate-root }}
         run: |
-          cp "$AGENT_HOME/auth.json" "$CANDIDATE_ROOT/agent.json"
-          chmod 600 "$CANDIDATE_ROOT/agent.json"
           encrypted_root="$RUNNER_TEMP/chatgptx-auth-handoff"
-          labels=(agent)
-          artifact_name="rebind-agent-auth-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          if [[ "$AUTH_MODE" == "chatgpt" ]]; then
-            labels=(primary secondary agent)
-            artifact_name="ci-auth-refresh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          fi
+          labels=(primary secondary)
+          artifact_name="ci-auth-refresh-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           node "$RUNNER_TEMP/trusted-auth-handoff.mjs" \
             encrypt \
             .github/ci-auth-refresh-public.pem \
@@ -608,7 +608,7 @@ jobs:
   open-pull-request:
     needs: generate
     runs-on: ubuntu-latest
-    environment: ci-auth-refresh
+    environment: codex-agent
     permissions:
       contents: write
       pull-requests: write
@@ -680,13 +680,6 @@ jobs:
             > "$RUNNER_TEMP/rebase-index-before.txt"
           echo "conflicted=true" >> "$GITHUB_OUTPUT"
 
-      - name: Download authentication handoff
-        if: steps.binding.outputs.conflicted == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.generate.outputs.auth-handoff-artifact }}
-          path: ${{ runner.temp }}/rebase-auth-handoff
-
       - name: Install rebase resolver Codex CLI
         if: steps.binding.outputs.conflicted == 'true'
         env:
@@ -705,28 +698,24 @@ jobs:
         if: steps.binding.outputs.conflicted == 'true'
         id: resolver-authentication
         env:
-          HANDOFF_PRIVATE_KEY: ${{ secrets.CHATGPTX_AUTH_HANDOFF_PRIVATE_KEY }}
+          AGENT_AUTH_JSON: ${{ secrets.CODEX_AGENT_AUTH_JSON }}
         run: |
-          [[ -n "$HANDOFF_PRIVATE_KEY" ]] || {
-            echo "CHATGPTX_AUTH_HANDOFF_PRIVATE_KEY is required." >&2
+          [[ -n "$AGENT_AUTH_JSON" ]] || {
+            echo "CODEX_AGENT_AUTH_JSON is required." >&2
             exit 1
           }
-          key_path="$RUNNER_TEMP/rebase-auth-handoff-private.pem"
-          decrypted_root="$RUNNER_TEMP/rebase-auth-decrypted"
           resolver_home="$RUNNER_TEMP/codex-rebase-home"
-          printf '%s' "$HANDOFF_PRIVATE_KEY" > "$key_path"
-          chmod 600 "$key_path"
-          node scripts/auth-handoff.mjs \
-            decrypt \
-            "$key_path" \
-            "$RUNNER_TEMP/rebase-auth-handoff" \
-            "$decrypted_root" \
-            agent
           mkdir -p "$resolver_home"
           chmod 700 "$resolver_home"
-          install -m 600 "$decrypted_root/agent.json" "$resolver_home/auth.json"
-          jq -e \
-            '.tokens | type == "object" and has("access_token") and has("refresh_token")' \
+          printf '%s' "$AGENT_AUTH_JSON" > "$resolver_home/auth.json"
+          chmod 600 "$resolver_home/auth.json"
+          jq -e '
+            .auth_mode == "chatgptAuthTokens" and
+            (.tokens.access_token | type == "string" and length > 0) and
+            .tokens.id_token == .tokens.access_token and
+            .tokens.refresh_token == "" and
+            (.tokens.account_id | type == "string" and length > 0)
+          ' \
             "$resolver_home/auth.json" >/dev/null
           echo "home=$resolver_home" >> "$GITHUB_OUTPUT"
           CODEX_HOME="$resolver_home" codex login status
@@ -930,9 +919,6 @@ jobs:
           rm -rf
           "$RUNNER_TEMP/codex-rebase-home"
           "$RUNNER_TEMP/codex-npm"
-          "$RUNNER_TEMP/rebase-auth-handoff"
-          "$RUNNER_TEMP/rebase-auth-handoff-private.pem"
-          "$RUNNER_TEMP/rebase-auth-decrypted"
           "$RUNNER_TEMP/rebase-resolver-prompt.md"
           "$RUNNER_TEMP/rebase-resolver.jsonl"
           "$RUNNER_TEMP/rebase-resolver-final.txt"
