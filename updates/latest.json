@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generation": 24,
+  "generation": 25,
   "releaseBaseURL": "https://github.com/zats/chat-gpt-x/releases/download",
   "chatgptApis": {
     "1.0.0": {
@@ -110,26 +110,32 @@
       "chatgptApi": "1.0.4",
       "release": "binding-26.814.41407-v1.0.0",
       "sha256": "049a30b2e282031b3bbe2db1d59ea78f82defe047d26783a512a42e490ec7c6c"
+    },
+    "26.814.41957": {
+      "version": "1.0.0",
+      "chatgptApi": "1.0.4",
+      "release": "binding-26.814.41957-v1.0.0",
+      "sha256": "907fa3a6641a02d698e46ea1885ce7b12060e810aebe4700723a584aa5aa8677"
     }
   },
   "extensions": {
     "multiple-accounts": {
-      "version": "0.1.10",
+      "version": "0.1.11",
       "compatibility": {
-        "chatgpt": ">=26.715.52143 <=26.814.41407",
+        "chatgpt": ">=26.715.52143 <=26.814.41957",
         "chatgptApi": "^1.0.0"
       },
-      "release": "extension-multiple-accounts-v0.1.10",
-      "sha256": "1ea179a15a82afba1562c742b62dbf87cd7421afdcfb32ac2fdb8a51e161ce1e"
+      "release": "extension-multiple-accounts-v0.1.11",
+      "sha256": "b723ee6ff766550643d45a0ea7323f84fa090b061baf3fef552dc1a76f0cb995"
     },
     "thread-colors": {
-      "version": "0.1.10",
+      "version": "0.1.11",
       "compatibility": {
-        "chatgpt": ">=26.715.52143 <=26.814.41407",
+        "chatgpt": ">=26.715.52143 <=26.814.41957",
         "chatgptApi": "^1.0.0"
       },
-      "release": "extension-thread-colors-v0.1.10",
-      "sha256": "e8ac3462d84da579cd129c8e0b9d4e9a9b8da7318dcf15b2406ba29d33e6d662"
+      "release": "extension-thread-colors-v0.1.11",
+      "sha256": "c6e6d09cf874348fc9c445515d0e0198567332c4083676250346c0cb85b9dde9"
     }
   }
 }
