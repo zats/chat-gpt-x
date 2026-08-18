@@ -97,12 +97,12 @@ Use a throwaway `--user-data-dir` and the supplied authentication mode as descri
 Validate in this order:
 
 1. Reproduce any discovered behavioral mismatch with a failing version-specific `ui-test.mjs` check.
-2. Build the packaged launcher and run its executable with `--test-api`; require every unchanged public `api-test-suite` test to pass. This mode restarts ChatGPT with only the suite enabled and does not modify persistent extension settings.
+2. Build `api-test-suite`, then run the packaged launcher with `--test-api --extension <absolute-api-test-suite-package>`; require every unchanged test to pass. This mode restarts ChatGPT with only the explicit suite enabled and does not modify persistent extension settings.
 3. Run the new version's native UI suite; require every check to pass.
 4. Run the API test extension together with representative shipped extensions to catch composition failures.
 5. Disable the test extension, then verify the normal shipped-extension flow.
 6. When producing a launcher artifact, build Release, verify its signature, compare the packaged binding files with source, and repeat the critical interaction through the packaged bridge.
-7. After the binding passes, update `src/platform/bindings/manifest.json` to the target version and exact Sparkle enclosure URL when needed. In `new` mode, expand `compatibility.chatgpt` and increment the version of every public extension validated on the new build; keep its source unchanged. In `correction` mode, keep all extension manifests unchanged. Increment `updates/latest.json` generation once, preserve its existing schema-v2 maps, and add or replace the target binding entry. Set changed `sha256` values to 64 zeroes, then run `scripts/refresh-update-index-hashes.sh <base-sha>` and `node scripts/validate-pinned-chatgpt.mjs`.
+7. After the binding passes, update `src/platform/bindings/manifest.json` to the target version and exact Sparkle enclosure URL when needed. Keep all extension manifests unchanged. Increment `updates/latest.json` generation once, preserve its schema-3 component history, and add or replace the exact target binding entry, including `asarSha256`. Set the changed archive `sha256` to 64 zeroes, then run `scripts/refresh-update-index-hashes.sh <base-sha>` and `node scripts/validate-pinned-chatgpt.mjs`.
 
 Treat a result file as current only when the bridge log from the test PID and timestamp records that exact result. Missing, partial, stale, or unauthenticated results fail the run. Never weaken an assertion to obtain green tests.
 
@@ -127,10 +127,10 @@ Finish only when all conditions hold:
 - In `new` mode, the new directory and manifest declare binding version `1.0.0`. In `correction` mode, the target manifest increments its prior patch version by exactly one.
 - The target manifest matches the tested ChatGPT version, API version, and app.asar.
 - The current bindings manifest points to the target version and exact download URL, and its validator passes.
-- `updates/latest.json` preserves schema v2, identifies the target binding release by ChatGPT version, contains the deterministic archive hash, and the component release plan passes.
+- `updates/latest.json` preserves schema 3, identifies the target binding release and exact app.asar hash by ChatGPT version, contains the deterministic archive hash, and the component release plan passes.
 - Every referenced current-build module exists and its export was verified.
 - The public API and extension source are unchanged. Non-target binding directories are unchanged.
-- In `new` mode, every validated extension manifest includes the new ChatGPT version and has an incremented version. In `correction` mode, all extension manifests are unchanged.
+- All extension manifests are unchanged. Extension compatibility depends on the ChatGPTX API version, not the ChatGPT app build.
 - The unchanged public suite passes against the live app.
 - The target native UI suite passes, including every stock interactive affordance available in the selected authentication mode.
 - Representative shipped extensions work together.

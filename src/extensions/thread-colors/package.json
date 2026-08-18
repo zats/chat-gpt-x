@@ -1,11 +1,10 @@
 {
   "id": "thread-colors",
   "name": "Thread Colors",
-  "version": "0.1.7",
+  "version": "0.1.11",
   "description": "Adds native thread-header color choices to thread overflow menus.",
   "main": "contents/main.js",
   "compatibility": {
-    "chatgpt": ">=26.715.52143 <=26.803.81509",
     "chatgptApi": "^1.0.0"
   },
   "capabilities": [

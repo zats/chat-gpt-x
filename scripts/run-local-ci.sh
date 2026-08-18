@@ -294,11 +294,16 @@ run_logged release-build env \
 
 LAUNCHER_BIN="$RELEASE_ROOT/ChatGPTX.app/Contents/MacOS/ChatGPTX"
 
-run_logged local-api-test-build env \
+run_logged local-extension-build env \
   HOME="$TEST_HOME" \
   CODEX_HOME="$CODEX_ROOT" \
   CHATGPTX_EXTENSION_BUILD_DIR="$WORK_ROOT/extension-builds" \
-  "$REPO_ROOT/src/extensions/build.sh" api-test-suite
+  "$REPO_ROOT/src/extensions/build.sh"
+
+run_logged local-component-store node \
+  "$REPO_ROOT/scripts/stage-local-component-store.mjs" \
+  "$CODEX_ROOT/extensions" \
+  "$WORK_ROOT/extension-builds"
 
 LOCAL_API_TEST_ROOT="$WORK_ROOT/extension-builds/api-test-suite"
 MULTIPLE_ACCOUNTS_ROOT="$CODEX_ROOT/extensions/state/multiple-accounts"
@@ -360,20 +365,23 @@ launch_app() {
     if [[ "$mode" == "composition" ]]; then
       launch_configuration="$WORK_ROOT/$name-launch.json"
       jq \
-        -n \
         --arg root "$CODEX_ROOT/extensions" \
         --arg apiTest "$LOCAL_API_TEST_ROOT/contents/main.js" \
+        --slurpfile versions "$versions_lock" \
         --slurpfile settings "$CODEX_ROOT/extensions/settings.json" \
+        -n \
         '{
           schemaVersion: 1,
           extensions: (
             [
-              $settings[0].extensions
-              | to_entries[]
-              | select(.value.enabled)
+              $versions[0].extensions[]
+              | select(
+                  .required
+                  or $settings[0].extensions[.id].enabled
+                )
               | {
-                  id: .key,
-                  path: ($root + "/components/extensions/" + .key + "/contents/main.js")
+                  id,
+                  path: ($root + "/" + .path + "/contents/main.js")
                 }
             ]
             | sort_by(.id)
@@ -653,22 +661,10 @@ stop_app
 
 progress "verifying release artifact"
 codesign --verify --deep --strict --verbose=2 "$RELEASE_ROOT/ChatGPTX.app" >"$LOG_ROOT/codesign.log" 2>&1
-SEED_ROOT="$RELEASE_ROOT/ChatGPTX.app/Contents/Resources/component-seed"
-SEED_VERSIONS_LOCK="$SEED_ROOT/versions-lock.json"
-SEED_API_PATH="$(jq -er '.chatgptApi.path' "$SEED_VERSIONS_LOCK")"
-SEED_BINDING_PATH="$(jq -er '.binding.path' "$SEED_VERSIONS_LOCK")"
-diff -rq "$BINDING_DIR" "$SEED_ROOT/$SEED_BINDING_PATH" >"$LOG_ROOT/binding-diff.log"
-diff -q "$REPO_ROOT/src/platform/bridge/main.cjs" "$SEED_ROOT/$SEED_API_PATH/bridge/main.cjs" >"$LOG_ROOT/bridge-diff.log"
-jq -e 'has("extensions") | not' "$SEED_VERSIONS_LOCK" >"$LOG_ROOT/seed-lock.log"
-jq -e \
-  --slurpfile index "$REPO_ROOT/updates/latest.json" \
-  '(.extensions | keys | sort) == ($index[0].extensions | keys | sort)
-   and ([.extensions[].enabled] | all)' \
-  "$SEED_ROOT/settings.json" >"$LOG_ROOT/seed-settings.log"
-while IFS= read -r extension_id; do
-  test -f "$SEED_ROOT/components/extensions/$extension_id/package.json"
-  test -f "$SEED_ROOT/components/extensions/$extension_id/contents/main.js"
-done < <(jq -r '.extensions | keys[]' "$REPO_ROOT/updates/latest.json")
+[[ ! -e "$RELEASE_ROOT/ChatGPTX.app/Contents/Resources/component-seed" ]] || {
+  echo "release artifact contains bundled platform components" >&2
+  exit 1
+}
 progress "verified release artifact"
 
 UNIT_PASSED="$(awk '/[0-9]+ pass/{passed=$1} END{print passed}' "$LOG_ROOT/unit-tests.log")"
@@ -684,4 +680,4 @@ elif [[ "$USE_CURRENT_ACCOUNTS" == "1" ]]; then
 else
   echo "multiple-accounts: switched to burner 2 and restored burner 1"
 fi
-echo "release: built, signed, and source-matched"
+echo "release: built, signed, and contains no bundled platform components"

@@ -4,9 +4,14 @@
  * This intentionally inspects version-specific renderer state. The stable
  * api-test-suite remains limited to src/platform/types.d.ts.
  *
- * Usage: node src/platform/bindings/26.715.70719/ui-test.mjs [port]
+ * Usage: node src/platform/bindings/26.814.41407/ui-test.mjs [port]
  *   [--expect-native-profile-callback-missing]
  *   [--alternate-auth=/path/to/auth.json]
+ *   [--select-thread=<thread-id>]
+ *   [--select-thread-kind=remote]
+ *   [--public-api-only]
+ *
+ * Set CHATGPTX_TEST_NO_PROFILE=1 for API-key authentication.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -15,18 +20,32 @@ const port = process.argv[2] ?? '9222';
 const expectNativeProfileCallbackMissing = process.argv.includes(
   '--expect-native-profile-callback-missing',
 );
+const publicAPIOnly = process.argv.includes('--public-api-only');
+const noProfile = process.env.CHATGPTX_TEST_NO_PROFILE === '1';
 const alternateAuthPath = process.argv
   .find((argument) => argument.startsWith('--alternate-auth='))
   ?.slice('--alternate-auth='.length);
 const alternateAuthJson = alternateAuthPath
   ? await readFile(alternateAuthPath, 'utf8')
   : undefined;
+if (noProfile && alternateAuthJson) {
+  throw new Error('alternate authentication is unavailable without profiles');
+}
+const selectThreadId = process.argv
+  .find((argument) => argument.startsWith('--select-thread='))
+  ?.slice('--select-thread='.length);
+const selectThreadKind = process.argv
+  .find((argument) => argument.startsWith('--select-thread-kind='))
+  ?.slice('--select-thread-kind='.length);
+if (selectThreadKind && selectThreadKind !== 'remote') {
+  throw new Error('select-thread-kind must be remote');
+}
 const targets = await fetch('http://127.0.0.1:' + port + '/json').then((response) =>
   response.json(),
 );
-const page =
-  targets.find((target) => target.type === 'page' && target.url.startsWith('app:')) ??
-  targets.find((target) => target.type === 'page');
+const page = targets.find(
+  (target) => target.type === 'page' && target.url === 'app://-/index.html',
+);
 
 if (!page) throw new Error('No ChatGPT page target on CDP port ' + port);
 
@@ -80,6 +99,7 @@ async function waitFor(expression, timeoutMs = 20000) {
 async function validateUi(
   expectMissingProfileCallback,
   alternateAuthentication,
+  noProfile,
 ) {
   const checks = [];
   const markProgress = (value) => {
@@ -102,7 +122,21 @@ async function validateUi(
       if (condition()) return;
       await sleep(50);
     }
-    throw new Error('Timed out waiting for native UI state');
+    throw new Error(
+      `Timed out waiting for native UI state during ${globalThis.__CGPTX_UI_TEST_PROGRESS__}: ${condition.toString().replace(/\s+/g, ' ')}`,
+    );
+  };
+  const waitForNativeAccount = async (email, timeoutMs = 20000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const account = await Promise.race([
+        globalThis.__CGPTX_HOST__._debug.nativeAccount().catch(() => undefined),
+        sleep(1000).then(() => undefined),
+      ]);
+      if (account?.account?.email === email) return account;
+      await sleep(100);
+    }
+    throw new Error(`Timed out waiting for native account ${email}`);
   };
   const compositeCssColors = (...colors) => {
     const canvas = document.createElement('canvas');
@@ -173,17 +207,42 @@ async function validateUi(
     );
   };
   const openThreadMenu = async () => {
-    const trigger = Array.from(document.querySelectorAll('button')).find(
-      (button) => button.getAttribute('aria-label') === 'Chat actions',
+    const findTrigger = () =>
+      Array.from(document.querySelectorAll('button')).find(
+        (button) =>
+          button.getAttribute('aria-label') === 'Chat actions' &&
+          button.getBoundingClientRect().height > 0,
+      );
+    await waitUntil(
+      () =>
+        typeof findTrigger()?.getAttribute('data-cgptx-thread-id') === 'string',
     );
+    const trigger = findTrigger();
     if (!trigger) throw new Error('Thread menu trigger missing');
-    activateButton(trigger);
-    await sleep(350);
-    return Array.from(document.querySelectorAll('[role="menu"]')).find((menu) =>
-      Array.from(menu.children).some((child) =>
-        child.hasAttribute('data-cgptx-thread-id'),
-      ),
+    for (const type of ['pointerdown', 'pointerup']) {
+      trigger.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          isPrimary: true,
+          button: 0,
+          pointerType: 'mouse',
+        }),
+      );
+    }
+    let menu;
+    await waitUntil(
+      () => {
+        menu = Array.from(document.querySelectorAll('[role="menu"]')).find(
+          (candidate) =>
+            Array.from(candidate.children).some((child) =>
+              child.hasAttribute('data-cgptx-thread-id'),
+            ),
+        );
+        return Boolean(menu);
+      },
     );
+    return menu;
   };
   const openProfile = async () => {
     const trigger = Array.from(document.querySelectorAll('button')).find((button) =>
@@ -237,14 +296,19 @@ async function validateUi(
   newChat.click();
   await waitUntil(() => threadsApi.getCurrent() === undefined);
   const clearedThread = threadsApi.getCurrent();
-  const originalThreadRow = Array.from(
-    document.querySelectorAll('[data-app-action-sidebar-thread-row]'),
-  ).find((row) =>
-    row
-      .getAttribute('data-app-action-sidebar-thread-id')
-      ?.endsWith(originalThread.threadId),
-  );
+  const findThreadRow = (threadId) =>
+    Array.from(
+      document.querySelectorAll('[data-app-action-sidebar-thread-row]'),
+    ).find((row) =>
+      row
+        .getAttribute('data-app-action-sidebar-thread-id')
+        ?.endsWith(threadId),
+    );
+  const originalThreadRow = findThreadRow(originalThread.threadId);
   if (!originalThreadRow) throw new Error('Original thread row missing');
+  const originalThreadKind = originalThreadRow.getAttribute(
+    'data-app-action-sidebar-thread-kind',
+  );
   originalThreadRow.click();
   await waitUntil(
     () => threadsApi.getCurrent()?.threadId === originalThread.threadId,
@@ -260,29 +324,30 @@ async function validateUi(
     { currentThreadDeliveries },
   );
   await waitUntil(() =>
-    Boolean(
-      originalThreadRow.querySelector(
-        '[data-api-test-suite-thread-list-view]',
-      ),
-    ),
+    Boolean(document.querySelector('[data-api-test-suite-thread-list-view]')),
   );
-  const threadListView = originalThreadRow.querySelector(
+  const threadListView = document.querySelector(
     '[data-api-test-suite-thread-list-view]',
+  );
+  const threadListFixtureRow = threadListView?.closest(
+    '[data-app-action-sidebar-thread-row]',
   );
   const threadListViewHost = threadListView?.closest(
     '[data-cgptx-thread-list-leading-views]',
   );
-  const threadTitle = originalThreadRow.querySelector('[data-thread-title]');
-  const archiveButton = Array.from(originalThreadRow.querySelectorAll('button')).find(
+  const threadTitle = threadListFixtureRow?.querySelector('[data-thread-title]');
+  const archiveButton = Array.from(threadListFixtureRow?.querySelectorAll('button') ?? []).find(
     (button) => button.getAttribute('aria-label') === 'Archive chat',
   );
-  const rowRect = originalThreadRow.getBoundingClientRect();
+  const rowRect = threadListFixtureRow?.getBoundingClientRect();
   const viewRect = threadListView?.getBoundingClientRect();
   const hostRect = threadListViewHost?.getBoundingClientRect();
   const titleRect = threadTitle?.getBoundingClientRect();
   const archiveRect = archiveButton?.getBoundingClientRect();
-  const leadingInset = hostRect ? hostRect.left - rowRect.left : undefined;
-  const trailingInset = archiveRect ? rowRect.right - archiveRect.right : undefined;
+  const leadingInset =
+    hostRect && rowRect ? hostRect.left - rowRect.left : undefined;
+  const trailingInset =
+    archiveRect && rowRect ? rowRect.right - archiveRect.right : undefined;
   const titleGap = hostRect && titleRect ? titleRect.left - hostRect.right : undefined;
   const mountedViewRects = Array.from(
     threadListViewHost?.querySelectorAll(
@@ -297,10 +362,12 @@ async function validateUi(
   if (threadListViewHost) threadListViewHost.style.removeProperty('display');
   check(
     Boolean(
-      threadListView &&
+        threadListView &&
+        threadListFixtureRow &&
         threadListViewHost &&
+        rowRect &&
         viewRect?.width === 3 &&
-        viewRect?.height === 16 &&
+        viewRect?.height === 14 &&
         hostRect &&
         titleRect &&
         archiveRect &&
@@ -314,7 +381,7 @@ async function validateUi(
     ),
     'thread-list extension view hangs at the leading edge without moving the title',
     {
-      rowRect: rowRect.toJSON(),
+      rowRect: rowRect?.toJSON(),
       viewRect: viewRect?.toJSON(),
       hostRect: hostRect?.toJSON(),
       titleRect: titleRect?.toJSON(),
@@ -325,10 +392,17 @@ async function validateUi(
       mountedViewRects: mountedViewRects.map((rect) => rect.toJSON()),
       titleLeftWithView,
       titleLeftWithoutView,
-      rowActive: originalThreadRow.getAttribute(
+      rowActive: threadListFixtureRow?.getAttribute(
         'data-app-action-sidebar-thread-active',
       ),
     },
+  );
+  globalThis.__CGPTX_REMOVE_THREAD_LIST_VISUAL_FIXTURE__();
+  await waitUntil(
+    () =>
+      threadListFixtureRow?.querySelector(
+        '[data-api-test-suite-thread-list-view]',
+      ) === null,
   );
   currentThreadRegistration.dispose();
   markProgress('current-thread');
@@ -349,12 +423,27 @@ async function validateUi(
       foreground: 'rgb(255, 255, 255)',
     },
   };
-  const appHeader = document.querySelector('header.app-header-tint');
+  const appHeader = document.querySelector(
+    'header[data-pip-obstacle="app-shell-header"]',
+  );
   if (!appHeader) throw new Error('Thread header missing');
+  const findThreadHeaderTitle = () =>
+    Array.from(appHeader.querySelectorAll('*')).find(
+      (element) =>
+        element.textContent?.trim() === originalThread.title &&
+        !Array.from(element.children).some(
+          (child) => child.textContent?.trim() === originalThread.title,
+        ),
+    );
+  let threadHeaderTitle;
+  await waitUntil(() => {
+    threadHeaderTitle = findThreadHeaderTitle();
+    return Boolean(threadHeaderTitle);
+  });
   const headerToggle = (label) =>
     Array.from(
       document.querySelectorAll(
-        `header.app-header-tint button[aria-label="${label}"]`,
+        `header[data-pip-obstacle="app-shell-header"] button[aria-label="${label}"]`,
       ),
     ).find((button) => button.getBoundingClientRect().x > innerWidth / 2);
   const toggleSidePanel = headerToggle('Toggle side panel');
@@ -413,11 +502,27 @@ async function validateUi(
     },
   });
   await sleep(50);
+  await waitUntil(() => {
+    threadHeaderTitle = findThreadHeaderTitle();
+    return Boolean(threadHeaderTitle?.isConnected);
+  });
   const initialHeaderColors = headerColors[originalHeaderTheme];
   const collapsedPanelButtons = [
     headerToggle('Toggle bottom panel'),
     headerToggle('Toggle side panel'),
   ];
+  const headerSurfaceButtons = Array.from(
+    appHeader.querySelectorAll('button[class~="bg-token-bg-fog"]'),
+  ).filter((button) => button.getBoundingClientRect().width > 0);
+  const headerSurfaceButtonStates = headerSurfaceButtons.map((button) => {
+    const style = getComputedStyle(button);
+    return {
+      label: button.textContent?.trim(),
+      background: style.backgroundColor,
+      color: style.color,
+      contrast: contrastRatio(style.color, style.backgroundColor),
+    };
+  });
   const collapsedPanelButtonStates = collapsedPanelButtons.map((button) => {
     const rect = button.getBoundingClientRect();
     const style = getComputedStyle(button);
@@ -438,6 +543,14 @@ async function validateUi(
       !document.querySelector('[data-app-shell-focus-area="bottom-panel"]') &&
       getComputedStyle(collapsedHeaderControls).backgroundColor ===
         initialHeaderColors.background &&
+      getComputedStyle(threadHeaderTitle).color ===
+        initialHeaderColors.foreground &&
+      (originalThreadKind !== 'remote' ||
+        (headerSurfaceButtonStates.length > 0 &&
+          headerSurfaceButtonStates.every(
+            ({ background, contrast }) =>
+              background !== 'rgba(255, 255, 255, 0.96)' && contrast >= 3,
+          ))) &&
       collapsedPanelButtonStates.every(
         ({ visible, hit, contrast }) => visible && hit && contrast >= 3,
       ),
@@ -445,6 +558,9 @@ async function validateUi(
     {
       background: getComputedStyle(collapsedHeaderControls).backgroundColor,
       expectedBackground: initialHeaderColors.background,
+      titleColor: getComputedStyle(threadHeaderTitle).color,
+      expectedTitleColor: initialHeaderColors.foreground,
+      headerSurfaceButtonStates,
       collapsedPanelButtonStates,
     },
   );
@@ -472,17 +588,27 @@ async function validateUi(
     const browserAction = Array.from(document.querySelectorAll('button')).find(
       (button) => button.textContent?.trim().startsWith('Browser'),
     );
-    if (!browserAction) throw new Error('Browser side-panel action missing');
-    activateButton(browserAction);
-    await sleep(500);
-    sidePanel = document.querySelector(
-      'aside[data-app-shell-focus-area="right-panel"]',
-    );
-    tabToolbar = sidePanel?.querySelector(
-      '[data-app-shell-tabs="true"] > .h-toolbar',
-    );
+    if (browserAction) {
+      activateButton(browserAction);
+      await sleep(500);
+      sidePanel = document.querySelector(
+        'aside[data-app-shell-focus-area="right-panel"]',
+      );
+      tabToolbar = sidePanel?.querySelector(
+        '[data-app-shell-tabs="true"] > .h-toolbar',
+      );
+    } else if (originalThreadKind === 'remote') {
+      tabToolbar = null;
+    } else {
+      throw new Error('Browser side-panel action missing');
+    }
   }
-  if (!tabToolbar) throw new Error('Side-panel tab header missing');
+  if (
+    tabToolbar &&
+    !tabToolbar.querySelector('[role="tab"][aria-selected="true"]')
+  ) {
+    throw new Error('Side-panel selected tab missing');
+  }
   const threadHeaderRegion = appHeader?.querySelector(
     ':scope > div:nth-of-type(3)',
   );
@@ -575,30 +701,33 @@ async function validateUi(
   check(
     getComputedStyle(threadHeaderRegion).backgroundColor ===
       initialHeaderColors.background &&
-      getComputedStyle(tabToolbar).backgroundColor ===
-        initialHeaderColors.background,
-    'header background property colors thread and side-panel tab headers',
+      (!tabToolbar ||
+        getComputedStyle(tabToolbar).backgroundColor ===
+          initialHeaderColors.background),
+    'header background property colors every available native header',
   );
   const tabFadeGradients = Array.from(
-    tabToolbar.querySelectorAll(
-      '[class*="after:to-token-main-surface-primary"]',
-    ),
+    tabToolbar?.querySelectorAll(
+      '[class*="after:to-surface"]',
+    ) ?? [],
   ).map((overlay) => getComputedStyle(overlay, '::after').backgroundImage);
   check(
-    tabFadeGradients.length >= 2 &&
-      tabFadeGradients.every((gradient) =>
-        gradient.includes(initialHeaderColors.background),
-      ),
+    !tabToolbar ||
+      (tabFadeGradients.length >= 2 &&
+        tabFadeGradients.every((gradient) =>
+          gradient.includes(initialHeaderColors.background),
+        )),
     'side-panel tab overflow fades into the selected header background',
     { tabFadeGradients },
   );
   check(
-    sideHeaderButtons.length >= 4 &&
+    sideHeaderButtons.length >= (tabToolbar ? 4 : 2) &&
       getComputedStyle(expandedHeaderControls).backgroundColor ===
         'rgba(0, 0, 0, 0)' &&
-      sideHeaderButtonStates.some(
-        ({ role, directHit }) => role === 'tab' && directHit,
-      ) &&
+      (!tabToolbar ||
+        sideHeaderButtonStates.some(
+          ({ role, directHit }) => role === 'tab' && directHit,
+        )) &&
       sideHeaderButtonStates.every(
         ({ visible, hit, contrast }) => visible && hit && contrast >= 3,
       ),
@@ -610,10 +739,11 @@ async function validateUi(
     },
   );
   check(
-    contentToolbarButtons.length > 0 &&
-      JSON.stringify(
-      contentToolbarButtons.map((button) => getComputedStyle(button).color),
-      ) === JSON.stringify(contentToolbarColorsBefore),
+    !tabToolbar ||
+      (contentToolbarButtons.length > 0 &&
+        JSON.stringify(
+          contentToolbarButtons.map((button) => getComputedStyle(button).color),
+        ) === JSON.stringify(contentToolbarColorsBefore)),
     'content-panel toolbar foreground remains unchanged',
     { contentToolbarColorsBefore },
   );
@@ -647,10 +777,11 @@ async function validateUi(
   check(
     getComputedStyle(threadHeaderRegion).backgroundColor ===
       currentUpdatedHeaderColors.background &&
-      getComputedStyle(tabToolbar).backgroundColor ===
-        currentUpdatedHeaderColors.background &&
-      getComputedStyle(selectedSideTab).color ===
-        currentUpdatedHeaderColors.foreground,
+      (!tabToolbar ||
+        (getComputedStyle(tabToolbar).backgroundColor ===
+          currentUpdatedHeaderColors.background &&
+          getComputedStyle(selectedSideTab).color ===
+            currentUpdatedHeaderColors.foreground)),
     'registration updates repaint both headers immediately',
   );
 
@@ -666,10 +797,11 @@ async function validateUi(
         alternateHeaderColors.foreground &&
       getComputedStyle(threadHeaderRegion).backgroundColor ===
         alternateHeaderColors.background &&
-      getComputedStyle(tabToolbar).backgroundColor ===
-        alternateHeaderColors.background &&
-      getComputedStyle(selectedSideTab).color ===
-        alternateHeaderColors.foreground &&
+      (!tabToolbar ||
+        (getComputedStyle(tabToolbar).backgroundColor ===
+          alternateHeaderColors.background &&
+          getComputedStyle(selectedSideTab).color ===
+            alternateHeaderColors.foreground)) &&
       JSON.stringify(headerAppearance.getProperties()) ===
         JSON.stringify({
           '--header-background-color': alternateHeaderColors.background,
@@ -692,7 +824,8 @@ async function validateUi(
   await sleep(50);
   check(
     getComputedStyle(threadHeaderRegion).backgroundColor === 'rgb(80, 0, 80)' &&
-      getComputedStyle(tabToolbar).backgroundColor === 'rgb(80, 0, 80)',
+      (!tabToolbar ||
+        getComputedStyle(tabToolbar).backgroundColor === 'rgb(80, 0, 80)'),
     'direct custom-property changes repaint both headers immediately',
   );
 
@@ -835,6 +968,11 @@ async function validateUi(
 
   let threadMenu = await openThreadMenu();
   if (!threadMenu) throw new Error('Thread menu did not open');
+  check(
+    globalThis.__CGPTX_HOST__._debug.applicationRootRefreshCount() === 1 &&
+      globalThis.__CGPTX_HOST__._debug.threadMenuBoundaryRenderCount() > 0,
+    'native binding reconciles the application tree before activation',
+  );
   const threadId = threadMenu
     .querySelector('[data-cgptx-thread-id]')
     ?.getAttribute('data-cgptx-thread-id');
@@ -849,6 +987,7 @@ async function validateUi(
   const threadRows = Array.from(threadMenu.children).filter(
     (child) => child.getAttribute('role') === 'menuitem',
   );
+  const nativeThreadItemCursor = getComputedStyle(threadRows[0]).cursor;
   const threadRowLabel = (row) =>
     row?.querySelector('span.min-w-0.flex-1.truncate')?.textContent?.trim() ??
     row?.textContent?.trim();
@@ -868,7 +1007,7 @@ async function validateUi(
   const firstThreadSeparatorIndex = Array.from(threadMenu.children).findIndex(
     (child) =>
       child.getAttribute('role') !== 'menuitem' &&
-      Boolean(child.querySelector('.h-\\[1px\\][class*="bg-token-menu-border"]')),
+      Boolean(child.querySelector('.h-\\[1px\\][class*="bg-border"]')),
   );
   check(
     colorIndex >= 0 && colorIndex === firstThreadSeparatorIndex - 1,
@@ -887,9 +1026,39 @@ async function validateUi(
       row !== colorRow &&
       row.getAttribute('aria-haspopup') === 'menu',
   );
+  const nativeActionRow = threadRows.find(
+    (row) =>
+      row !== colorRow &&
+      row.getAttribute('aria-haspopup') !== 'menu' &&
+      row.className.includes('cursor-interaction'),
+  );
+  const threadItemPresentation = (row) => {
+    if (!row) return undefined;
+    const style = getComputedStyle(row);
+    return {
+      paddingLeft: style.paddingLeft,
+      paddingRight: style.paddingRight,
+      paddingTop: style.paddingTop,
+      paddingBottom: style.paddingBottom,
+      color: style.color,
+      fontSize: style.fontSize,
+      lineHeight: style.lineHeight,
+      borderRadius: style.borderRadius,
+    };
+  };
+  const referenceThreadItem = nativeFlyoutRow ?? nativeActionRow;
   check(
-    Boolean(nativeFlyoutRow) && colorRow?.className === nativeFlyoutRow.className,
-    'Color reuses the native thread flyout presentation',
+    Boolean(colorRow) &&
+      Boolean(referenceThreadItem) &&
+      JSON.stringify(threadItemPresentation(colorRow)) ===
+        JSON.stringify(threadItemPresentation(referenceThreadItem)) &&
+      colorRow.className.includes('hover:bg-primary-ghost-hover') &&
+      colorRow.className.includes('focus-visible:bg-primary-ghost-hover'),
+    'Color reuses the native thread item presentation',
+    {
+      color: threadItemPresentation(colorRow),
+      reference: threadItemPresentation(referenceThreadItem),
+    },
   );
 
   let threadMenuApi;
@@ -957,7 +1126,7 @@ async function validateUi(
           colorIcons[index] &&
           row.querySelector('svg') === null &&
           row.textContent?.trim() === threadRowLabel(row) &&
-          row.className.includes('hover:bg-token-list-hover-background'),
+          row.className.includes('hover:bg-primary-ghost-hover'),
       ),
     'Color flyout contains only the requested names and native color icons',
     { rendered: colorRows.map(threadRowLabel) },
@@ -996,16 +1165,17 @@ async function validateUi(
   colorRows[0]?.focus();
   const focusedColorStyle = getComputedStyle(document.activeElement);
   check(
-    focusedColorStyle.cursor === 'pointer' &&
+    focusedColorStyle.cursor === nativeThreadItemCursor &&
       colorRows[0]?.className.includes(
-        'hover:bg-token-list-hover-background',
+        'hover:bg-primary-ghost-hover',
       ) &&
       colorRows[0]?.className.includes(
-        'focus:bg-token-list-hover-background',
+        'focus:bg-primary-ghost-hover',
       ),
     'Color choices use the native interactive highlight state',
     {
       cursor: focusedColorStyle.cursor,
+      nativeCursor: nativeThreadItemCursor,
       className: colorRows[0]?.className,
     },
   );
@@ -1021,13 +1191,15 @@ async function validateUi(
     document.activeElement === colorRows[1],
     'Color flyout participates in native keyboard navigation',
   );
-  activateButton(colorRows[1]);
+  invokeNativeButton(colorRows[1]);
   await waitUntil(() =>
     Boolean(
-      originalThreadRow.querySelector('[data-thread-colors-indicator]'),
+      findThreadRow(threadId)?.querySelector(
+        '[data-thread-colors-indicator]',
+      ),
     ),
   );
-  const blueThreadIndicator = originalThreadRow.querySelector(
+  const blueThreadIndicator = findThreadRow(threadId)?.querySelector(
     '[data-thread-colors-indicator]',
   );
   check(
@@ -1041,9 +1213,11 @@ async function validateUi(
     'selecting Blue applies its CSS to the native header',
   );
   check(
-    blueThreadIndicator?.closest(
-      '[data-cgptx-thread-list-leading-views]',
-    ) === threadListViewHost &&
+    Boolean(
+      blueThreadIndicator?.closest(
+        '[data-cgptx-thread-list-leading-views]',
+      ),
+    ) &&
       getComputedStyle(blueThreadIndicator).backgroundColor ===
         'rgb(58, 131, 247)',
     'selecting Blue adds the thread indicator at the native row edge',
@@ -1062,8 +1236,9 @@ async function validateUi(
   activateButton(menuRows(colorFlyout)[0]);
   await waitUntil(
     () =>
-      originalThreadRow.querySelector('[data-thread-colors-indicator]') ===
-      null,
+      findThreadRow(threadId)?.querySelector(
+        '[data-thread-colors-indicator]',
+      ) === null,
   );
   check(
     Object.keys(headerAppearance.getProperties()).length === 0 &&
@@ -1072,17 +1247,25 @@ async function validateUi(
     'selecting Default restores ChatGPT native header CSS',
   );
   check(
-    originalThreadRow.querySelector('[data-thread-colors-indicator]') === null,
+    findThreadRow(threadId)?.querySelector(
+      '[data-thread-colors-indicator]',
+    ) === null,
     'selecting Default removes the thread indicator',
   );
   markProgress('thread-menu');
 
-  let column = await openProfile();
-  if (!column) throw new Error('Profile menu did not open');
   check(
     typeof globalThis.__CGPTX_RUNTIME__?.request === 'function',
     'version-independent runtime preload is available',
   );
+
+  if (noProfile) {
+    markProgress('complete');
+    return checks;
+  }
+
+  let column = await openProfile();
+  if (!column) throw new Error('Profile menu did not open');
   check(
     globalThis.__CGPTX_HOST__?._debug.authenticationReady() === true,
     'native post-authentication refresh callback is captured',
@@ -1144,7 +1327,7 @@ async function validateUi(
     (item) => item.kind === 'separator',
   ).length;
   const actualSeparators = blocks.filter((block) =>
-    block.querySelector('.h-\\[1px\\][class*="bg-token-menu-border"]'),
+    block.querySelector('.h-\\[1px\\][class*="bg-border"]'),
   ).length;
   check(
     actualSeparators === expectedSeparators,
@@ -1172,6 +1355,19 @@ async function validateUi(
     usageWrapper?.querySelectorAll('[role="menuitem"]') ?? [],
   ).find((row) => row !== usage);
   const nativeNestedItemClassName = nativeNestedItem?.className;
+  const nativeNestedStyle = nativeNestedItem
+    ? (() => {
+        const style = getComputedStyle(nativeNestedItem);
+        return {
+          paddingLeft: style.paddingLeft,
+          paddingRight: style.paddingRight,
+          color: style.color,
+          fontSize: style.fontSize,
+          lineHeight: style.lineHeight,
+          borderRadius: style.borderRadius,
+        };
+      })()
+    : undefined;
   check(
     usageWrapper?.getAttribute('data-state') === 'open' &&
       itemCountAfterUsageExpansion > itemCountBeforeUsageExpansion,
@@ -1274,6 +1470,19 @@ async function validateUi(
   const child = reopenedWrapper?.querySelector(
     '[data-cgptx-id="api-test-suite.visual-child"]',
   );
+  const childStyle = child
+    ? (() => {
+        const style = getComputedStyle(child);
+        return {
+          paddingLeft: style.paddingLeft,
+          paddingRight: style.paddingRight,
+          color: style.color,
+          fontSize: style.fontSize,
+          lineHeight: style.lineHeight,
+          borderRadius: style.borderRadius,
+        };
+      })()
+    : undefined;
   const movedId = globalThis.__CGPTX_VISUAL_MOVED_ID__;
   const moved = reopenedWrapper?.querySelector('[data-cgptx-id="' + movedId + '"]');
   check(
@@ -1282,9 +1491,15 @@ async function validateUi(
     'submenu expands in place with children',
   );
   check(
-    child?.className === nativeNestedItemClassName,
+    Boolean(childStyle) &&
+      JSON.stringify(childStyle) === JSON.stringify(nativeNestedStyle),
     'contributed submenu child uses the native nested Item presentation',
-    { nativeNestedItemClassName, childClassName: child?.className },
+    {
+      nativeNestedItemClassName,
+      childClassName: child?.className,
+      nativeNestedStyle,
+      childStyle,
+    },
   );
   check(
     !blocks.some((block) => idOfBlock(block) === movedId),
@@ -1328,11 +1543,12 @@ async function validateUi(
   ).find((element) => element.textContent?.trim() === 'Back to app');
   backToApp?.click();
   await sleep(300);
+  let profileNavigationRegistration;
   globalThis.__CGPTX_HOST__.registerExtension(
     'profile-navigation-fixture',
     {
       activate(api) {
-        api.menus.profile.transformItems((items) => {
+        profileNavigationRegistration = api.menus.profile.transformItems((items) => {
           const findAccount = (candidates) => {
             for (const candidate of candidates) {
               if (
@@ -1370,6 +1586,7 @@ async function validateUi(
                   kind: 'action',
                   id: 'profile-navigation-fixture.profile',
                   label: 'Profile',
+                  icon: 'person',
                   onClick: nativeAccount.onClick,
                 },
               ],
@@ -1392,23 +1609,72 @@ async function validateUi(
   const profile = column?.querySelector(
     '[data-cgptx-id="profile-navigation-fixture.profile"]',
   );
+  check(
+    profile
+      ?.querySelector('svg[viewBox="0 0 20 20"] > path')
+      ?.getAttribute('d')
+      ?.startsWith('M16.585 10C16.585 6.3632'),
+    'person icon reuses ChatGPT Profile artwork',
+  );
+  const profileNavigationAttemptsBefore =
+    globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount();
+  const profileClickStartedAt = performance.now();
+  let profileDomTransitionAfterMs = null;
+  const profileTransitionObserver = new MutationObserver(() => {
+    if (
+      profileDomTransitionAfterMs === null &&
+      Array.from(document.querySelectorAll('[aria-current="page"]')).some(
+        (element) => element.textContent?.trim() === 'Profile',
+      )
+    ) {
+      profileDomTransitionAfterMs = Math.round(
+        performance.now() - profileClickStartedAt,
+      );
+    }
+  });
+  profileTransitionObserver.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['aria-current'],
+    childList: true,
+    subtree: true,
+  });
   profile?.click();
-  await sleep(500);
-  const profileIsCurrent = Array.from(
-    document.querySelectorAll('[aria-current="page"]'),
-  ).some((element) => element.textContent?.trim() === 'Profile');
+  const profileNavigationDeadline = performance.now() + 10_000;
+  let profileIsCurrent = false;
+  while (performance.now() < profileNavigationDeadline) {
+    profileIsCurrent = Array.from(
+      document.querySelectorAll('[aria-current="page"]'),
+    ).some((element) => element.textContent?.trim() === 'Profile');
+    if (profileIsCurrent) break;
+    await sleep(50);
+  }
+  profileTransitionObserver.disconnect();
+  const profileNavigationAttemptsAfter =
+    globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount();
+  const profileNavigationLastRequestedPath =
+    globalThis.__CGPTX_HOST__?._debug.profileNavigationLastRequestedPath();
   check(
     Boolean(account && profile) &&
       !profileWasCurrent &&
-      profileIsCurrent,
+      profileIsCurrent &&
+      profileNavigationAttemptsAfter === profileNavigationAttemptsBefore + 1 &&
+      profileNavigationLastRequestedPath === '/settings/profile',
     'account submenu Profile child opens native Profile settings',
     {
       profileWasCurrent,
       profileIsCurrent,
       foundAccount: Boolean(account),
       foundProfile: Boolean(profile),
+      profileNavigationAttemptsBefore,
+      profileNavigationAttemptsAfter,
+      profileNavigationLastRequestedPath,
+      profileDomTransitionAfterMs,
+      currentPageLabels: Array.from(
+        document.querySelectorAll('[aria-current="page"]'),
+      ).map((element) => element.textContent?.trim()),
     },
   );
+  profileNavigationRegistration.dispose();
   markProgress('profile-menu');
 
   if (alternateAuthentication) {
@@ -1428,8 +1694,7 @@ async function validateUi(
       try {
         await authenticationApi.replaceCurrent(alternateAuthentication);
         const adopted = await authenticationApi.getCurrent();
-        const nativeAccount =
-          await globalThis.__CGPTX_HOST__._debug.nativeAccount();
+        const nativeAccount = await waitForNativeAccount(alternate.label);
         check(
           adopted?.userId === alternate.userId &&
             nativeAccount?.account?.email === alternate.label,
@@ -1445,8 +1710,7 @@ async function validateUi(
         await authenticationApi.replaceCurrent(original.authJson);
       }
       const restored = await authenticationApi.getCurrent();
-      const restoredNativeAccount =
-        await globalThis.__CGPTX_HOST__._debug.nativeAccount();
+      const restoredNativeAccount = await waitForNativeAccount(original.label);
       check(
         restored?.userId === original.userId &&
           restoredNativeAccount?.account?.email === original.label,
@@ -1460,16 +1724,179 @@ async function validateUi(
       );
     }
   }
-
   markProgress('complete');
   return checks;
 }
 
-await waitFor('globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true');
+async function threadSelectionSnapshot(selector) {
+  return evaluate(
+    `(() => {
+      const row = document.querySelector(${JSON.stringify(selector)});
+      const trigger = row?.querySelector("[data-thread-title-trigger]");
+      const rect = row?.getBoundingClientRect();
+      const reactPropsKey = row
+        ? Object.keys(row).find((key) => key.startsWith("__reactProps$"))
+        : undefined;
+      return {
+        href: location.href,
+        currentThreadId:
+          globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId ?? null,
+        fixtureReady: globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true,
+        nativeReady: globalThis.__CGPTX_HOST__?._debug.nativeReady() === true,
+        row: row
+          ? {
+              connected: row.isConnected,
+              ariaCurrent: row.getAttribute("aria-current"),
+              ariaSelected: row.getAttribute("aria-selected"),
+              dataState: row.getAttribute("data-state"),
+              className: row.className,
+              width: rect?.width ?? 0,
+              height: rect?.height ?? 0,
+              hasReactOnClick:
+                typeof row[reactPropsKey]?.onClick === "function",
+            }
+          : null,
+        trigger: trigger
+          ? {
+              tagName: trigger.tagName,
+              ariaCurrent: trigger.getAttribute("aria-current"),
+              ariaSelected: trigger.getAttribute("aria-selected"),
+              dataState: trigger.getAttribute("data-state"),
+              pointerEvents: getComputedStyle(trigger).pointerEvents,
+            }
+          : null,
+      };
+    })()`,
+  );
+}
+
+async function activateThreadRow(
+  selector,
+  expectedThreadId,
+  waitForCurrent = true,
+) {
+  const selection = await evaluate(
+    `(async () => {
+      const deadline = Date.now() + 60000;
+      let row;
+      let reactPropsKey;
+      while (Date.now() < deadline) {
+        row = document.querySelector(${JSON.stringify(selector)});
+        reactPropsKey = row
+          ? Object.keys(row).find((key) => key.startsWith("__reactProps$"))
+          : undefined;
+        if (
+          row &&
+          typeof row[reactPropsKey]?.onClick === "function" &&
+          globalThis.__CGPTX_HOST__?._debug.nativeReady() === true
+        ) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (!row) throw new Error('Selected native thread row missing');
+      if (typeof row[reactPropsKey]?.onClick !== "function") {
+        throw new Error('Selected native thread row never became interactive');
+      }
+      if (!globalThis.__CGPTX_UI_TEST_THREADS__) {
+        globalThis.__CGPTX_HOST__.registerExtension("ui-test-thread-selection", {
+          activate(api) {
+            globalThis.__CGPTX_UI_TEST_THREADS__ = api.threads;
+          },
+        });
+      }
+      const scopedId = row.getAttribute('data-app-action-sidebar-thread-id');
+      const threadId =
+        ${JSON.stringify(expectedThreadId)} ??
+        scopedId.slice(scopedId.lastIndexOf(':') + 1);
+      const trigger = row.querySelector("[data-thread-title-trigger]");
+      const rect = row.getBoundingClientRect();
+      const before = {
+        href: location.href,
+        currentThreadId:
+          globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId ?? null,
+        fixtureReady: globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true,
+        nativeReady: globalThis.__CGPTX_HOST__?._debug.nativeReady() === true,
+        row: {
+          connected: row.isConnected,
+          ariaCurrent: row.getAttribute("aria-current"),
+          ariaSelected: row.getAttribute("aria-selected"),
+          dataState: row.getAttribute("data-state"),
+          className: row.className,
+          width: rect.width,
+          height: rect.height,
+          hasReactOnClick: true,
+        },
+        trigger: trigger
+          ? {
+              tagName: trigger.tagName,
+              ariaCurrent: trigger.getAttribute("aria-current"),
+              ariaSelected: trigger.getAttribute("aria-selected"),
+              dataState: trigger.getAttribute("data-state"),
+              pointerEvents: getComputedStyle(trigger).pointerEvents,
+            }
+          : null,
+      };
+      row.click();
+      return { before, threadId };
+    })()`,
+  );
+  if (!waitForCurrent) return selection.threadId;
+  try {
+    await waitFor(
+      `globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId === ${JSON.stringify(selection.threadId)}`,
+      60000,
+    );
+  } catch (error) {
+    const after = await threadSelectionSnapshot(selector);
+    throw new Error(
+      `${error.message}; thread selection state: ${JSON.stringify({ before: selection.before, after })}`,
+    );
+  }
+  return selection.threadId;
+}
+
+async function selectThread(threadId, waitForCurrent = true) {
+  const selector =
+    '[data-app-action-sidebar-thread-id$=":' + threadId + '"]';
+  await activateThreadRow(selector, threadId, waitForCurrent);
+}
+
+async function selectThreadByKind(kind, waitForCurrent = true) {
+  return activateThreadRow(
+    '[data-app-action-sidebar-thread-kind="remote"]',
+    undefined,
+    waitForCurrent,
+  );
+}
+
+let selectedThreadId = selectThreadId;
+if (selectThreadKind) {
+  selectedThreadId = await selectThreadByKind(selectThreadKind, false);
+} else if (selectedThreadId) {
+  await selectThread(selectedThreadId, false);
+}
+await waitFor('globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true', 90000);
+if (selectedThreadId) await selectThread(selectedThreadId);
 const semanticResults = await evaluate('globalThis.__CGPTX_TEST_RESULTS__');
 const failedSemantic = semanticResults.filter((result) => !result.pass);
 if (failedSemantic.length > 0) {
   throw new Error('Public API suite failed: ' + JSON.stringify(failedSemantic));
+}
+if (publicAPIOnly) {
+  socket.close();
+  console.log(
+    JSON.stringify(
+      {
+        passed: semanticResults.length,
+        total: semanticResults.length,
+        checks: semanticResults,
+      },
+      null,
+      2,
+    ),
+  );
+  process.exit(0);
 }
 
 const report = await evaluate(
@@ -1479,6 +1906,8 @@ const report = await evaluate(
     JSON.stringify(expectNativeProfileCallbackMissing) +
     ',' +
     JSON.stringify(alternateAuthJson) +
+    ',' +
+    JSON.stringify(noProfile) +
     ')',
 );
 socket.close();
@@ -1490,4 +1919,4 @@ console.log(
     2,
   ),
 );
-if (failed.length > 0) process.exitCode = 1;
+process.exit(failed.length > 0 ? 1 : 0);

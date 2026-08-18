@@ -113,12 +113,27 @@ function init() {
       typeof value.binding?.chatgpt !== "string" ||
       typeof value.binding?.version !== "string" ||
       value.binding?.chatgptApi !== value.chatgptApi.version ||
-      typeof value.binding?.path !== "string"
+      typeof value.binding?.path !== "string" ||
+      !Array.isArray(value.extensions)
     ) {
       throw new Error("Invalid component versions lock");
     }
     componentPath(value.chatgptApi.path);
     componentPath(value.binding.path);
+    const ids = new Set();
+    for (const extension of value.extensions) {
+      if (
+        typeof extension?.id !== "string" ||
+        !/^[a-z0-9][a-z0-9._-]*$/i.test(extension.id) ||
+        ids.has(extension.id) ||
+        typeof extension?.path !== "string" ||
+        typeof extension?.enabled !== "boolean"
+      ) {
+        throw new Error("Invalid locked extension");
+      }
+      ids.add(extension.id);
+      componentPath(extension.path);
+    }
   }
 
   const Module = require("node:module");
@@ -194,6 +209,7 @@ function init() {
 
     const extensionEntries = readExtensionEntries({
       configurationFile: LAUNCH_CONFIGURATION_FILE,
+      versions,
       extensionsDirectory: STATE_DIR,
     });
     const extensions = extensionEntries
@@ -354,14 +370,15 @@ function init() {
           return null;
         }
         case "extensions.list":
-          return listInstalledExtensions(STATE_DIR);
+          return listInstalledExtensions(STATE_DIR, versions);
         case "extensions.set-enabled":
           setExtensionEnabled(
             STATE_DIR,
+            versions,
             parameters.extensionId,
             parameters.enabled,
           );
-          return listInstalledExtensions(STATE_DIR);
+          return listInstalledExtensions(STATE_DIR, versions);
         default:
           throw new Error(`Unknown ChatGPTX runtime method: ${String(method)}`);
       }

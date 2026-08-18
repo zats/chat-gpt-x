@@ -384,10 +384,10 @@ jobs:
           prompt_path="$RUNNER_TEMP/rebind-prompt.md"
           if [[ "$BINDING_MODE" == "correction" ]]; then
             task="correct the existing binding for ChatGPT $APP_VERSION"
-            binding_instructions="Edit src/platform/bindings/$APP_VERSION and increment its binding patch version by exactly one. Preserve its chatgpt and chatgptApi values. Keep every other binding directory, src/platform/types.d.ts, extension source, and extension manifests unchanged. Update src/platform/bindings/manifest.json only if needed to pin the exact version and URL. Increment updates/latest.json generation once and replace this build's binding entry with the new binding release. Preserve every other API, binding, and extension entry. Set the changed binding sha256 to 64 zeroes; the workflow replaces it with the deterministic archive hash before validation."
+            binding_instructions="Edit src/platform/bindings/$APP_VERSION and increment its binding patch version by exactly one. Preserve its chatgpt and chatgptApi values. Keep every other binding directory, src/platform/types.d.ts, extension source, and extension manifests unchanged. Update src/platform/bindings/manifest.json only if needed to pin the exact version and URL. Increment updates/latest.json generation once and replace this build's schema-3 binding entry, including its exact asarSha256. Preserve every other API, binding, and extension entry and all extension version history. Set the changed binding sha256 to 64 zeroes; the workflow replaces it with the deterministic archive hash before validation."
           else
             task="complete the new binding for ChatGPT $APP_VERSION"
-            binding_instructions="Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, extension source files, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. After the live suites pass, increment each validated public extension version and expand its compatibility.chatgpt range in package.json. Update src/platform/bindings/manifest.json and the schema-v2 maps in updates/latest.json. Increment the update generation once, preserve every existing API and binding entry, add the new binding by ChatGPT version, and use predictable release tags. Set new sha256 fields to 64 zeroes; the workflow replaces them with deterministic archive hashes before validation."
+            binding_instructions="Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, extension source files, extension manifests, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. Update src/platform/bindings/manifest.json and add the exact binding to the schema-3 updates/latest.json map, including its asarSha256. Increment the update generation once and preserve every existing API, binding, extension, and historical extension version entry. Set the new binding sha256 to 64 zeroes; the workflow replaces it with the deterministic archive hash before validation."
           fi
           if [[ "$AUTH_MODE" == "apikey" ]]; then
             authentication_files="- $AUTH_ROOT/primary.json (API-key authentication)"
@@ -465,7 +465,6 @@ jobs:
           git diff --binary "$BASE_SHA" -- \
             "src/platform/bindings/$APP_VERSION" \
             src/platform/bindings/manifest.json \
-            'src/extensions/*/package.json' \
             updates/latest.json \
             > "$DIAGNOSTICS_ROOT/binding.patch"
           [[ -s "$DIAGNOSTICS_ROOT/binding.patch" ]] || {
@@ -753,7 +752,7 @@ jobs:
           Conflicted files:
           $conflicts
 
-          Preserve the current main changes and the generated binding changes. Follow the repository versioning and update-manifest invariants. For new mode, increment any changed public extension version from current main and add the new binding entry. For correction mode, increment the target binding patch version by exactly one from current main, replace its binding entry, and keep extension manifests unchanged. Preserve the schema-v2 maps and every other API, binding, and extension entry. Increment updates/latest.json generation exactly once from current main. A changed release may use 64 zeroes for sha256 because the workflow computes its deterministic archive hash after the rebase. The binding mode is $BINDING_MODE.
+          Preserve the current main changes and the generated binding changes. Follow the repository versioning and update-manifest invariants. For new mode, add the new binding entry and keep extension manifests unchanged. For correction mode, increment the target binding patch version by exactly one from current main, replace its binding entry, and keep extension manifests unchanged. Preserve the schema-3 maps, exact binding asarSha256 values, every other API and binding entry, and all extension version history. Increment updates/latest.json generation exactly once from current main. A changed release may use 64 zeroes for sha256 because the workflow computes its deterministic archive hash after the rebase. The binding mode is $BINDING_MODE.
 
           Modify only the conflicted files listed above. Do not stage files, commit, continue or abort the rebase, push, inspect authentication, weaken validation, or modify any non-conflicted file. Remove every conflict marker and run git diff --check. Finish only when the conflicted files contain the complete resolution.
           PROMPT
@@ -886,7 +885,7 @@ jobs:
           while IFS= read -r changed_path; do
             if [[ "$BINDING_MODE" == "new" ]]; then
               case "$changed_path" in
-                "$binding_root"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json)
+                "$binding_root"/* | src/platform/bindings/manifest.json | updates/latest.json)
                   ;;
                 *)
                   echo "Rebase changed a forbidden path: $changed_path" >&2

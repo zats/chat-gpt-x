@@ -4,7 +4,7 @@
 
 Source code for an **extension platform for the ChatGPT desktop app** (macOS, Electron — bundle id `com.openai.codex`).
 
-The platform ships inside a small external launcher app. When the user runs it, the launcher starts the stock, unmodified `ChatGPT.app` and injects the platform into it at process start. Once inside, the platform establishes a **stable, documented extension API** within the running app and **dynamically loads extensions** against that API — both extensions shipped with the product and ones contributed by other users.
+The platform uses a small external launcher app. The launcher downloads the exact compatible runtime, binding, and extensions from version-addressed GitHub Releases. It does not bundle these components. When the user runs it, the launcher starts the stock, unmodified `ChatGPT.app` and injects the selected platform at process start. Once inside, the platform establishes a **stable, documented extension API** within the running app and **dynamically loads extensions** against that API.
 
 Properties that define the project:
 
@@ -35,7 +35,7 @@ scripts/
   run-local-ci.sh               # isolated authenticated end-to-end suite
 .github/workflows/ci.yml        # pinned-version checks on every main commit and PR
 updates/
-  latest.json                   # latest API, binding, and extension releases
+  latest.json                   # exact bindings and versioned API/extension catalog
 .agents/skills/
   manage-platform-api/          # process skill for any public-API change (required reading)
 ```
@@ -44,24 +44,26 @@ updates/
 the listed extensions, under
 `${TMPDIR}/ChatGPTX/extension-builds/<extension-id>/` for launch-scoped
 development. `CHATGPTX_EXTENSION_BUILD_DIR` overrides that output root.
-Manifests declare `contents/main.js`, their semantic version, and
-`compatibility.chatgpt` plus `compatibility.chatgptApi` ranges.
+Manifests declare `contents/main.js`, their semantic version, and a
+`compatibility.chatgptApi` range.
 Installed extension code lives under
-`<Codex home>/extensions/components/extensions/<extension-id>/`;
+`<Codex home>/extensions/components/extensions/<extension-id>/<version>/`;
 persistent state lives under
 `<Codex home>/extensions/state/<extension-id>/`. The global
 `<Codex home>/extensions/settings.json` maps every installed extension ID to
 an extensible settings object with `enabled`; startup reads package metadata
-from each flat extension directory and loads enabled extensions in lexical ID
-order. `resolveCodexHome()` defines Codex home from
+from the versioned packages selected by `versions-lock.json` and loads enabled
+extensions in lexical ID order. Settings for temporarily incompatible
+extensions remain stored. `resolveCodexHome()` defines Codex home from
 `CODEX_HOME`, defaulting to `$HOME/.codex`.
 
-Run the packaged launcher with `--test-api` to restart ChatGPT with only its
-bundled `api-test-suite`. Pass
+Run the packaged launcher with `--test-api` and an explicit locally built
+`api-test-suite` to restart ChatGPT with only that suite. Pass
 `--extension <absolute-package-directory-or-main.js>` to override an installed
 extension or load a development extension for that launch. CI builds
-`api-test-suite` locally and passes it through `--extension`. Additional
-arguments are forwarded to ChatGPT in test mode for isolated profiles and CDP.
+the current components into an isolated versioned store and passes its local
+`api-test-suite` through `--extension`. Additional arguments are forwarded to
+ChatGPT in test mode for isolated profiles and CDP.
 
 ## Invariants for any change
 
@@ -71,7 +73,7 @@ arguments are forwarded to ChatGPT in test mode for isolated profiles and CDP.
 4. **APIs land only as complete vertical slices.** A public API change increments `src/platform/manifest.json`, updates its current binding and mechanical test extension, and passes `api-test-suite` against the live app. `types.d.ts` must never sit ahead of working, validated bindings.
 5. Research is done on extracted copies of the app in temp directories (see the skill's `scripts/extract-app.sh`), cleaned up afterwards — never against the installed app in place, never by modifying its bundle.
 6. Durable knowledge lives in the skill's `references/`; version-specific findings live in `src/platform/bindings/<version>/DERIVATION.md`. Don't mix the two.
-7. Component releases are derived from predictable paths. Changes under the API, a versioned binding directory, or a public extension directory increment that component's semantic version and the schema-v2 `updates/latest.json` generation in the same pull request. Internal extensions declare `"private": true` and stay out of the public index. A new binding also increments each public extension version whose `compatibility.chatgpt` range is expanded after validation. CI runs `scripts/refresh-update-index-hashes.sh <base-sha>` and commits deterministic archive hashes to same-repository pull requests before validation. After CI passes on `main`, GitHub Releases publishes immutable `chatgpt-api-v<version>`, `binding-<chatgpt>-v<version>`, and `extension-<id>-v<version>` archives, verifies every referenced checksum, and publishes the index on the stable `updates` release.
+7. Component releases are derived from predictable paths. Changes under the API, a versioned binding directory, or a public extension directory increment that component's semantic version and the schema-3 `updates/latest.json` generation in the same pull request. Internal extensions declare `"private": true` and stay out of the public index. Bindings select exact ChatGPT builds by version and `app.asar` SHA-256. Extensions depend only on the ChatGPTX API range, so a new binding does not increment extension versions. The index retains every published public extension version. CI runs `scripts/refresh-update-index-hashes.sh <base-sha>` and commits deterministic archive hashes to same-repository pull requests before validation. After CI passes on `main`, GitHub Releases publishes version-addressed `chatgpt-api-v<version>`, `binding-<chatgpt>-v<version>`, and `extension-<id>-v<version>` archives. CI downloads each archive and its checksum sidecar, verifies both against the catalog SHA-256, and then publishes the index on the stable `updates` release.
 8. Programmatic Auto Layout in the macOS launcher uses SnapKit exclusively. Do not create or activate `NSLayoutConstraint` instances directly.
 
 ## Live debugging (CDP)
@@ -87,4 +89,4 @@ Rules: CDP is for development-time inspection and hot-probing only — productio
 
 ## Current state
 
-The current binding is `src/platform/bindings/26.721.41059/`. It passes the public API suite (39/39) and version-specific native UI suite (63/63) for local and cloud threads. The isolated CI harness also verifies burner-account switching, restoration, and the Release launcher artifact. Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + main-process bridge (injection, extension loader, scoped utility services, result reporting).
+The pinned API-development binding is `src/platform/bindings/26.803.61601/` at ChatGPTX API `1.1.1`. Its recorded API-key run passes the applicable public API suite (20/20) and native UI suite (35/35). The release catalog also contains later exact bindings, including `26.814.41407` on API `1.0.4`. Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + remotely installed main-process bridge, binding, and extensions.

@@ -192,7 +192,7 @@ export function applyIndexHashes(index, artifacts) {
     } else if (artifact.kind === "binding") {
       entry = index.bindings?.[artifact.chatgpt];
     } else if (artifact.kind === "extension") {
-      entry = index.extensions?.[artifact.id];
+      entry = index.extensions?.[artifact.id]?.versions?.[artifact.version];
     }
     if (!entry || entry.release !== artifact.release) {
       throw new Error(

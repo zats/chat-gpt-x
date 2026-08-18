@@ -1,94 +1,94 @@
 # Component Updates
 
-## TODO
-
-### Milestone 1
-
-- [x] Publish the update index and component releases
-- [x] Build atomic component storage under `~/.codex/extensions`
-- [x] Load platform components from a versions lock and extensions from startup settings
-- [x] Support local launch-scoped extensions and `--test-api`
-- [x] Add manual updates, restart activation, and status notifications
-- [x] Remove legacy loading and release fixtures
-
-### Milestone 2
-
-- [ ] Add the `activate`/`deactivate` lifecycle contract
-- [ ] Support runtime load, unload, replacement, and new extensions
-- [ ] Support live development reload
-- [ ] Validate lifecycle behavior across renderers and rollback failures
-
-Status: milestone 1 complete
-
 ## Scope
 
-ChatGPTX updates these independently:
+ChatGPTX installs these components independently from GitHub Releases:
 
 - ChatGPT API bridge and runtime
-- ChatGPT-version bindings
-- User extensions
+- Exact ChatGPT-build bindings
+- Public extensions
 
-Launcher binary updates require a separate mechanism.
+The launcher application has a separate update mechanism. The launcher bundle
+does not contain a runtime, binding, or extension.
 
-## Milestones
+## Selection rule
 
-Milestone 1 delivers the update index, component store, manual updater,
-version-locked platform injection, startup extension settings, launch-scoped
-development extensions, and disabled-injection notifications. Installed
-changes activate on the next ChatGPT launch.
+The launcher resolves one component set in this order:
 
-Milestone 2 adds runtime extension loading, unloading, replacement, and local
-development reload. It ships after milestone 1.
+```text
+ChatGPT version + app.asar SHA-256
+  -> exact binding
+  -> exact ChatGPTX API/runtime
+  -> newest version of each extension compatible with that API
+```
+
+A binding is valid only for one ChatGPT version and one `app.asar` hash. A
+binding selects one exact ChatGPTX API version. Extensions declare only a
+`compatibility.chatgptApi` range.
+
+A new ChatGPT build needs a new exact binding. It does not need new extension
+releases when the binding continues to provide the same API. A runtime update
+continues even when one or more extensions do not support its API. The launcher
+leaves those extensions inactive and keeps their settings.
+
+Compatible API fixes and additions use patch or minor versions. Extensions can
+use a range such as `^1.0.0` and continue to work. An incompatible API change,
+such as removed functionality or a changed lifecycle contract, uses a new major
+version. Extensions that do not support the new major version stay inactive.
+
+## Independent fixes
+
+Each component can change without a ChatGPT app update:
+
+- A binding correction increments that build's binding version.
+- A runtime or API fix increments the API version and updates the exact
+  binding entry that selects it.
+- An extension fix increments only that extension version.
+
+The update index generation increments for each published catalog change.
 
 ## Update index
 
-CI publishes `updates/latest.json` after every referenced component release is
-available and verified. The app fetches:
+CI publishes `updates/latest.json` as the stable `updates` release asset:
 
 ```text
 https://github.com/zats/chat-gpt-x/releases/download/updates/latest.json
 ```
 
-Release publication is fully automated:
-
-- New ChatGPT detection drives binding generation, validation, merge, component
-  release, and index publication.
-- A merged public-API or public-extension pull request drives validation,
-  component release, and index publication.
-- CI computes deterministic archive hashes on the pull request, commits the
-  updated index, then builds every archive, checksum, GitHub Release, and stable
-  index update. No component release has an operator step.
-
-The index uses schema version 2:
+Schema 3 contains exact bindings and all published public extension versions:
 
 ```json
 {
-  "schemaVersion": 2,
-  "generation": 9,
+  "schemaVersion": 3,
+  "generation": 25,
+  "minimumLauncherVersion": "1.1.0",
   "releaseBaseURL": "https://github.com/zats/chat-gpt-x/releases/download",
   "chatgptApis": {
-    "1.0.2": {
-      "release": "chatgpt-api-v1.0.2",
-      "sha256": "<sha256>"
+    "1.0.4": {
+      "release": "chatgpt-api-v1.0.4",
+      "sha256": "<archive-sha256>"
     }
   },
   "bindings": {
-    "26.721.41059": {
+    "26.814.41407": {
       "version": "1.0.0",
-      "chatgptApi": "1.0.2",
-      "release": "binding-26.721.41059-v1.0.0",
-      "sha256": "<sha256>"
+      "chatgptApi": "1.0.4",
+      "asarSha256": "<app-asar-sha256>",
+      "release": "binding-26.814.41407-v1.0.0",
+      "sha256": "<archive-sha256>"
     }
   },
   "extensions": {
-    "multiple-accounts": {
-      "version": "0.1.1",
-      "compatibility": {
-        "chatgpt": ">=26.715.52143 <=26.721.41059",
-        "chatgptApi": "^1.0.0"
-      },
-      "release": "extension-multiple-accounts-v0.1.1",
-      "sha256": "<sha256>"
+    "thread-colors": {
+      "versions": {
+        "0.1.10": {
+          "compatibility": {
+            "chatgptApi": "^1.0.0"
+          },
+          "release": "extension-thread-colors-v0.1.10",
+          "sha256": "<archive-sha256>"
+        }
+      }
     }
   }
 }
@@ -100,185 +100,179 @@ Each archive URL is:
 <releaseBaseURL>/<release>/<release>.zip
 ```
 
-The index contains user-distributed extensions only. `api-test-suite` remains
-an internal validation extension. `release-test-fixture` is removed; release
-script tests create synthetic fixtures in temporary directories.
+The catalog retains each published extension version and pins its archive
+SHA-256. This lets the launcher select the newest compatible version after an
+API major-version change. Private extensions, including `api-test-suite`, do
+not enter the public catalog.
 
-Bindings are keyed by ChatGPT version so a correction can be published for any
-supported ChatGPT build. API versions are keyed independently because installed
-bindings may require different API versions. Downgrades have no dedicated
-behavior or compatibility guarantee.
+Schema 3 starts at ChatGPTX API `1.0.3`. Earlier runtimes expected bindings
+inside the runtime archive and cannot load a separate remote binding package.
+Their obsolete binding sources and catalog entries are removed.
 
 ## Component store
 
-Every installed component lives under `~/.codex/extensions`:
+Installed components live under `<Codex home>/extensions`:
 
 ```text
-~/.codex/extensions/
+extensions/
   components/
     chatgpt-api/<api-version>/
     bindings/<chatgpt-version>/<binding-version>/
-    extensions/<extension-id>/
+    extensions/<extension-id>/<extension-version>/
   state/<extension-id>/
   versions-lock.json
   settings.json
 ```
 
-`CODEX_HOME` changes the `~/.codex` root for development and CI.
+`CODEX_HOME` changes the Codex home for development and CI. The default is
+`$HOME/.codex`.
 
-API and binding directories are immutable. Each extension ID has one active
-package directory, which an update replaces. Extension state is stored
-separately from extension code. `settings.json` contains every installed ID and
-an extensible settings record:
+Component directories are immutable. `versions-lock.json` schema 1 selects
+one exact API, binding, and compatible extension set. Schema 1 is retained
+because released runtimes already read this lock contract. The launcher writes
+the complete lock only after all selected packages pass validation.
+
+`settings.json` maps extension IDs to extensible settings objects:
 
 ```json
 {
   "schemaVersion": 1,
   "extensions": {
-    "multiple-accounts": { "enabled": true }
+    "thread-colors": {
+      "enabled": true
+    }
   }
 }
 ```
 
-The updater adds new IDs as enabled, removes records for packages that are no
-longer installed, and preserves unknown fields in retained records. A required
-extension is always enabled. Executable paths come from the predictable flat
-package directories. Development builds remain outside the component store and
-enter a launch only through an explicit `--extension` path.
+The store preserves unknown fields and records for extensions that are not
+currently compatible. When an extension becomes compatible again, its prior
+enablement returns. A required extension is always enabled. Extension state is
+separate from extension code.
 
-## Installation transaction
+Obsolete flat package layouts are invalid. The launcher does not migrate or
+load them.
 
-An update runs as one transaction:
+## Check-for-updates flow
 
-1. Fetch and strictly decode the index.
-2. Reject an older generation.
-3. Select the binding for the installed ChatGPT version.
-4. Select compatible extension versions.
-5. Create `downloads/` for one required archive.
-6. Verify each SHA-256 and archive layout.
-7. Install immutable API and binding directories, build the complete compatible
-   extension set in a staging directory, and replace the flat extension root.
-8. Reconcile `settings.json` with the installed package IDs; restore the prior
-   extension root if this write fails.
-9. Remove `downloads/` and atomically replace `versions-lock.json` with the
-   exact API and binding paths.
-
-Failures before step 9 preserve the active versions lock. A generation-only
-index change updates the lock without requesting a ChatGPT restart.
-
-## Startup and injection
-
-The launcher resolves `versions-lock.json`, selects the installed ChatGPT binding,
-and launches ChatGPT with:
-
-- `NODE_OPTIONS` requiring the selected API bridge
-- `CHATGPTX_VERSIONS_LOCK` pointing to the versions lock
-
-The bridge resolves its runtime and binding through that lock. It reads
-`settings.json`, loads package metadata from
-`components/extensions/<extension-id>/package.json`, and activates enabled
-extensions in lexical ID order. A running ChatGPT process keeps the extension
-code and enabled set that it started with. Milestone 1 activates updates and
-enablement changes on the next ChatGPT launch.
-
-The application imports bundled seed components into the store when no versions
-lock exists. This supports first launch without network access.
-
-## Manual update UI
-
-The status row includes an `arrow.clockwise.circle.fill` button with the
-tooltip `Check for Updates`.
-
-The button is disabled while checking. Completion uses a standard sheet for:
-
-- Up to date
-- Components installed
-- Update failed
-
-## Activation rules
-
-| Downloaded change | Milestone 1 | Milestone 2 |
-| --- | --- | --- |
-| Compatible extension versions only | Restart ChatGPT | Live reload |
-| Incompatible extension | Next compatible launch | Next compatible launch |
-| Binding | Restart ChatGPT | Restart ChatGPT |
-| ChatGPT API, bridge, or runtime | Restart ChatGPT | Restart ChatGPT |
-| Launcher application | Separate updater | Separate updater |
-
-## Milestone 2: runtime extension lifecycle
-
-The current bridge loads extension sources once during startup. The renderer
-host ignores duplicate IDs and has no unload operation. Milestone 2 introduces
-this module contract:
-
-```ts
-interface ExtensionModule {
-  activate(api: PlatformApi): void;
-  deactivate(): void;
-}
+```mermaid
+flowchart TD
+    A["Read installed ChatGPT version and app.asar hash"] --> B["Fetch and strictly validate schema-3 index"]
+    B --> C{"Exact binding identity exists?"}
+    C -- "No" --> U["Show unsupported build; do not inject"]
+    C -- "Yes" --> D["Select binding and its API/runtime"]
+    D --> E["For each extension, select newest API-compatible version"]
+    E --> F["Omit incompatible extensions; preserve their settings"]
+    F --> G["Download only missing versioned archives"]
+    G --> H["Verify SHA-256, manifest identity, and archive layout"]
+    H --> I["Reconcile saved enablement"]
+    I --> J["Atomically replace versions-lock.json"]
+    J --> K["Use the new set on next ChatGPT launch"]
 ```
 
-Both functions are synchronous and must support repeated activation cycles.
-Each extension owns its cleanup. `deactivate()` disposes its registrations,
-timers, listeners, UI sessions, and guards any unfinished asynchronous work.
-Shared lifecycle helpers move into platform infrastructure only after at least
-two extensions need the same implementation.
+The exact binding check happens before the index-generation rollback check.
+Thus a ChatGPT build change cannot be hidden by a newer cached generation. A
+same-generation catalog can select another exact binding during an app update.
 
-The main-process bridge owns the desired extension set, source hashes, and
-active storage authorization. It observes `settings.json`, flat extension
-packages, and explicit development extension paths. When the active API and
-binding remain unchanged, it
-reconciles the complete enabled extension set:
+## ChatGPT app update flow
 
-1. Evaluate candidate modules without activation.
-2. Stage the same candidates in every renderer.
-3. Wait for every renderer to acknowledge staging.
-4. Deactivate previous modules in reverse order.
-5. Activate candidates in deterministic ID order.
-6. Commit after every renderer reports success.
+```mermaid
+flowchart TD
+    A["ChatGPT auto-updates"] --> B["Launcher reads new version and app.asar hash"]
+    B --> C{"Exact new-build binding is published?"}
+    C -- "No" --> D["Open stock ChatGPT; show unsupported state"]
+    C -- "Yes" --> E["Install new binding even if some extensions are incompatible"]
+    E --> F{"Binding selects cached API/runtime?"}
+    F -- "Yes" --> G["Reuse cached API/runtime"]
+    F -- "No" --> H["Download selected API/runtime"]
+    G --> I["Select newest extension versions by API range"]
+    H --> I
+    I --> J["Disable only incompatible extensions"]
+    J --> K["Atomically activate the new component lock"]
+```
 
-An activation failure deactivates the candidates and restores the previous
-sources in every renderer. New windows receive the last committed set.
+## Startup and offline behavior
 
-This lifecycle is a one-way ChatGPT API `2.0.0` change. It updates
-`types.d.ts`, the current binding, every extension, and the mechanical suite.
-The suite covers load, unload, replacement, ordering, cleanup, new-window
-injection, and cross-renderer rollback.
+On startup, the launcher first checks for an exact cached lock. If it exists,
+the launcher can inject it without network access. The launcher then checks for
+updates in the background.
 
-## Local development extensions
+On a clean installation, the launcher downloads the exact remote set. If the
+network is unavailable or the ChatGPT build has no exact binding, the launcher
+keeps its UI available and can open stock ChatGPT without injection. It never
+uses another build's binding.
 
-The launcher accepts repeatable launch-scoped arguments:
+The updater accepts `CHATGPTX_UPDATE_INDEX_URL` for isolated development and
+end-to-end tests.
+
+## Installation and launch safety
+
+The updater:
+
+1. Strictly decodes the index.
+2. Checks the minimum launcher version.
+3. Matches the exact ChatGPT version and `app.asar` hash.
+4. Selects the API and the newest compatible extension versions.
+5. Downloads only missing versioned archives.
+6. Verifies each archive SHA-256 and expected package manifest.
+7. Rejects symbolic links, missing files, and path escapes.
+8. Preserves extension settings.
+9. Writes one atomic active lock last.
+
+At every injected launch, the launcher reads the current lock and settings. It
+writes a mode-`0600` launch configuration with the exact enabled extension
+entry points. This keeps enablement current and lets already-published runtimes
+load the new versioned store.
+
+Component changes take effect on the next ChatGPT launch. If ChatGPT is
+running, the launcher offers a restart.
+
+## Local development and API tests
+
+The launcher accepts repeatable development overrides:
 
 ```text
 --extension <absolute-package-directory-or-main.js>
 ```
 
-It writes resolved IDs and paths to a mode-`0600` ephemeral launch
-configuration. These entries:
+A local extension must be compatible with the selected ChatGPTX API. It
+overrides an installed extension with the same ID for that launch only.
 
-- Override an installed extension with the same ID for that launch
-- Leave `versions-lock.json`, flat installed packages, and persistent settings unchanged
-- Participate in the same compatibility checks
-- Reload after restart in milestone 1
-- Reload when their compiled entry point changes in milestone 2
+API test mode requires an explicit suite and an isolated profile:
 
-`--test-api` selects the locally built `api-test-suite` through this mechanism
-and disables every other extension for that launch. The packaged copy is used
-when no explicit `api-test-suite` path is provided. CI builds the suite locally
-and passes its path through `--extension`.
+```text
+ChatGPTX --test-api \
+  --extension <absolute-api-test-suite-package> \
+  --user-data-dir=<absolute-temporary-profile>
+```
 
-## Disabled-extension detection
+There is no bundled `api-test-suite` fallback.
 
-The macOS app observes ChatGPT process launches and waits for an injection
-handshake. Runtime state is tracked per PID:
+The isolated local CI run builds the current source components and stages them
+in its temporary versioned store before it starts the launcher. This tests
+unpublished changes without putting components in the launcher bundle or
+requiring their releases to exist before CI can approve them.
 
-- `starting`
-- `enabled`
-- `bridgeMissing`
-- `bindingMissing`
-- `injectionFailed`
+## Publication
 
-After a short startup grace period, a missing bridge handshake triggers one
-notification per PID with a `Restart ChatGPT` action. A missing binding triggers
-a `Check for Updates` action. Restart actions invoked from a notification proceed
-immediately because the action is explicit.
+CI derives release changes from component paths, builds deterministic archives,
+writes their SHA-256 values, and publishes version-addressed releases:
+
+```text
+chatgpt-api-v<version>
+binding-<chatgpt>-v<version>
+extension-<id>-v<version>
+```
+
+CI downloads each ZIP and checksum sidecar referenced by the schema-3 catalog.
+It verifies the actual ZIP and the sidecar against the catalog SHA-256 before
+it replaces the stable index asset. GitHub release assets can be changed when
+repository release immutability is not enabled. A later asset change does not
+silently install: the launcher rejects the ZIP because its SHA-256 is different.
+A new binding does not change extension manifests.
+
+This version fetches the index through HTTPS but does not verify a detached
+index signature. Archive SHA-256 checks protect against accidental or later
+asset changes, but they do not protect against an attacker who can replace the
+index and the matching archives. A built-in signing key and CI-held index
+signature are a separate security-hardening change.

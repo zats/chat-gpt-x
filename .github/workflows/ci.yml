@@ -220,13 +220,41 @@ jobs:
           node scripts/build-component-releases.mjs \
             "$RUNNER_TEMP/component-releases.json" \
             "$RUNNER_TEMP/component-release-artifacts"
-      - name: Publish immutable component releases
+      - name: Publish versioned component releases
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          scripts/publish-component-releases.sh
-          "$RUNNER_TEMP/component-release-artifacts/artifacts.json"
-          "$GITHUB_SHA"
+        run: |
+          for attempt in 1 2 3; do
+            set +e
+            scripts/publish-component-releases.sh \
+              "$RUNNER_TEMP/component-release-artifacts/artifacts.json" \
+              "$GITHUB_SHA"
+            publication_status=$?
+            set -e
+            if ((publication_status == 0)); then
+              exit 0
+            fi
+            ((attempt < 3)) || exit 1
+            echo "Component publication did not complete; retrying." >&2
+            sleep $((attempt * 5))
+          done
+
+  publish-update-index:
+    if: needs.publish-component-releases.result == 'success'
+    needs:
+      - publish-component-releases
+    concurrency:
+      group: publish-update-index
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tested landing
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
       - name: Publish verified update index
         env:
           GH_TOKEN: ${{ github.token }}

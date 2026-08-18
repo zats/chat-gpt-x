@@ -4,12 +4,14 @@
  * This intentionally inspects version-specific renderer state. The stable
  * api-test-suite remains limited to src/platform/types.d.ts.
  *
- * Usage: node src/platform/bindings/26.721.30844/ui-test.mjs [port]
+ * Usage: node src/platform/bindings/26.810.52044/ui-test.mjs [port]
  *   [--expect-native-profile-callback-missing]
  *   [--alternate-auth=/path/to/auth.json]
  *   [--select-thread=<thread-id>]
  *   [--select-thread-kind=remote]
  *   [--public-api-only]
+ *
+ * Set CHATGPTX_TEST_NO_PROFILE=1 for API-key authentication.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -19,12 +21,16 @@ const expectNativeProfileCallbackMissing = process.argv.includes(
   '--expect-native-profile-callback-missing',
 );
 const publicAPIOnly = process.argv.includes('--public-api-only');
+const noProfile = process.env.CHATGPTX_TEST_NO_PROFILE === '1';
 const alternateAuthPath = process.argv
   .find((argument) => argument.startsWith('--alternate-auth='))
   ?.slice('--alternate-auth='.length);
 const alternateAuthJson = alternateAuthPath
   ? await readFile(alternateAuthPath, 'utf8')
   : undefined;
+if (noProfile && alternateAuthJson) {
+  throw new Error('alternate authentication is unavailable without profiles');
+}
 const selectThreadId = process.argv
   .find((argument) => argument.startsWith('--select-thread='))
   ?.slice('--select-thread='.length);
@@ -93,6 +99,7 @@ async function waitFor(expression, timeoutMs = 20000) {
 async function validateUi(
   expectMissingProfileCallback,
   alternateAuthentication,
+  noProfile,
 ) {
   const checks = [];
   const markProgress = (value) => {
@@ -200,17 +207,42 @@ async function validateUi(
     );
   };
   const openThreadMenu = async () => {
-    const trigger = Array.from(document.querySelectorAll('button')).find(
-      (button) => button.getAttribute('aria-label') === 'Chat actions',
+    const findTrigger = () =>
+      Array.from(document.querySelectorAll('button')).find(
+        (button) =>
+          button.getAttribute('aria-label') === 'Chat actions' &&
+          button.getBoundingClientRect().height > 0,
+      );
+    await waitUntil(
+      () =>
+        typeof findTrigger()?.getAttribute('data-cgptx-thread-id') === 'string',
     );
+    const trigger = findTrigger();
     if (!trigger) throw new Error('Thread menu trigger missing');
-    activateButton(trigger);
-    await sleep(350);
-    return Array.from(document.querySelectorAll('[role="menu"]')).find((menu) =>
-      Array.from(menu.children).some((child) =>
-        child.hasAttribute('data-cgptx-thread-id'),
-      ),
+    for (const type of ['pointerdown', 'pointerup']) {
+      trigger.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          isPrimary: true,
+          button: 0,
+          pointerType: 'mouse',
+        }),
+      );
+    }
+    let menu;
+    await waitUntil(
+      () => {
+        menu = Array.from(document.querySelectorAll('[role="menu"]')).find(
+          (candidate) =>
+            Array.from(candidate.children).some((child) =>
+              child.hasAttribute('data-cgptx-thread-id'),
+            ),
+        );
+        return Boolean(menu);
+      },
     );
+    return menu;
   };
   const openProfile = async () => {
     const trigger = Array.from(document.querySelectorAll('button')).find((button) =>
@@ -391,23 +423,27 @@ async function validateUi(
       foreground: 'rgb(255, 255, 255)',
     },
   };
-  const appHeader = document.querySelector('header.app-header-tint');
+  const appHeader = document.querySelector(
+    'header[data-pip-obstacle="app-shell-header"]',
+  );
   if (!appHeader) throw new Error('Thread header missing');
-  let threadHeaderTitle;
-  await waitUntil(() => {
-    threadHeaderTitle = Array.from(appHeader.querySelectorAll('*')).find(
+  const findThreadHeaderTitle = () =>
+    Array.from(appHeader.querySelectorAll('*')).find(
       (element) =>
         element.textContent?.trim() === originalThread.title &&
         !Array.from(element.children).some(
           (child) => child.textContent?.trim() === originalThread.title,
         ),
     );
+  let threadHeaderTitle;
+  await waitUntil(() => {
+    threadHeaderTitle = findThreadHeaderTitle();
     return Boolean(threadHeaderTitle);
   });
   const headerToggle = (label) =>
     Array.from(
       document.querySelectorAll(
-        `header.app-header-tint button[aria-label="${label}"]`,
+        `header[data-pip-obstacle="app-shell-header"] button[aria-label="${label}"]`,
       ),
     ).find((button) => button.getBoundingClientRect().x > innerWidth / 2);
   const toggleSidePanel = headerToggle('Toggle side panel');
@@ -466,6 +502,10 @@ async function validateUi(
     },
   });
   await sleep(50);
+  await waitUntil(() => {
+    threadHeaderTitle = findThreadHeaderTitle();
+    return Boolean(threadHeaderTitle?.isConnected);
+  });
   const initialHeaderColors = headerColors[originalHeaderTheme];
   const collapsedPanelButtons = [
     headerToggle('Toggle bottom panel'),
@@ -668,7 +708,7 @@ async function validateUi(
   );
   const tabFadeGradients = Array.from(
     tabToolbar?.querySelectorAll(
-      '[class*="after:to-token-main-surface-primary"]',
+      '[class*="after:to-surface"]',
     ) ?? [],
   ).map((overlay) => getComputedStyle(overlay, '::after').backgroundImage);
   check(
@@ -928,6 +968,11 @@ async function validateUi(
 
   let threadMenu = await openThreadMenu();
   if (!threadMenu) throw new Error('Thread menu did not open');
+  check(
+    globalThis.__CGPTX_HOST__._debug.applicationRootRefreshCount() === 1 &&
+      globalThis.__CGPTX_HOST__._debug.threadMenuBoundaryRenderCount() > 0,
+    'native binding reconciles the application tree before activation',
+  );
   const threadId = threadMenu
     .querySelector('[data-cgptx-thread-id]')
     ?.getAttribute('data-cgptx-thread-id');
@@ -942,6 +987,7 @@ async function validateUi(
   const threadRows = Array.from(threadMenu.children).filter(
     (child) => child.getAttribute('role') === 'menuitem',
   );
+  const nativeThreadItemCursor = getComputedStyle(threadRows[0]).cursor;
   const threadRowLabel = (row) =>
     row?.querySelector('span.min-w-0.flex-1.truncate')?.textContent?.trim() ??
     row?.textContent?.trim();
@@ -961,7 +1007,7 @@ async function validateUi(
   const firstThreadSeparatorIndex = Array.from(threadMenu.children).findIndex(
     (child) =>
       child.getAttribute('role') !== 'menuitem' &&
-      Boolean(child.querySelector('.h-\\[1px\\][class*="bg-token-menu-border"]')),
+      Boolean(child.querySelector('.h-\\[1px\\][class*="bg-border"]')),
   );
   check(
     colorIndex >= 0 && colorIndex === firstThreadSeparatorIndex - 1,
@@ -1006,8 +1052,8 @@ async function validateUi(
       Boolean(referenceThreadItem) &&
       JSON.stringify(threadItemPresentation(colorRow)) ===
         JSON.stringify(threadItemPresentation(referenceThreadItem)) &&
-      colorRow.className.includes('hover:bg-token-list-hover-background') &&
-      colorRow.className.includes('focus:bg-token-list-hover-background'),
+      colorRow.className.includes('hover:bg-primary-ghost-hover') &&
+      colorRow.className.includes('focus-visible:bg-primary-ghost-hover'),
     'Color reuses the native thread item presentation',
     {
       color: threadItemPresentation(colorRow),
@@ -1080,7 +1126,7 @@ async function validateUi(
           colorIcons[index] &&
           row.querySelector('svg') === null &&
           row.textContent?.trim() === threadRowLabel(row) &&
-          row.className.includes('hover:bg-token-list-hover-background'),
+          row.className.includes('hover:bg-primary-ghost-hover'),
       ),
     'Color flyout contains only the requested names and native color icons',
     { rendered: colorRows.map(threadRowLabel) },
@@ -1118,14 +1164,13 @@ async function validateUi(
   await sleep(50);
   colorRows[0]?.focus();
   const focusedColorStyle = getComputedStyle(document.activeElement);
-  const nativeThreadItemCursor = getComputedStyle(threadRows[0]).cursor;
   check(
     focusedColorStyle.cursor === nativeThreadItemCursor &&
       colorRows[0]?.className.includes(
-        'hover:bg-token-list-hover-background',
+        'hover:bg-primary-ghost-hover',
       ) &&
       colorRows[0]?.className.includes(
-        'focus:bg-token-list-hover-background',
+        'focus:bg-primary-ghost-hover',
       ),
     'Color choices use the native interactive highlight state',
     {
@@ -1146,7 +1191,7 @@ async function validateUi(
     document.activeElement === colorRows[1],
     'Color flyout participates in native keyboard navigation',
   );
-  activateButton(colorRows[1]);
+  invokeNativeButton(colorRows[1]);
   await waitUntil(() =>
     Boolean(
       findThreadRow(threadId)?.querySelector(
@@ -1209,12 +1254,18 @@ async function validateUi(
   );
   markProgress('thread-menu');
 
-  let column = await openProfile();
-  if (!column) throw new Error('Profile menu did not open');
   check(
     typeof globalThis.__CGPTX_RUNTIME__?.request === 'function',
     'version-independent runtime preload is available',
   );
+
+  if (noProfile) {
+    markProgress('complete');
+    return checks;
+  }
+
+  let column = await openProfile();
+  if (!column) throw new Error('Profile menu did not open');
   check(
     globalThis.__CGPTX_HOST__?._debug.authenticationReady() === true,
     'native post-authentication refresh callback is captured',
@@ -1276,7 +1327,7 @@ async function validateUi(
     (item) => item.kind === 'separator',
   ).length;
   const actualSeparators = blocks.filter((block) =>
-    block.querySelector('.h-\\[1px\\][class*="bg-token-menu-border"]'),
+    block.querySelector('.h-\\[1px\\][class*="bg-border"]'),
   ).length;
   check(
     actualSeparators === expectedSeparators,
@@ -1565,21 +1616,62 @@ async function validateUi(
       ?.startsWith('M16.585 10C16.585 6.3632'),
     'person icon reuses ChatGPT Profile artwork',
   );
+  const profileNavigationAttemptsBefore =
+    globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount();
+  const profileClickStartedAt = performance.now();
+  let profileDomTransitionAfterMs = null;
+  const profileTransitionObserver = new MutationObserver(() => {
+    if (
+      profileDomTransitionAfterMs === null &&
+      Array.from(document.querySelectorAll('[aria-current="page"]')).some(
+        (element) => element.textContent?.trim() === 'Profile',
+      )
+    ) {
+      profileDomTransitionAfterMs = Math.round(
+        performance.now() - profileClickStartedAt,
+      );
+    }
+  });
+  profileTransitionObserver.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['aria-current'],
+    childList: true,
+    subtree: true,
+  });
   profile?.click();
-  await sleep(500);
-  const profileIsCurrent = Array.from(
-    document.querySelectorAll('[aria-current="page"]'),
-  ).some((element) => element.textContent?.trim() === 'Profile');
+  const profileNavigationDeadline = performance.now() + 10_000;
+  let profileIsCurrent = false;
+  while (performance.now() < profileNavigationDeadline) {
+    profileIsCurrent = Array.from(
+      document.querySelectorAll('[aria-current="page"]'),
+    ).some((element) => element.textContent?.trim() === 'Profile');
+    if (profileIsCurrent) break;
+    await sleep(50);
+  }
+  profileTransitionObserver.disconnect();
+  const profileNavigationAttemptsAfter =
+    globalThis.__CGPTX_HOST__?._debug.profileNavigationAttemptCount();
+  const profileNavigationLastRequestedPath =
+    globalThis.__CGPTX_HOST__?._debug.profileNavigationLastRequestedPath();
   check(
     Boolean(account && profile) &&
       !profileWasCurrent &&
-      profileIsCurrent,
+      profileIsCurrent &&
+      profileNavigationAttemptsAfter === profileNavigationAttemptsBefore + 1 &&
+      profileNavigationLastRequestedPath === '/settings/profile',
     'account submenu Profile child opens native Profile settings',
     {
       profileWasCurrent,
       profileIsCurrent,
       foundAccount: Boolean(account),
       foundProfile: Boolean(profile),
+      profileNavigationAttemptsBefore,
+      profileNavigationAttemptsAfter,
+      profileNavigationLastRequestedPath,
+      profileDomTransitionAfterMs,
+      currentPageLabels: Array.from(
+        document.querySelectorAll('[aria-current="page"]'),
+      ).map((element) => element.textContent?.trim()),
     },
   );
   profileNavigationRegistration.dispose();
@@ -1632,55 +1724,80 @@ async function validateUi(
       );
     }
   }
-
   markProgress('complete');
   return checks;
 }
 
-async function selectThread(threadId) {
-  const selector =
-    '[data-app-action-sidebar-thread-id$=":' + threadId + '"]';
-  await evaluate(
-    `(async () => {
-      const deadline = Date.now() + 60000;
-      let row;
-      while (Date.now() < deadline) {
-        row = document.querySelector(${JSON.stringify(selector)});
-        if (row) break;
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      if (!row) throw new Error('Selected native thread row missing');
-      if (!globalThis.__CGPTX_UI_TEST_THREADS__) {
-        globalThis.__CGPTX_HOST__.registerExtension("ui-test-thread-selection", {
-          activate(api) {
-            globalThis.__CGPTX_UI_TEST_THREADS__ = api.threads;
-          },
-        });
-      }
-      row.click();
+async function threadSelectionSnapshot(selector) {
+  return evaluate(
+    `(() => {
+      const row = document.querySelector(${JSON.stringify(selector)});
+      const trigger = row?.querySelector("[data-thread-title-trigger]");
+      const rect = row?.getBoundingClientRect();
+      const reactPropsKey = row
+        ? Object.keys(row).find((key) => key.startsWith("__reactProps$"))
+        : undefined;
+      return {
+        href: location.href,
+        currentThreadId:
+          globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId ?? null,
+        fixtureReady: globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true,
+        nativeReady: globalThis.__CGPTX_HOST__?._debug.nativeReady() === true,
+        row: row
+          ? {
+              connected: row.isConnected,
+              ariaCurrent: row.getAttribute("aria-current"),
+              ariaSelected: row.getAttribute("aria-selected"),
+              dataState: row.getAttribute("data-state"),
+              className: row.className,
+              width: rect?.width ?? 0,
+              height: rect?.height ?? 0,
+              hasReactOnClick:
+                typeof row[reactPropsKey]?.onClick === "function",
+            }
+          : null,
+        trigger: trigger
+          ? {
+              tagName: trigger.tagName,
+              ariaCurrent: trigger.getAttribute("aria-current"),
+              ariaSelected: trigger.getAttribute("aria-selected"),
+              dataState: trigger.getAttribute("data-state"),
+              pointerEvents: getComputedStyle(trigger).pointerEvents,
+            }
+          : null,
+      };
     })()`,
-  );
-  await waitFor(
-    `globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId === ${JSON.stringify(threadId)}`,
-    60000,
   );
 }
 
-async function selectThreadByKind(kind) {
-  const threadId = await evaluate(
+async function activateThreadRow(
+  selector,
+  expectedThreadId,
+  waitForCurrent = true,
+) {
+  const selection = await evaluate(
     `(async () => {
       const deadline = Date.now() + 60000;
       let row;
+      let reactPropsKey;
       while (Date.now() < deadline) {
-        row = document.querySelector(
-          '[data-app-action-sidebar-thread-kind="${kind}"]',
-        );
-        if (row) break;
+        row = document.querySelector(${JSON.stringify(selector)});
+        reactPropsKey = row
+          ? Object.keys(row).find((key) => key.startsWith("__reactProps$"))
+          : undefined;
+        if (
+          row &&
+          typeof row[reactPropsKey]?.onClick === "function" &&
+          globalThis.__CGPTX_HOST__?._debug.nativeReady() === true
+        ) {
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      if (!row) throw new Error('Selected native ${kind} thread row missing');
-      const scopedId = row.getAttribute('data-app-action-sidebar-thread-id');
-      const threadId = scopedId.slice(scopedId.lastIndexOf(':') + 1);
+      if (!row) throw new Error('Selected native thread row missing');
+      if (typeof row[reactPropsKey]?.onClick !== "function") {
+        throw new Error('Selected native thread row never became interactive');
+      }
       if (!globalThis.__CGPTX_UI_TEST_THREADS__) {
         globalThis.__CGPTX_HOST__.registerExtension("ui-test-thread-selection", {
           activate(api) {
@@ -1688,22 +1805,76 @@ async function selectThreadByKind(kind) {
           },
         });
       }
+      const scopedId = row.getAttribute('data-app-action-sidebar-thread-id');
+      const threadId =
+        ${JSON.stringify(expectedThreadId)} ??
+        scopedId.slice(scopedId.lastIndexOf(':') + 1);
+      const trigger = row.querySelector("[data-thread-title-trigger]");
+      const rect = row.getBoundingClientRect();
+      const before = {
+        href: location.href,
+        currentThreadId:
+          globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId ?? null,
+        fixtureReady: globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true,
+        nativeReady: globalThis.__CGPTX_HOST__?._debug.nativeReady() === true,
+        row: {
+          connected: row.isConnected,
+          ariaCurrent: row.getAttribute("aria-current"),
+          ariaSelected: row.getAttribute("aria-selected"),
+          dataState: row.getAttribute("data-state"),
+          className: row.className,
+          width: rect.width,
+          height: rect.height,
+          hasReactOnClick: true,
+        },
+        trigger: trigger
+          ? {
+              tagName: trigger.tagName,
+              ariaCurrent: trigger.getAttribute("aria-current"),
+              ariaSelected: trigger.getAttribute("aria-selected"),
+              dataState: trigger.getAttribute("data-state"),
+              pointerEvents: getComputedStyle(trigger).pointerEvents,
+            }
+          : null,
+      };
       row.click();
-      return threadId;
+      return { before, threadId };
     })()`,
   );
-  await waitFor(
-    `globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId === ${JSON.stringify(threadId)}`,
-    60000,
+  if (!waitForCurrent) return selection.threadId;
+  try {
+    await waitFor(
+      `globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId === ${JSON.stringify(selection.threadId)}`,
+      60000,
+    );
+  } catch (error) {
+    const after = await threadSelectionSnapshot(selector);
+    throw new Error(
+      `${error.message}; thread selection state: ${JSON.stringify({ before: selection.before, after })}`,
+    );
+  }
+  return selection.threadId;
+}
+
+async function selectThread(threadId, waitForCurrent = true) {
+  const selector =
+    '[data-app-action-sidebar-thread-id$=":' + threadId + '"]';
+  await activateThreadRow(selector, threadId, waitForCurrent);
+}
+
+async function selectThreadByKind(kind, waitForCurrent = true) {
+  return activateThreadRow(
+    '[data-app-action-sidebar-thread-kind="remote"]',
+    undefined,
+    waitForCurrent,
   );
-  return threadId;
 }
 
 let selectedThreadId = selectThreadId;
 if (selectThreadKind) {
-  selectedThreadId = await selectThreadByKind(selectThreadKind);
+  selectedThreadId = await selectThreadByKind(selectThreadKind, false);
 } else if (selectedThreadId) {
-  await selectThread(selectedThreadId);
+  await selectThread(selectedThreadId, false);
 }
 await waitFor('globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true', 90000);
 if (selectedThreadId) await selectThread(selectedThreadId);
@@ -1735,6 +1906,8 @@ const report = await evaluate(
     JSON.stringify(expectNativeProfileCallbackMissing) +
     ',' +
     JSON.stringify(alternateAuthJson) +
+    ',' +
+    JSON.stringify(noProfile) +
     ')',
 );
 socket.close();

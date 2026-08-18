@@ -28,8 +28,11 @@ verified their behavior and prop contracts through the injected bridge.
 | --- | --- | --- |
 | React, JSX, and React DOM | `app-initial-BYOVlUBL.js` | `Skt()` is React 19.2.7; `hkt()` supplies mutable `jsx` and `jsxs`; `OCt()` supplies `createRoot` |
 | Native menus | `app-initial-BYOVlUBL.js` | initializer `XU`; namespace `qU`; `qU.Item`, `qU.Separator`, `qU.SubmenuItem`, and `qU.FlyoutSubmenuItem`; `GU` dropdown root |
-| Native icons | `app-initial-BYOVlUBL.js` | initializer `Aht` and component `kht` for the menu chevron; initializer `Nm` and component `Mm` for the Profile person icon |
+| Native icons | `app-initial-BYOVlUBL.js` | initializer `Aht` and component `kht` for the menu chevron; initializer `Nm` and component `Mm` for the Profile person icon; initializer `cG` and component `sG` for the Settings gear icon |
 | Native color picker | `app-initial-BYOVlUBL.js` | initializer `yc`; controlled picker `vc` |
+| Settings page and search | `settings-page-o5HqiPJn.js` | semantic category headings, sidebar rows, search input/results, and native pane-selection callbacks |
+| Settings section icons | `use-visible-settings-sections-999uVf40.js` | initialized section-icon map through public export `r` |
+| Native settings components | `app-initial-BYOVlUBL.js` | initializers `Ka`, `_r`, `UO`, `YO`, `$S`, `za`, and `Fbt`; `Wa` page; `gr` group with `Header`, `Content`, and `Footer`; `HO` row list; `JO` row; `QS` toggle; `Ia` select trigger; `GU` dropdown; `qU.Item`; `Mbt` button |
 | Authentication context | `app-initial-BYOVlUBL.js` | initializer `I0` and auth-nonce hook `z0`; initializer `U0` and app-server registry hook `q0` |
 | Query and message contracts | `app-initial-BYOVlUBL.js` | initializer `pkt` and query-client hook `mkt`; initializer `dxt` and account-info query-key builder `cxt`; initializer `_xt` and message bus `vxt` |
 | Browser and navigation bridges | `app-initial-BYOVlUBL.js` | initializer `ndt` and direct open-in-browser dispatch `adt`; initializer `eut` and React Router navigation hook `iut` |
@@ -65,6 +68,9 @@ Additional semantic anchors:
   styles in `app-initial-AYgnwUwc.css` remain compatible with the appearance
   API.
 - `app-DuLjgNkx.css` still sets `--cursor-interaction: default` in Electron.
+- `settings.nav.heading.personal`, `.integrations`, `.coding`, and `.archived`
+  locate the four native Settings navigation groups. Native pane buttons keep
+  the `data-settings-panel-slug` contract.
 
 ## menus.profile
 
@@ -108,6 +114,35 @@ before page scripts run. Native imports may complete on either side of the
 first React render, so the binding waits for the committed application root,
 reconciles it once through the native React DOM renderer, and resolves
 `__CGPTX_NATIVE_READY__` before extension activation.
+
+## settings
+
+Binding `1.1.1` adds ChatGPT API `1.1.1` Settings support to this existing app
+build. `settings-page-o5HqiPJn.js` retains the native Settings shell and
+selection contracts from the prior build. The current shared module retains
+the verified Settings page, group, row, toggle, select, dropdown, button, and
+gear-icon exports. The current visibility module retains the initialized
+section-icon map through export `r`.
+
+The JSX boundary captures native categories, pane rows, groups, and semantic
+row messages. Category, group, and item transformers compose in extension
+load and registration order. Normalization preserves native descriptors,
+enforces extension namespaces and unique IDs, isolates failures, and refreshes
+an open Settings window after invalidation or disposal. Contributed panes and
+items use only the current app's native Settings components.
+
+Native search keeps the `searchQuery`, `onQueryChange`, `searchResults`, and
+`onSelect` contracts. The binding adds one result for each matching effective
+pane and indexes category, pane, group, item, package-title, and package-
+description text. Selection clears the native query and uses the same native
+pane-selection callback as the sidebar.
+
+Custom pane selection remains local Settings state. The binding selects the
+native Appearance pane as the content host, then replaces its native `Wa`
+page props with the contributed title and group tree. `open()` waits for an
+optional target row and scrolls it into view. When Settings is closed, it uses
+the main-process `navigate-to-route` message to open General before it selects
+the requested pane.
 
 ## authentication
 

@@ -15,7 +15,6 @@ private struct LocalExtensionManifest: Decodable {
 enum LocalExtensionResolver {
     static func resolve(
         _ url: URL,
-        chatgptVersion: String,
         chatgptAPIVersion: String,
         fileManager: FileManager = .default
     ) throws -> LaunchExtension {
@@ -76,12 +75,10 @@ enum LocalExtensionResolver {
         }
         guard try ComponentCompatibility.matches(
             manifest.compatibility,
-            chatgptVersion: chatgptVersion,
             chatgptAPIVersion: chatgptAPIVersion
         ) else {
             throw LocalExtensionError.incompatible(
                 manifest.id,
-                chatgptVersion,
                 chatgptAPIVersion
             )
         }
@@ -93,13 +90,9 @@ enum LocalExtensionResolver {
 enum ComponentCompatibility {
     static func matches(
         _ compatibility: ExtensionCompatibility,
-        chatgptVersion: String,
         chatgptAPIVersion: String
     ) throws -> Bool {
-        try matchesRange(
-            compatibility.chatgpt,
-            candidate: chatgptVersion
-        ) && matchesSemverRange(
+        try matchesSemverRange(
             compatibility.chatgptApi,
             candidate: chatgptAPIVersion
         )
@@ -202,7 +195,7 @@ private enum LocalExtensionError: LocalizedError {
     case idInvalid(String)
     case mainDeclarationInvalid(String)
     case mainPathInvalid(String)
-    case incompatible(String, String, String)
+    case incompatible(String, String)
     case versionInvalid(String)
 
     var errorDescription: String? {
@@ -219,8 +212,8 @@ private enum LocalExtensionError: LocalizedError {
             "The local extension main must be contents/main.js, received \(main)."
         case .mainPathInvalid(let path):
             "The local extension file is not its declared main: \(path)"
-        case .incompatible(let id, let chatgpt, let api):
-            "\(id) is incompatible with ChatGPT \(chatgpt) and API \(api)."
+        case .incompatible(let id, let api):
+            "\(id) is incompatible with ChatGPTX API \(api)."
         case .versionInvalid(let version):
             "The component version is invalid: \(version)"
         }

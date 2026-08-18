@@ -22,14 +22,14 @@ src/
       ...
     api-test-suite/             # the mechanical e2e test extension — exercises every public API path
 updates/
-  latest.json                   # schema-v2 component catalog, release tags, compatibility, and hashes
+  latest.json                   # schema-3 component catalog, release tags, compatibility, and hashes
 ```
 
-`src/extensions/build.sh [<extension-id> ...]` is the local build entry point. With no ids it builds all extensions. Each manifest declares `"main": "contents/main.js"`, its semantic `version`, and `compatibility.chatgpt` plus `compatibility.chatgptApi` ranges. The script compiles `<extension-id>.ts` as browser-targeted CommonJS under `${TMPDIR}/ChatGPTX/extension-builds/`; `CHATGPTX_EXTENSION_BUILD_DIR` overrides that root. Development builds enter a launch only through an explicit `--extension` path.
+`src/extensions/build.sh [<extension-id> ...]` is the local build entry point. With no ids it builds all extensions. Each manifest declares `"main": "contents/main.js"`, its semantic `version`, and a `compatibility.chatgptApi` range. The script compiles `<extension-id>.ts` as browser-targeted CommonJS under `${TMPDIR}/ChatGPTX/extension-builds/`; `CHATGPTX_EXTENSION_BUILD_DIR` overrides that root. Development builds enter a launch only through an explicit `--extension` path.
 
-The bindings directory name is the app's version (`CFBundleShortVersionString`). Its manifest owns a semantic `version` and pins exact `chatgpt` and `chatgptApi` versions. New ChatGPT versions start at binding version `1.0.0`; corrections increment it. `bindings/manifest.json` points to the newest versioned directory and its exact Sparkle enclosure URL. After validating extensions against a new ChatGPT build, expand their `compatibility.chatgpt` ranges and increment their versions.
+The bindings directory name is the app's version (`CFBundleShortVersionString`). Its manifest owns a semantic `version` and pins exact `chatgpt`, `asarSha256`, and `chatgptApi` values. New ChatGPT versions start at binding version `1.0.0`; corrections increment it. `bindings/manifest.json` points to the current versioned directory and its exact Sparkle enclosure URL. A new binding does not change extension versions.
 
-CI classifies changes by these paths. A pull request that changes the API, a binding directory, a public extension directory, or a shared utility consumed by public extensions must update affected component versions and `updates/latest.json`. Internal extensions declare `"private": true` and stay out of the public index. After the tested commit reaches `main`, CI builds immutable archives and creates predictable GitHub Releases:
+CI classifies changes by these paths. A pull request that changes the API, a binding directory, a public extension directory, or a shared utility consumed by public extensions must update affected component versions and `updates/latest.json`. Internal extensions declare `"private": true` and stay out of the public index. After the tested commit reaches `main`, CI builds version-addressed archives and creates predictable GitHub Releases:
 
 ```
 chatgpt-api-v<version>
@@ -37,7 +37,7 @@ binding-<chatgpt>-v<version>
 extension-<id>-v<version>
 ```
 
-GitHub Releases retain versioned contents. CI then verifies every release and publishes the schema-v2 index as `updates/latest.json` on the stable `updates` release. Source directories contain the latest implementation.
+GitHub Releases retain versioned contents. CI then verifies every release and publishes the schema-3 index as `updates/latest.json` on the stable `updates` release. The index keeps every published extension version so the launcher can select the newest version compatible with the binding's API. Source directories contain the latest implementation.
 
 ## Runtime state (on the user's machine)
 
@@ -46,16 +46,16 @@ GitHub Releases retain versioned contents. CI then verifies every release and pu
   components/
     chatgpt-api/<api-version>/
     bindings/<chatgpt-version>/<binding-version>/
-    extensions/<extension-id>/   # active package.json and contents
+    extensions/<extension-id>/<extension-version>/
   state/<extension-id>/         # extension-owned persistent state
-  versions-lock.json            # exact active API and binding paths
-  settings.json                 # every installed extension id and its settings
+  versions-lock.json            # exact active API, binding, and extension paths
+  settings.json                 # persistent extension preferences
 ```
 
-`settings.json` has an object root. Its `extensions` object maps each installed
-ID to an extensible record such as `{ "enabled": true }`. The runtime preserves
-unknown fields in each record. It derives executable paths and package metadata
-from `components/extensions/<extension-id>/package.json`; neither
-`settings.json` nor `versions-lock.json` stores extension paths. Startup loads
-enabled extensions in lexical ID order. Registration order within each loaded
-extension remains the multi-consumer API ordering guarantee.
+`settings.json` has an object root. Its `extensions` object maps known IDs to an
+extensible record such as `{ "enabled": true }`. The runtime preserves unknown
+fields and records for extensions that are not compatible with the selected
+API. `versions-lock.json` selects one immutable versioned package path for each
+compatible extension. Startup applies current settings and loads enabled
+extensions in lexical ID order. Registration order within each loaded extension
+remains the multi-consumer API ordering guarantee.

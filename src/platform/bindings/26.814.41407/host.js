@@ -1,5 +1,5 @@
 /**
- * Renderer binding for ChatGPT 26.721.31836.
+ * Renderer binding for ChatGPT 26.814.41407.
  *
  * The binding patches the app's shared JSX runtime and transforms native
  * profile and thread menu item trees. Items remain inside the app's existing
@@ -12,11 +12,11 @@
   if (window.__CGPTX_HOST__) return;
 
   const LOG_PREFIX = "[cgptx-host]";
-  const APP_INITIAL_MODULE = "./assets/app-initial-C-fROkKo.js";
-  const PLUS_ICON_MODULE = "./assets/plus-BgCJgEEs-CggjjkHs.js";
-  const PALETTE_ICON_MODULE = "./assets/palette-lzFbWMQk-D2UumFmj.js";
-  const THREAD_MENU_MODULE = "./assets/thread-overflow-menu-jSLwXfym.js";
-  const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-fs7WVkdZ.js";
+  const APP_INITIAL_MODULE = "./assets/app-initial-BCLYDefw.js";
+  const PLUS_ICON_MODULE = "./assets/plus-BgCJgEEs-Cwz0arvh.js";
+  const PALETTE_ICON_MODULE = "./assets/palette-lzFbWMQk-6nSl4cby.js";
+  const THREAD_MENU_MODULE = "./assets/thread-overflow-menu-L1wJl1eV.js";
+  const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-BOw-tdIM.js";
   const AUTHENTICATION_RESTART_TIMEOUT_MS = 20_000;
   const HEADER_BACKGROUND_PROPERTY = "--header-background-color";
   const HEADER_FOREGROUND_PROPERTY = "--header-foreground-color";
@@ -26,31 +26,31 @@
   ]);
   const BINDING_STYLE_ID = "cgptx-binding-style";
   const BINDING_STYLE_SOURCE = `
-html[data-cgptx-header-background-color] header.app-header-tint {
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] {
   background-color: transparent !important;
 }
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(2),
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3),
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(5) {
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(2),
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(3),
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(5) {
   background-color: var(--header-background-color) !important;
 }
 html[data-cgptx-header-background-color]:has(
     aside[data-app-shell-focus-area="right-panel"][style*="opacity: 1"]
   )
-  header.app-header-tint > div:nth-of-type(5) {
+  header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(5) {
   background-color: transparent !important;
 }
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3) {
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(3) {
   box-shadow: -8px 0 var(--header-background-color);
 }
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
   [data-app-shell-tabs="true"] > .h-toolbar {
-  --color-token-main-surface-primary: var(--header-background-color);
+  --color-surface: var(--header-background-color);
 }
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
   [data-app-shell-tabs="true"] > .h-toolbar,
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
-  [data-app-shell-tabs="true"] > .h-toolbar [class~="bg-token-main-surface-primary"] {
+  [data-app-shell-tabs="true"] > .h-toolbar [class~="bg-surface"] {
   background-color: var(--header-background-color) !important;
 }
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
@@ -61,7 +61,18 @@ html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-
     var(--header-background-color)
   ) !important;
 }
-html[data-cgptx-header-foreground-color] header.app-header-tint {
+html[data-cgptx-header-foreground-color] header[data-pip-obstacle="app-shell-header"] {
+  --color-text: var(--header-foreground-color);
+  --color-text-secondary: color-mix(
+    in srgb,
+    var(--header-foreground-color) 76%,
+    transparent
+  );
+  --color-text-tertiary: color-mix(
+    in srgb,
+    var(--header-foreground-color) 72%,
+    transparent
+  );
   --color-token-foreground: var(--header-foreground-color);
   --color-token-text-primary: var(--header-foreground-color);
   color: var(--header-foreground-color);
@@ -77,7 +88,7 @@ html[data-cgptx-header-foreground-color] header.app-header-tint {
   );
 }
 html[data-cgptx-header-background-color][data-cgptx-header-foreground-color]
-  header.app-header-tint button[class~="bg-token-bg-fog"] {
+  header[data-pip-obstacle="app-shell-header"] button[class~="bg-token-bg-fog"] {
   background-color: color-mix(
     in srgb,
     var(--header-background-color) 75%,
@@ -181,7 +192,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function isThreadMessageId(id) {
     return (
       typeof id === "string" &&
-      (id.startsWith("threadHeader.") || id.startsWith("sidebarElectron."))
+      (id.startsWith("threadHeader.") ||
+        id.startsWith("sidebarElectron.") ||
+        id.startsWith("sidebar.threadProject."))
     );
   }
 
@@ -230,6 +243,10 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let currentThread = undefined;
   let currentThreadClearGeneration = 0;
   let native = null;
+  let nativeBindingInstalled = false;
+  let nativeBindingError = null;
+  let applicationRootRefreshCount = 0;
+  let threadMenuBoundaryRenderCount = 0;
   let pendingExpandedId = null;
   let pendingThreadExpanded = null;
   let nestedItemClassName = null;
@@ -1193,7 +1210,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return Boolean(
       block.matches?.('[role="separator"]') ||
         block.querySelector?.(
-          '[role="separator"], .h-\\[1px\\][class*="bg-token-menu-border"]',
+          '[role="separator"], .h-\\[1px\\][class*="bg-border"]',
         ),
     );
   }
@@ -2036,25 +2053,29 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       });
     }
     const trigger = tree.props.triggerButton;
-    const triggerButton = isElement(trigger)
+    const nativeContextMenuButton =
+      isElement(trigger?.props?.button) &&
+      trigger.props.conversationId === context.threadId &&
+      typeof trigger.props.getMenuItems === "function"
+        ? trigger.props.button
+        : trigger;
+    const triggerButton = isElement(nativeContextMenuButton)
       ? native.jsx(
-          trigger.type,
+          nativeContextMenuButton.type,
           {
-            ...trigger.props,
+            ...nativeContextMenuButton.props,
             "data-cgptx-thread-id": context.threadId,
           },
-          trigger.key ?? undefined,
+          nativeContextMenuButton.key ?? undefined,
         )
-      : trigger;
-    return native.jsx(
-      tree.type,
-      {
-        ...tree.props,
-        triggerButton,
-        children: rendered.map((entry) => entry.element),
-      },
-      tree.key ?? undefined,
-    );
+      : nativeContextMenuButton;
+    const rootProps = {
+      ...tree.props,
+      triggerButton,
+      children: rendered.map((entry) => entry.element),
+    };
+    if (nativeContextMenuButton !== trigger) delete rootProps.open;
+    return native.jsx(tree.type, rootProps, tree.key ?? undefined);
   }
 
   function renderThreadTree(value, context) {
@@ -2122,7 +2143,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       surface.current.querySelector('[role="slider"]').focus();
     }, []);
     const headerBottom = document
-      .querySelector("header.app-header-tint")
+      .querySelector('header[data-pip-obstacle="app-shell-header"]')
       .getBoundingClientRect().bottom;
     return native.jsx("div", {
       ref: surface,
@@ -2241,6 +2262,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     }
 
     function ThreadMenuBoundary({ child }) {
+      threadMenuBoundaryRenderCount += 1;
       React.useSyncExternalStore(
         subscribe,
         () => renderVersion,
@@ -2330,6 +2352,64 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     log("native JSX hook installed");
   }
 
+  function applicationReactRoot() {
+    if (!document.body) return null;
+    for (const node of document.body.querySelectorAll("*")) {
+      let fiber = fiberOf(node);
+      if (!fiber) continue;
+      while (fiber.return) fiber = fiber.return;
+      if (fiber.tag === 3 && fiber.stateNode?.current) {
+        return fiber.stateNode;
+      }
+    }
+    return null;
+  }
+
+  async function reconcileApplicationTree() {
+    const deadline = Date.now() + 10_000;
+    let root = null;
+    let element = null;
+    while (Date.now() < deadline) {
+      root = applicationReactRoot();
+      element = root?.current?.memoizedState?.element;
+      if (root && isElement(element)) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!root || !isElement(element)) {
+      throw new Error("ChatGPT React root is unavailable");
+    }
+
+    const existingThreadMenu = Array.from(
+      document.querySelectorAll('button[aria-label="Chat actions"]'),
+    ).some((button) => button.getBoundingClientRect().height > 0);
+    const probe = native.ReactDOM.createRoot(document.createElement("div"));
+    const render = Object.getPrototypeOf(probe)?.render;
+    probe.unmount();
+    if (typeof render !== "function") {
+      throw new Error("ChatGPT React root renderer is unavailable");
+    }
+    render.call(
+      { _internalRoot: root },
+      native.React.cloneElement(element),
+    );
+    applicationRootRefreshCount += 1;
+
+    if (!existingThreadMenu) return;
+    const boundaryDeadline = Date.now() + 10_000;
+    while (Date.now() < boundaryDeadline) {
+      const boundaryReady = Array.from(
+        document.querySelectorAll('button[aria-label="Chat actions"]'),
+      ).some(
+        (button) =>
+          button.getBoundingClientRect().height > 0 &&
+          typeof threadIdForTrigger(button) === "string",
+      );
+      if (boundaryReady) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error("ChatGPT thread menu did not enter the native boundary");
+  }
+
   async function installNativeBinding() {
     const [
       appInitialModule,
@@ -2345,17 +2425,21 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       import(AUTH_MODULE),
     ]);
     authModule.r();
-    appInitialModule.QB();
-    appInitialModule.c_();
-    appInitialModule.Xlt();
-    appInitialModule.TH();
-    appInitialModule.To();
-    appInitialModule.LX();
-    appInitialModule.sdt();
+    appInitialModule.Q$();
+    appInitialModule.f1();
+    appInitialModule.Qp();
+    appInitialModule.Qs();
+    appInitialModule.k7();
+    appInitialModule.Izt();
+    appInitialModule.I7();
+    appInitialModule.QOt();
+    appInitialModule.skt();
+    appInitialModule.xct();
+    appInitialModule.bTt();
     plusIconModule.t();
     paletteIconModule.n();
     threadMenuModule.n();
-    const jsxRuntime = appInitialModule.jvt();
+    const jsxRuntime = appInitialModule.Rzt();
     const PlusIcon = ({ className = "", ...props }) =>
       jsxRuntime.jsx(plusIconModule.n, {
         ...props,
@@ -2363,34 +2447,35 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         size: 16,
       });
     native = {
-      React: appInitialModule.Lvt(),
-      ReactDOM: appInitialModule.ipt(),
+      React: appInitialModule.qzt(),
+      ReactDOM: appInitialModule.mNt(),
       jsxRuntime,
       jsx: jsxRuntime.jsx,
-      Item: appInitialModule.YB,
-      Separator: appInitialModule.ZB,
-      SubmenuItem: appInitialModule.qB,
-      FlyoutSubmenuItem: appInitialModule.JB.FlyoutSubmenuItem,
-      MenuRoot: appInitialModule.KB,
+      Item: appInitialModule.Y$.Item,
+      Separator: appInitialModule.Y$.Separator,
+      SubmenuItem: appInitialModule.Y$.SubmenuItem,
+      FlyoutSubmenuItem: appInitialModule.Y$.FlyoutSubmenuItem,
+      MenuRoot: appInitialModule.q$,
       ThreadMenu: threadMenuModule.t,
-      ColorPicker: appInitialModule.wo,
+      ColorPicker: appInitialModule.Zs,
       startChatGptSignIn: authModule.o,
       decorateAuthUrl: authModule.t,
-      useUpdateAuthNonce: appInitialModule.BX,
-      useAppServerRegistry: appInitialModule.JX,
-      useQueryClient: appInitialModule.Avt,
-      accountInfoQueryKey: appInitialModule.Qut,
-      messageBus: appInitialModule.cdt,
-      openInBrowser: appInitialModule.tnt,
-      useNavigate: appInitialModule.H5,
+      useUpdateAuthNonce: appInitialModule.M7,
+      useAppServerRegistry: appInitialModule.z7,
+      useQueryClient: appInitialModule.Lzt,
+      accountInfoQueryKey: appInitialModule.YOt,
+      messageBus: appInitialModule.ckt,
+      openInBrowser: appInitialModule.wct,
+      useNavigate: appInitialModule.wTt,
       iconComponents: new Map([
-        ["chevron-right", appInitialModule.Ylt],
-        ["person", appInitialModule.s_],
+        ["chevron-right", appInitialModule.d1],
+        ["person", appInitialModule.Zp],
         ["plus", PlusIcon],
         ["palette", paletteIconModule.t],
       ]),
     };
     installJsxHook();
+    await reconcileApplicationTree();
     mountColorPickerHost();
 
     const observer = new MutationObserver(() => {
@@ -2433,6 +2518,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     });
     refreshThreadListRows();
     warmModel();
+    nativeBindingInstalled = true;
   }
 
   // ------------------------------------------------------------------
@@ -2746,7 +2832,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   window.__CGPTX_HOST__ = Object.freeze({
-    version: "26.721.31836",
+    version: "26.814.41407",
     registerExtension,
     _debug: Object.freeze({
       captureBuiltInsFromOpenMenu,
@@ -2761,7 +2847,10 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       },
       visibleThreadMenuColumn,
       captureDynamicThreadItemsFromOpenMenus,
-      nativeReady: () => native !== null,
+      nativeReady: () => nativeBindingInstalled,
+      nativeBindingError: () => nativeBindingError,
+      applicationRootRefreshCount: () => applicationRootRefreshCount,
+      threadMenuBoundaryRenderCount: () => threadMenuBoundaryRenderCount,
       authenticationReady: () => typeof refreshAuthentication === "function",
       authenticationRefreshCount: () => authenticationRefreshCount,
       authenticationAccountInfoResetCount: () =>
@@ -2794,7 +2883,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   });
 
   log("host installed");
-  void installNativeBinding().catch((error) => {
-    warn("native binding installation failed", error);
-  });
+  window.__CGPTX_NATIVE_READY__ = installNativeBinding().then(
+    () => true,
+    (error) => {
+      nativeBindingError = String(error?.stack ?? error);
+      warn("native binding installation failed", error);
+      return false;
+    },
+  );
 })();

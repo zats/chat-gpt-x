@@ -67,7 +67,7 @@ for changed_path in "${CHANGED_PATHS[@]}"; do
   [[ "$changed_path" != "$BINDING_ROOT/"* ]] || BINDING_CHANGED=true
   if [[ "$MODE" == "new" ]]; then
     case "$changed_path" in
-      "$BINDING_ROOT"/* | src/platform/bindings/manifest.json | src/extensions/*/package.json | updates/latest.json)
+      "$BINDING_ROOT"/* | src/platform/bindings/manifest.json | updates/latest.json)
         ;;
       *)
         echo "rebind changed a forbidden path: $changed_path" >&2

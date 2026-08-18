@@ -9,15 +9,25 @@ private let defaultComponentUpdateIndexURL = URL(
 struct ComponentUpdateIndex: Decodable {
     let schemaVersion: Int
     let generation: Int
+    let minimumLauncherVersion: String
     let releaseBaseURL: String
     let chatgptApis: [String: UpdateRelease]
     let bindings: [String: BindingUpdate]
-    let extensions: [String: ExtensionUpdate]
+    let extensions: [String: ExtensionUpdateCatalog]
 
     static func decodeStrict(_ data: Data) throws -> Self {
-        let object = try JSONSerialization.jsonObject(with: data)
-        try validate(object)
-        return try JSONDecoder().decode(Self.self, from: data)
+        let value: Any
+        do {
+            value = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw ComponentUpdateError.indexInvalid("JSON")
+        }
+        try validate(value)
+        do {
+            return try JSONDecoder().decode(Self.self, from: data)
+        } catch {
+            throw ComponentUpdateError.indexInvalid("JSON values")
+        }
     }
 
     private static func validate(_ value: Any) throws {
@@ -26,6 +36,7 @@ struct ComponentUpdateIndex: Decodable {
             keys: [
                 "schemaVersion",
                 "generation",
+                "minimumLauncherVersion",
                 "releaseBaseURL",
                 "chatgptApis",
                 "bindings",
@@ -33,20 +44,27 @@ struct ComponentUpdateIndex: Decodable {
             ],
             label: "update index"
         )
-        guard root["schemaVersion"] as? Int == 2,
-            let generation = root["generation"] as? Int,
+        guard integer(root["schemaVersion"]) == 3,
+            let generation = integer(root["generation"]),
             generation > 0,
+            let minimumLauncherVersion = root["minimumLauncherVersion"]
+                as? String,
+            SemanticVersion(minimumLauncherVersion) != nil,
             root["releaseBaseURL"] as? String
                 == "https://github.com/zats/chat-gpt-x/releases/download",
-            let APIs = root["chatgptApis"] as? [String: Any],
+            let apis = root["chatgptApis"] as? [String: Any],
+            !apis.isEmpty,
             let bindings = root["bindings"] as? [String: Any],
+            !bindings.isEmpty,
             let extensions = root["extensions"] as? [String: Any]
         else {
             throw ComponentUpdateError.indexInvalid("root values")
         }
 
-        for (version, rawEntry) in APIs {
-            guard isVersion(version) else {
+        for (version, rawEntry) in apis {
+            guard let semanticVersion = SemanticVersion(version),
+                semanticVersion >= SemanticVersion("1.0.3")!
+            else {
                 throw ComponentUpdateError.indexInvalid(
                     "ChatGPT API version \(version)"
                 )
@@ -68,14 +86,22 @@ struct ComponentUpdateIndex: Decodable {
             }
             let entry = try object(
                 rawEntry,
-                keys: ["version", "chatgptApi", "release", "sha256"],
+                keys: [
+                    "version",
+                    "chatgptApi",
+                    "asarSha256",
+                    "release",
+                    "sha256",
+                ],
                 label: "binding \(chatgpt)"
             )
             guard
                 let version = entry["version"] as? String,
-                isVersion(version),
+                SemanticVersion(version) != nil,
                 let api = entry["chatgptApi"] as? String,
-                APIs[api] != nil,
+                apis[api] != nil,
+                let asarHash = entry["asarSha256"] as? String,
+                isHash(asarHash),
                 let release = entry["release"] as? String,
                 release == "binding-\(chatgpt)-v\(version)",
                 let hash = entry["sha256"] as? String,
@@ -87,38 +113,51 @@ struct ComponentUpdateIndex: Decodable {
             }
         }
 
-        for (id, rawEntry) in extensions {
+        for (id, rawCatalog) in extensions {
             guard isExtensionID(id) else {
                 throw ComponentUpdateError.indexInvalid("extension \(id)")
             }
-            let entry = try object(
-                rawEntry,
-                keys: [
-                    "version",
-                    "compatibility",
-                    "release",
-                    "sha256",
-                ],
+            let catalog = try object(
+                rawCatalog,
+                keys: ["versions"],
                 label: "extension \(id)"
             )
-            let compatibility = try object(
-                entry["compatibility"] as Any,
-                keys: ["chatgpt", "chatgptApi"],
-                label: "extension \(id) compatibility"
-            )
-            guard
-                let version = entry["version"] as? String,
-                isVersion(version),
-                let release = entry["release"] as? String,
-                release == "extension-\(id)-v\(version)",
-                let hash = entry["sha256"] as? String,
-                isHash(hash),
-                let chatgpt = compatibility["chatgpt"] as? String,
-                !chatgpt.isEmpty,
-                let api = compatibility["chatgptApi"] as? String,
-                !api.isEmpty
+            guard let versions = catalog["versions"] as? [String: Any],
+                !versions.isEmpty
             else {
-                throw ComponentUpdateError.indexInvalid("extension \(id)")
+                throw ComponentUpdateError.indexInvalid(
+                    "extension \(id) versions"
+                )
+            }
+
+            for (version, rawEntry) in versions {
+                guard SemanticVersion(version) != nil else {
+                    throw ComponentUpdateError.indexInvalid(
+                        "extension \(id) version \(version)"
+                    )
+                }
+                let entry = try object(
+                    rawEntry,
+                    keys: ["compatibility", "release", "sha256"],
+                    label: "extension \(id) \(version)"
+                )
+                let compatibility = try object(
+                    entry["compatibility"] as Any,
+                    keys: ["chatgptApi"],
+                    label: "extension \(id) \(version) compatibility"
+                )
+                guard
+                    let apiRange = compatibility["chatgptApi"] as? String,
+                    isSemverRange(apiRange),
+                    let release = entry["release"] as? String,
+                    release == "extension-\(id)-v\(version)",
+                    let hash = entry["sha256"] as? String,
+                    isHash(hash)
+                else {
+                    throw ComponentUpdateError.indexInvalid(
+                        "extension \(id) \(version)"
+                    )
+                }
             }
         }
     }
@@ -147,17 +186,16 @@ struct ComponentUpdateIndex: Decodable {
         label: String
     ) throws -> [String: Any] {
         guard let object = value as? [String: Any],
-            Set(object.keys) == Set(keys) else {
+            Set(object.keys) == Set(keys)
+        else {
             throw ComponentUpdateError.indexInvalid(label)
         }
         return object
     }
 
-    private static func isVersion(_ value: String) -> Bool {
-        value.range(
-            of: #"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"#,
-            options: .regularExpression
-        ) != nil
+    private static func integer(_ value: Any?) -> Int? {
+        guard !(value is Bool) else { return nil }
+        return value as? Int
     }
 
     private static func isNumericVersion(_ value: String) -> Bool {
@@ -180,6 +218,30 @@ struct ComponentUpdateIndex: Decodable {
             options: .regularExpression
         ) != nil
     }
+
+    private static func isSemverRange(_ value: String) -> Bool {
+        guard !value.isEmpty,
+            value.trimmingCharacters(in: .whitespacesAndNewlines) == value
+        else {
+            return false
+        }
+        if value.hasPrefix("^") {
+            return SemanticVersion(String(value.dropFirst())) != nil
+        }
+
+        let conditions = value.split(whereSeparator: \.isWhitespace)
+        guard !conditions.isEmpty else { return false }
+        return conditions.allSatisfy { rawCondition in
+            var condition = String(rawCondition)
+            for comparator in [">=", "<=", ">", "<"]
+                where condition.hasPrefix(comparator)
+            {
+                condition.removeFirst(comparator.count)
+                break
+            }
+            return SemanticVersion(condition) != nil
+        }
+    }
 }
 
 struct UpdateRelease: Decodable {
@@ -190,21 +252,60 @@ struct UpdateRelease: Decodable {
 struct BindingUpdate: Decodable {
     let version: String
     let chatgptApi: String
+    let asarSha256: String
     let release: String
     let sha256: String
 }
 
+struct ExtensionUpdateCatalog: Decodable {
+    let versions: [String: ExtensionUpdate]
+}
+
 struct ExtensionUpdate: Decodable {
-    let version: String
     let compatibility: ExtensionCompatibility
     let release: String
     let sha256: String
+}
+
+private struct SemanticVersion: Comparable {
+    let major: Int
+    let minor: Int
+    let patch: Int
+
+    init?(_ value: String) {
+        let components = value.split(
+            separator: ".",
+            omittingEmptySubsequences: false
+        )
+        guard components.count == 3 else { return nil }
+        var numbers: [Int] = []
+        for component in components {
+            guard !component.isEmpty,
+                component.allSatisfy(\.isNumber),
+                component.count == 1 || component.first != "0",
+                let number = Int(component)
+            else {
+                return nil
+            }
+            numbers.append(number)
+        }
+        major = numbers[0]
+        minor = numbers[1]
+        patch = numbers[2]
+    }
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.major != rhs.major { return lhs.major < rhs.major }
+        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
+        return lhs.patch < rhs.patch
+    }
 }
 
 enum ComponentLocalVersion: Equatable {
     case current
     case different(String)
     case missing
+    case incompatible(String?)
 }
 
 struct ComponentUpdateItem: Equatable {
@@ -236,7 +337,7 @@ struct ComponentUpdateSummary: Equatable {
                 latestVersion: versions.binding.version,
                 localVersion: .current
             ),
-        ] + store.extensions.map {
+        ] + versions.extensions.map {
             ComponentUpdateItem(
                 id: "extension:\($0.id)",
                 name: $0.id,
@@ -267,26 +368,25 @@ typealias ComponentUpdatePlanHandler =
 struct ComponentUpdatePlan {
     fileprivate let index: ComponentUpdateIndex
     fileprivate let chatgptVersion: String
-    fileprivate let current: PreparedComponentStore
+    fileprivate let current: PreparedComponentStore?
     fileprivate let api: UpdateRelease
     fileprivate let binding: BindingUpdate
     fileprivate let extensions: [PlannedExtensionUpdate]
 
     var summary: ComponentUpdateSummary {
-        summary(installed: current)
+        summary(installed: current?.versions)
     }
 
     func summary(
-        installed store: PreparedComponentStore
+        installed versions: ComponentVersionsLock?
     ) -> ComponentUpdateSummary {
-        let versions = store.versions
         var items = [
             ComponentUpdateItem(
                 id: "chatgpt-api",
                 name: "ChatGPT API",
                 latestVersion: binding.chatgptApi,
                 localVersion: localVersion(
-                    versions.chatgptApi.version,
+                    versions?.chatgptApi.version,
                     latest: binding.chatgptApi
                 )
             ),
@@ -294,37 +394,53 @@ struct ComponentUpdatePlan {
                 id: "binding",
                 name: "Binding",
                 latestVersion: binding.version,
-                localVersion: bindingLocalVersion(versions.binding)
+                localVersion: bindingLocalVersion(versions?.binding)
             ),
         ]
 
         let installedExtensions = Dictionary(
-            uniqueKeysWithValues: store.extensions.map { ($0.id, $0) }
+            uniqueKeysWithValues: (versions?.extensions ?? []).map {
+                ($0.id, $0)
+            }
         )
         items.append(contentsOf: extensions.map { planned in
-            let localVersion: ComponentLocalVersion
-            if let installed = installedExtensions[planned.id] {
-                localVersion = self.localVersion(
-                    installed.version,
-                    latest: planned.update.version
-                )
-            } else {
-                localVersion = .missing
-            }
-            return ComponentUpdateItem(
+            ComponentUpdateItem(
                 id: "extension:\(planned.id)",
                 name: planned.id,
-                latestVersion: planned.update.version,
-                localVersion: localVersion
+                latestVersion: planned.version,
+                localVersion: localVersion(
+                    installedExtensions[planned.id]?.version,
+                    latest: planned.version
+                )
             )
         })
+
+        let selectedIDs = Set(extensions.map(\.id))
+        let previouslyInstalled = Dictionary(
+            uniqueKeysWithValues: (current?.versions.extensions ?? []).map {
+                ($0.id, $0)
+            }
+        )
+        items.append(
+            contentsOf: index.extensions.keys.sorted().compactMap { id in
+                guard !selectedIDs.contains(id) else { return nil }
+                let installed = previouslyInstalled[id]
+                return ComponentUpdateItem(
+                    id: "extension:\(id)",
+                    name: installed?.name ?? id,
+                    latestVersion: "Inactive",
+                    localVersion: .incompatible(installed?.version)
+                )
+            }
+        )
 
         return ComponentUpdateSummary(items: items)
     }
 
     private func bindingLocalVersion(
-        _ installed: StoredBinding
+        _ installed: StoredBinding?
     ) -> ComponentLocalVersion {
+        guard let installed else { return .missing }
         guard installed.chatgpt == chatgptVersion else {
             return .different(
                 "\(installed.version) · ChatGPT \(installed.chatgpt)"
@@ -334,15 +450,18 @@ struct ComponentUpdatePlan {
     }
 
     private func localVersion(
-        _ installed: String,
+        _ installed: String?,
         latest: String
     ) -> ComponentLocalVersion {
-        installed == latest ? .current : .different(installed)
+        guard let installed else { return .missing }
+        return installed == latest ? .current : .different(installed)
     }
 }
 
 private struct PlannedExtensionUpdate {
     let id: String
+    let version: String
+    let enabled: Bool
     let update: ExtensionUpdate
 }
 
@@ -367,45 +486,90 @@ final class ComponentUpdateService {
     private let componentStore: ComponentStore
     private let session: URLSession
     private let indexURL: URL
+    private let launcherVersion: String
+    private let beforeActivation: () throws -> Void
 
     init(
         componentStore: ComponentStore,
         session: URLSession = .shared,
-        indexURL: URL = defaultComponentUpdateIndexURL
+        indexURL: URL? = nil,
+        launcherVersion: String? = nil,
+        beforeActivation: @escaping () throws -> Void = {},
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.componentStore = componentStore
         self.session = session
         self.indexURL = indexURL
+            ?? Self.environmentIndexURL(environment)
+            ?? defaultComponentUpdateIndexURL
+        self.launcherVersion = launcherVersion
+            ?? Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String
+            ?? ""
+        self.beforeActivation = beforeActivation
     }
 
     func update(
         for chatgptVersion: String,
+        chatgptAsarSHA256: String,
         planned: @escaping ComponentUpdatePlanHandler = { _ in },
         progress: @escaping ComponentUpdateProgressHandler = { _ in }
     ) async throws -> ComponentUpdateOutcome {
         let index = try await fetchIndex()
-        let current = try componentStore.prepareInstalled()
-        guard index.generation >= current.versions.generation else {
-            return ComponentUpdateOutcome(
-                summary: ComponentUpdateSummary(installed: current),
-                result: .upToDate(current)
-            )
-        }
+        try validateLauncher(for: index)
+        let current = try? componentStore.prepareInstalled()
         let plan = try componentStore.planUpdate(
             index,
             chatgptVersion: chatgptVersion,
+            chatgptAsarSHA256: chatgptAsarSHA256,
             current: current
         )
         planned(plan)
         let result = try await componentStore.install(
             plan,
             session: session,
+            beforeActivation: beforeActivation,
             progress: progress
         )
         return ComponentUpdateOutcome(
-            summary: plan.summary(installed: result.preparedStore),
+            summary: plan.summary(installed: result.preparedStore.versions),
             result: result
         )
+    }
+
+    private static func environmentIndexURL(
+        _ environment: [String: String]
+    ) -> URL? {
+        guard let value = environment["CHATGPTX_UPDATE_INDEX_URL"],
+            !value.isEmpty,
+            let url = URL(string: value),
+            url.scheme == "https" || url.scheme == "http",
+            url.host != nil
+        else {
+            return nil
+        }
+        return url
+    }
+
+    private func validateLauncher(for index: ComponentUpdateIndex) throws {
+        guard let installed = SemanticVersion(launcherVersion) else {
+            throw ComponentUpdateError.launcherVersionInvalid(
+                launcherVersion
+            )
+        }
+        guard let minimum = SemanticVersion(index.minimumLauncherVersion)
+        else {
+            throw ComponentUpdateError.indexInvalid(
+                "minimumLauncherVersion"
+            )
+        }
+        guard installed >= minimum else {
+            throw ComponentUpdateError.launcherTooOld(
+                installed: launcherVersion,
+                minimum: index.minimumLauncherVersion
+            )
+        }
     }
 
     private func fetchIndex() async throws -> ComponentUpdateIndex {
@@ -415,7 +579,8 @@ final class ComponentUpdateService {
         )
         let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse,
-            response.statusCode == 200 else {
+            response.statusCode == 200
+        else {
             throw ComponentUpdateError.indexRequestFailed
         }
         return try ComponentUpdateIndex.decodeStrict(data)
@@ -426,30 +591,69 @@ private extension ComponentStore {
     func planUpdate(
         _ index: ComponentUpdateIndex,
         chatgptVersion: String,
-        current: PreparedComponentStore
+        chatgptAsarSHA256: String,
+        current: PreparedComponentStore?
     ) throws -> ComponentUpdatePlan {
         guard let binding = index.bindings[chatgptVersion] else {
             throw ComponentUpdateError.bindingUnavailable(chatgptVersion)
+        }
+        guard binding.asarSha256 == chatgptAsarSHA256 else {
+            throw ComponentUpdateError.bindingBuildUnavailable(
+                chatgptVersion
+            )
         }
         guard let api = index.chatgptApis[binding.chatgptApi] else {
             throw ComponentUpdateError.apiUnavailable(binding.chatgptApi)
         }
 
-        let compatibleExtensions = try index.extensions
-            .filter {
-                try ComponentCompatibility.matches(
-                    $0.value.compatibility,
-                    chatgptVersion: chatgptVersion,
-                    chatgptAPIVersion: binding.chatgptApi
-                )
+        let installedByID = Dictionary(
+            uniqueKeysWithValues: (current?.versions.extensions ?? []).map {
+                ($0.id, $0)
             }
-        let extensions = compatibleExtensions.keys.sorted().compactMap { id in
-            compatibleExtensions[id].map {
+        )
+        var plannedExtensions: [PlannedExtensionUpdate] = []
+        for id in index.extensions.keys.sorted() {
+            guard let catalog = index.extensions[id] else { continue }
+            var compatible: [
+                (semanticVersion: SemanticVersion, version: String,
+                 update: ExtensionUpdate)
+            ] = []
+            for (version, update) in catalog.versions {
+                guard try ComponentCompatibility.matches(
+                    update.compatibility,
+                    chatgptAPIVersion: binding.chatgptApi
+                ) else {
+                    continue
+                }
+                guard let semanticVersion = SemanticVersion(version) else {
+                    throw ComponentUpdateError.indexInvalid(
+                        "extension \(id) version \(version)"
+                    )
+                }
+                compatible.append((semanticVersion, version, update))
+            }
+            guard let selected = compatible.max(by: {
+                $0.semanticVersion < $1.semanticVersion
+            }) else {
+                continue
+            }
+            plannedExtensions.append(
                 PlannedExtensionUpdate(
                     id: id,
-                    update: $0
+                    version: selected.version,
+                    enabled: installedByID[id]?.enabled ?? true,
+                    update: selected.update
                 )
-            }
+            )
+        }
+
+        if let current,
+            index.generation < current.versions.generation
+        {
+            throw ComponentUpdateError.olderGeneration(
+                index.generation,
+                current.versions.generation
+            )
         }
 
         return ComponentUpdatePlan(
@@ -458,18 +662,18 @@ private extension ComponentStore {
             current: current,
             api: api,
             binding: binding,
-            extensions: extensions
+            extensions: plannedExtensions
         )
     }
 
     func install(
         _ plan: ComponentUpdatePlan,
         session: URLSession = .shared,
+        beforeActivation: () throws -> Void = {},
         progress: @escaping ComponentUpdateProgressHandler = { _ in }
     ) async throws -> ComponentUpdateResult {
         let index = plan.index
         let chatgptVersion = plan.chatgptVersion
-        let current = plan.current
         let binding = plan.binding
         let api = plan.api
 
@@ -496,119 +700,135 @@ private extension ComponentStore {
             kind: .binding(
                 chatgpt: chatgptVersion,
                 version: binding.version,
-                api: binding.chatgptApi
+                api: binding.chatgptApi,
+                asarSha256: binding.asarSha256
             ),
             componentID: "binding",
             componentName: "Binding",
             session: session,
             progress: progress
         )
-        let installedBindingManifest = try decode(
-            BindingPackageManifest.self,
-            at: try resolveStorePath(
-                "\(bindingPath)/manifest.json"
-            )
-        )
 
-        let installedByID = Dictionary(
-            uniqueKeysWithValues: current.extensions.map { ($0.id, $0) }
-        )
-        let extensionStagingPath =
-            "components/.extensions-stage-\(UUID().uuidString)"
-        let extensionStagingURL = try resolveStorePath(extensionStagingPath)
-        try fileManager.createDirectory(
-            at: extensionStagingURL,
-            withIntermediateDirectories: false,
-            attributes: [.posixPermissions: 0o700]
-        )
-        defer { try? fileManager.removeItem(at: extensionStagingURL) }
-
+        var storedExtensions: [StoredExtension] = []
         for planned in plan.extensions {
-            let extensionUpdate = planned.update
-            let stagedPath = "\(extensionStagingPath)/\(planned.id)"
-            if installedByID[planned.id]?.version == extensionUpdate.version {
-                try fileManager.copyItem(
-                    at: try resolveStorePath(
-                        "components/extensions/\(planned.id)"
-                    ),
-                    to: try resolveStorePath(stagedPath)
-                )
-                continue
-            }
+            let update = planned.update
+            let extensionPath =
+                "components/extensions/\(planned.id)/\(planned.version)"
             try await installArchive(
-                release: extensionUpdate.release,
-                sha256: extensionUpdate.sha256,
+                release: update.release,
+                sha256: update.sha256,
                 baseURL: index.releaseBaseURL,
-                destinationPath: stagedPath,
+                destinationPath: extensionPath,
                 kind: .extensionComponent(
                     id: planned.id,
-                    version: extensionUpdate.version
+                    version: planned.version,
+                    compatibility: update.compatibility
                 ),
                 componentID: "extension:\(planned.id)",
                 componentName: planned.id,
                 session: session,
                 progress: progress
             )
-        }
-        let stagedExtensions = try extensionSettingsSnapshot(
-            at: extensionStagingURL
-        )
-        let installedExtensions: [StoredExtension]
-        if stagedExtensions.extensions != current.extensions {
-            try replaceExtensionPackages(
-                with: extensionStagingURL,
-                settingsData: stagedExtensions.data
+            let manifest = try decode(
+                ExtensionPackageManifest.self,
+                at: try resolveStorePath(
+                    "\(extensionPath)/package.json"
+                )
             )
-            installedExtensions = stagedExtensions.extensions
-        } else {
-            installedExtensions = current.extensions
+            storedExtensions.append(
+                StoredExtension(
+                    id: planned.id,
+                    name: manifest.name,
+                    description: manifest.description,
+                    version: planned.version,
+                    enabled: planned.enabled,
+                    required: manifest.required == true,
+                    compatibility: update.compatibility,
+                    release: update.release,
+                    sha256: update.sha256,
+                    path: extensionPath
+                )
+            )
         }
 
-        let versions = ComponentVersionsLock(
-            schemaVersion: 1,
-            generation: index.generation,
-            chatgptApi: StoredChatGPTAPI(
-                version: binding.chatgptApi,
-                release: api.release,
-                sha256: api.sha256,
-                path: apiPath
-            ),
-            binding: StoredBinding(
-                chatgpt: chatgptVersion,
-                version: binding.version,
-                chatgptApi: binding.chatgptApi,
-                asarSha256: installedBindingManifest.asarSha256,
-                release: binding.release,
-                sha256: binding.sha256,
-                path: bindingPath
-            )
-        )
-        let componentsChanged =
-            versions.chatgptApi != current.versions.chatgptApi
-            || versions.binding != current.versions.binding
-            || installedExtensions != current.extensions
-        if versions == current.versions && !componentsChanged {
-            return current.bundledComponentsChanged
-                ? .installed(current)
-                : .upToDate(current)
-        }
-        try validate(versions)
-        try validateInstalledComponents(versions)
-        let versionsLockURL = rootURL.appendingPathComponent(
-            "versions-lock.json"
-        )
-        try atomicWrite(try encode(versions), to: versionsLockURL)
+        try beforeActivation()
+        return try withExclusiveMutationLock {
+            () throws -> ComponentUpdateResult in
+            let activeMetadata = try? activeVersionsMetadata()
+            if let activeMetadata,
+                index.generation < activeMetadata.generation
+            {
+                throw ComponentUpdateError.olderGeneration(
+                    index.generation,
+                    activeMetadata.generation
+                )
+            }
 
-        let prepared = PreparedComponentStore(
-            rootURL: rootURL,
-            versionsLockURL: versionsLockURL,
-            versions: versions,
-            extensions: installedExtensions,
-            bundledComponentsChanged: false
-        )
-        return componentsChanged || current.bundledComponentsChanged
-            ? .installed(prepared)
-            : .upToDate(prepared)
+            let currentVersions = try? activeVersions()
+            let preparedSettings = try prepareExtensionSettings(
+                for: storedExtensions,
+                recoverInvalidSettings: true
+            )
+            let effectiveExtensions = preparedSettings.extensions
+            let versions = ComponentVersionsLock(
+                schemaVersion: 1,
+                generation: index.generation,
+                chatgptApi: StoredChatGPTAPI(
+                    version: binding.chatgptApi,
+                    release: api.release,
+                    sha256: api.sha256,
+                    path: apiPath
+                ),
+                binding: StoredBinding(
+                    chatgpt: chatgptVersion,
+                    version: binding.version,
+                    chatgptApi: binding.chatgptApi,
+                    asarSha256: binding.asarSha256,
+                    release: binding.release,
+                    sha256: binding.sha256,
+                    path: bindingPath
+                ),
+                extensions: effectiveExtensions
+            )
+            try validate(versions)
+            try validateInstalledComponents(versions)
+
+            let prepared = PreparedComponentStore(
+                rootURL: rootURL,
+                versions: versions,
+                extensions: effectiveExtensions
+            )
+            let componentsChanged = plan.current.map {
+                versions.chatgptApi != $0.versions.chatgptApi
+                    || versions.binding != $0.versions.binding
+                    || versions.extensions != $0.versions.extensions
+            } ?? true
+            if versions == currentVersions {
+                try commitExtensionSettings(preparedSettings)
+                return componentsChanged
+                    ? .installed(prepared)
+                    : .upToDate(prepared)
+            }
+
+            let previousVersionsLock = try activeVersionsLockData()
+            let versionsLockURL = rootURL.appendingPathComponent(
+                "versions-lock.json"
+            )
+            do {
+                try atomicWrite(try encode(versions), to: versionsLockURL)
+                try commitExtensionSettings(preparedSettings)
+            } catch {
+                do {
+                    try restoreVersionsLock(previousVersionsLock)
+                } catch {
+                    throw ComponentUpdateError.installationStateInvalid
+                }
+                throw error
+            }
+            return componentsChanged
+                ? .installed(prepared)
+                : .upToDate(prepared)
+        }
     }
 
     private func installArchive(
@@ -624,7 +844,12 @@ private extension ComponentStore {
     ) async throws {
         let destinationURL = try resolveStorePath(destinationPath)
         if fileManager.fileExists(atPath: destinationURL.path) {
-            return
+            do {
+                try validateArchive(at: destinationURL, kind: kind)
+                return
+            } catch {
+                // Keep the invalid package until its replacement is ready.
+            }
         }
 
         guard let archiveURL = URL(
@@ -632,13 +857,19 @@ private extension ComponentStore {
         ) else {
             throw ComponentUpdateError.releaseURLInvalid(release)
         }
-        let downloadsURL = rootURL.appendingPathComponent(
+        let downloadsRootURL = rootURL.appendingPathComponent(
             "downloads",
             isDirectory: true
         )
-        if fileManager.fileExists(atPath: downloadsURL.path) {
-            try fileManager.removeItem(at: downloadsURL)
-        }
+        try fileManager.createDirectory(
+            at: downloadsRootURL,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let downloadsURL = downloadsRootURL.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
         try fileManager.createDirectory(
             at: downloadsURL,
             withIntermediateDirectories: false,
@@ -649,7 +880,6 @@ private extension ComponentStore {
         let localArchiveURL = downloadsURL.appendingPathComponent(
             "\(release).zip"
         )
-
         try await downloadArchive(
             from: archiveURL,
             to: localArchiveURL,
@@ -683,9 +913,7 @@ private extension ComponentStore {
             withIntermediateDirectories: false,
             attributes: [.posixPermissions: 0o700]
         )
-        defer {
-            try? fileManager.removeItem(at: stagingURL)
-        }
+        defer { try? fileManager.removeItem(at: stagingURL) }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -702,18 +930,48 @@ private extension ComponentStore {
         }
 
         try validateArchive(at: stagingURL, kind: kind)
-        try fileManager.createDirectory(
-            at: destinationURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            _ = try fileManager.replaceItemAt(
-                destinationURL,
-                withItemAt: stagingURL
+        try withExclusiveMutationLock {
+            let destinationParentURL = destinationURL
+                .deletingLastPathComponent()
+            try fileManager.createDirectory(
+                at: destinationParentURL,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
             )
-        } else {
-            try fileManager.moveItem(at: stagingURL, to: destinationURL)
+            guard fileManager.fileExists(atPath: destinationURL.path) else {
+                try fileManager.moveItem(at: stagingURL, to: destinationURL)
+                return
+            }
+
+            do {
+                try validateArchive(at: destinationURL, kind: kind)
+                return
+            } catch {
+                let invalidURL = destinationParentURL.appendingPathComponent(
+                    ".\(destinationURL.lastPathComponent).invalid-\(UUID().uuidString)"
+                )
+                try fileManager.moveItem(
+                    at: destinationURL,
+                    to: invalidURL
+                )
+                do {
+                    try fileManager.moveItem(
+                        at: stagingURL,
+                        to: destinationURL
+                    )
+                } catch {
+                    do {
+                        try fileManager.moveItem(
+                            at: invalidURL,
+                            to: destinationURL
+                        )
+                    } catch {
+                        throw ComponentUpdateError.installationStateInvalid
+                    }
+                    throw error
+                }
+                try? fileManager.removeItem(at: invalidURL)
+            }
         }
     }
 
@@ -748,13 +1006,16 @@ private extension ComponentStore {
         at root: URL,
         kind: ArchiveKind
     ) throws {
-        guard let enumerator = fileManager.enumerator(
-            at: root,
-            includingPropertiesForKeys: [
-                .isRegularFileKey,
-                .isSymbolicLinkKey,
-            ]
-        ) else {
+        let rootValues = try root.resourceValues(
+            forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+        )
+        guard rootValues.isDirectory == true,
+            rootValues.isSymbolicLink != true,
+            let enumerator = fileManager.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isSymbolicLinkKey]
+            )
+        else {
             throw ComponentUpdateError.archiveLayoutInvalid
         }
         for case let fileURL as URL in enumerator {
@@ -785,7 +1046,7 @@ private extension ComponentStore {
                 ],
                 beneath: root
             )
-        case .binding(let chatgpt, let version, let api):
+        case .binding(let chatgpt, let version, let api, let asarSha256):
             let manifest = try decode(
                 BindingPackageManifest.self,
                 at: root.appendingPathComponent("manifest.json")
@@ -794,15 +1055,16 @@ private extension ComponentStore {
                 manifest.chatgpt == chatgpt,
                 manifest.version == version,
                 manifest.chatgptApi == api,
-                manifest.asarSha256.range(
-                    of: #"^[a-f0-9]{64}$"#,
-                    options: .regularExpression
-                ) != nil
+                manifest.asarSha256 == asarSha256
             else {
                 throw ComponentUpdateError.archiveLayoutInvalid
             }
             try requireFiles(["host.js"], beneath: root)
-        case .extensionComponent(let id, let version):
+        case .extensionComponent(
+            let id,
+            let version,
+            let compatibility
+        ):
             let manifest = try decode(
                 ExtensionPackageManifest.self,
                 at: root.appendingPathComponent("package.json")
@@ -810,7 +1072,8 @@ private extension ComponentStore {
             guard
                 manifest.id == id,
                 manifest.version == version,
-                manifest.main == "contents/main.js"
+                manifest.main == "contents/main.js",
+                manifest.compatibility == compatibility
             else {
                 throw ComponentUpdateError.archiveLayoutInvalid
             }
@@ -964,8 +1227,17 @@ private final nonisolated class ArchiveDownload:
 
 private enum ArchiveKind {
     case chatgptAPI(version: String)
-    case binding(chatgpt: String, version: String, api: String)
-    case extensionComponent(id: String, version: String)
+    case binding(
+        chatgpt: String,
+        version: String,
+        api: String,
+        asarSha256: String
+    )
+    case extensionComponent(
+        id: String,
+        version: String,
+        compatibility: ExtensionCompatibility
+    )
 }
 
 private struct APIPackageManifest: Decodable {
@@ -982,14 +1254,18 @@ private struct BindingPackageManifest: Decodable {
 enum ComponentUpdateError: LocalizedError {
     case indexRequestFailed
     case indexInvalid(String)
+    case launcherVersionInvalid(String)
+    case launcherTooOld(installed: String, minimum: String)
+    case olderGeneration(Int, Int)
     case bindingUnavailable(String)
+    case bindingBuildUnavailable(String)
     case apiUnavailable(String)
-    case settingsInvalid
     case releaseURLInvalid(String)
     case archiveRequestFailed(String)
     case checksumMismatch(String)
     case extractionFailed(String)
     case archiveLayoutInvalid
+    case installationStateInvalid
 
     var errorDescription: String? {
         switch self {
@@ -997,12 +1273,18 @@ enum ComponentUpdateError: LocalizedError {
             "The update index could not be downloaded."
         case .indexInvalid(let field):
             "The update index is invalid: \(field)."
+        case .launcherVersionInvalid(let version):
+            "The launcher version is invalid: \(version)."
+        case .launcherTooOld(let installed, let minimum):
+            "Launcher \(minimum) or later is required. The installed version is \(installed)."
+        case .olderGeneration(let remote, let installed):
+            "Update generation \(remote) is older than installed generation \(installed)."
         case .bindingUnavailable(let version):
             "No binding is available for ChatGPT \(version)."
+        case .bindingBuildUnavailable(let version):
+            "No binding is available for the installed ChatGPT \(version) build."
         case .apiUnavailable(let version):
             "ChatGPT API \(version) is unavailable."
-        case .settingsInvalid:
-            "Extension settings are invalid."
         case .releaseURLInvalid(let release):
             "The release URL is invalid: \(release)."
         case .archiveRequestFailed(let release):
@@ -1013,6 +1295,8 @@ enum ComponentUpdateError: LocalizedError {
             "The release could not be extracted: \(release)."
         case .archiveLayoutInvalid:
             "The release archive layout is invalid."
+        case .installationStateInvalid:
+            "The installed component state is invalid."
         }
     }
 }

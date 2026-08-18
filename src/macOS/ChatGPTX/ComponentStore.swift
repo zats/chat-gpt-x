@@ -19,11 +19,10 @@ struct StoredBinding: Codable, Equatable {
 }
 
 struct ExtensionCompatibility: Codable, Equatable {
-    let chatgpt: String
     let chatgptApi: String
 }
 
-struct StoredExtension: Equatable {
+struct StoredExtension: Codable, Equatable {
     let id: String
     let name: String
     let description: String
@@ -31,6 +30,8 @@ struct StoredExtension: Equatable {
     let enabled: Bool
     let required: Bool
     let compatibility: ExtensionCompatibility
+    let release: String
+    let sha256: String
     let path: String
 }
 
@@ -39,6 +40,7 @@ struct ComponentVersionsLock: Codable, Equatable {
     let generation: Int
     let chatgptApi: StoredChatGPTAPI
     let binding: StoredBinding
+    let extensions: [StoredExtension]
 }
 
 struct ExtensionSetting {
@@ -63,10 +65,13 @@ struct ExtensionPackageManifest: Decodable {
 
 struct PreparedComponentStore {
     let rootURL: URL
-    let versionsLockURL: URL
     let versions: ComponentVersionsLock
     let extensions: [StoredExtension]
-    let bundledComponentsChanged: Bool
+}
+
+struct PreparedExtensionSettings {
+    let extensions: [StoredExtension]
+    fileprivate let settings: ExtensionSettings
 }
 
 struct ComponentStore {
@@ -74,12 +79,10 @@ struct ComponentStore {
 
     let fileManager: FileManager
     let rootURL: URL
-    private let seedURL: URL
 
     init(
         fileManager: FileManager = .default,
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        bundle: Bundle = .main
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws {
         self.fileManager = fileManager
 
@@ -94,76 +97,27 @@ struct ComponentStore {
             "extensions",
             isDirectory: true
         )
-
-        guard let resourcesURL = bundle.resourceURL else {
-            throw ComponentStoreError.resourcesMissing
-        }
-        seedURL = resourcesURL.appendingPathComponent(
-            "component-seed",
-            isDirectory: true
-        )
     }
 
-    func prepare(forChatGPTVersion chatGPTVersion: String?) throws
-        -> PreparedComponentStore
-    {
-        let installed = try prepareInstalled()
-        let bundled = try readBundledVersions()
-        if !shouldInstallBundledSeed(
-            installed: installed.versions,
-            bundled: bundled,
-            chatGPTVersion: chatGPTVersion
-        ) {
-            return installed
-        }
-        return try installBundledSeed(
-            versionsLockURL: installed.versionsLockURL,
-            replacing: installed.versions
-        )
-    }
-
-    func prepareInstalled() throws -> PreparedComponentStore {
+    func prepareInstalled() throws -> PreparedComponentStore? {
         try createStoreLayout()
 
         let versionsLockURL = rootURL.appendingPathComponent(
             "versions-lock.json"
         )
-        if fileManager.fileExists(atPath: versionsLockURL.path) {
-            let versions = try readVersions(at: versionsLockURL)
-            if try hasFlatExtensionLayout() == false {
-                return try installBundledSeed(
-                    versionsLockURL: versionsLockURL,
-                    replacing: versions
-                )
-            }
-            let extensions = try reconcileExtensionSettings()
-            return PreparedComponentStore(
-                rootURL: rootURL,
-                versionsLockURL: versionsLockURL,
-                versions: versions,
-                extensions: extensions,
-                bundledComponentsChanged: false
-            )
+        guard fileManager.fileExists(atPath: versionsLockURL.path) else {
+            return nil
         }
-        return try installBundledSeed(
-            versionsLockURL: versionsLockURL,
-            replacing: nil
+
+        let versions = try readVersions(at: versionsLockURL)
+        let extensions = try reconcileExtensionSettings(
+            for: versions.extensions
         )
-    }
-
-    private func shouldInstallBundledSeed(
-        installed: ComponentVersionsLock,
-        bundled: ComponentVersionsLock,
-        chatGPTVersion: String?
-    ) -> Bool {
-        guard let chatGPTVersion else { return false }
-
-        let installedMatches = installed.binding.chatgpt == chatGPTVersion
-        let bundledMatches = bundled.binding.chatgpt == chatGPTVersion
-        if installedMatches != bundledMatches {
-            return bundledMatches
-        }
-        return bundledMatches && bundled.generation > installed.generation
+        return PreparedComponentStore(
+            rootURL: rootURL,
+            versions: versions,
+            extensions: extensions
+        )
     }
 
     private func createStoreLayout() throws {
@@ -192,293 +146,161 @@ struct ComponentStore {
     private func readVersions(at versionsLockURL: URL) throws
         -> ComponentVersionsLock
     {
-        let versions = try decode(
-            ComponentVersionsLock.self,
-            at: versionsLockURL
-        )
-        try validate(versions)
-        try validateInstalledComponents(versions)
-        return versions
-    }
-
-    private func installBundledSeed(
-        versionsLockURL: URL,
-        replacing installedVersions: ComponentVersionsLock?
-    ) throws
-        -> PreparedComponentStore
-    {
-        let versions = try readBundledVersions()
-        let platformComponentsChanged = installedVersions.map {
-            versions.chatgptApi != $0.chatgptApi
-                || versions.binding != $0.binding
-        } ?? true
-
-        let downloadsURL = rootURL.appendingPathComponent(
-            "downloads",
-            isDirectory: true
-        )
-        if fileManager.fileExists(atPath: downloadsURL.path) {
-            try fileManager.removeItem(at: downloadsURL)
-        }
-        try fileManager.createDirectory(
-            at: downloadsURL,
-            withIntermediateDirectories: false,
-            attributes: [.posixPermissions: 0o700]
-        )
-        defer { try? fileManager.removeItem(at: downloadsURL) }
-
-        let stagingURL = downloadsURL
-            .appendingPathComponent(
-                "seed-\(UUID().uuidString)",
-                isDirectory: true
-            )
-        try fileManager.createDirectory(
-            at: stagingURL,
-            withIntermediateDirectories: false,
-            attributes: [.posixPermissions: 0o700]
-        )
-        defer { try? fileManager.removeItem(at: stagingURL) }
-
-        for componentPath in [
-            versions.chatgptApi.path,
-            versions.binding.path,
-        ] {
-            try installSeedComponent(
-                at: componentPath,
-                stagingURL: stagingURL
-            )
-        }
-        let installedExtensionRoot = rootURL.appendingPathComponent(
-            "components/extensions",
-            isDirectory: true
-        )
-        let installedExtensionSnapshot = try? extensionSettingsSnapshot(
-            at: installedExtensionRoot
-        )
-        let stagedExtensionRoot = stagingURL.appendingPathComponent(
-            "extensions",
-            isDirectory: true
-        )
-        try fileManager.createDirectory(
-            at: stagedExtensionRoot,
-            withIntermediateDirectories: false,
-            attributes: [.posixPermissions: 0o700]
-        )
-        for id in try bundledExtensionIDs() {
-            let sourceURL = seedURL.appendingPathComponent(
-                "components/extensions/\(id)",
-                isDirectory: true
-            )
-            let manifest = try decode(
-                ExtensionPackageManifest.self,
-                at: sourceURL.appendingPathComponent("package.json")
-            )
-            try validateExtensionManifest(
-                manifest,
-                expectedID: id,
-                packageRoot: sourceURL
-            )
-            try fileManager.copyItem(
-                at: sourceURL,
-                to: stagedExtensionRoot.appendingPathComponent(
-                    id,
-                    isDirectory: true
-                )
-            )
-        }
-        let stagedExtensionSnapshot = try extensionSettingsSnapshot(
-            at: stagedExtensionRoot
-        )
-        let extensionsChanged = installedExtensionSnapshot?.extensions
-            != stagedExtensionSnapshot.extensions
-        let extensions: [StoredExtension]
-        if extensionsChanged {
-            try replaceExtensionPackages(
-                with: stagedExtensionRoot,
-                settingsData: stagedExtensionSnapshot.data
-            )
-            extensions = stagedExtensionSnapshot.extensions
-        } else {
-            extensions = installedExtensionSnapshot?.extensions ?? []
-        }
-        let componentsChanged = platformComponentsChanged || extensionsChanged
-
-        try validateInstalledComponents(versions)
-
-        try atomicWrite(try encode(versions), to: versionsLockURL)
-
-        return PreparedComponentStore(
-            rootURL: rootURL,
-            versionsLockURL: versionsLockURL,
-            versions: versions,
-            extensions: extensions,
-            bundledComponentsChanged: componentsChanged
-        )
-    }
-
-    private func readBundledVersions() throws -> ComponentVersionsLock {
-        let seedVersionsLockURL = seedURL.appendingPathComponent(
-            "versions-lock.json"
-        )
-        let versions = try decode(
-            ComponentVersionsLock.self,
-            at: seedVersionsLockURL
-        )
-        try validate(versions)
-        return versions
-    }
-
-    private func installSeedComponent(
-        at relativePath: String,
-        stagingURL: URL
-    ) throws {
-        let sourceURL = seedURL.appendingPathComponent(
-            relativePath,
-            isDirectory: true
-        )
-        var isDirectory: ObjCBool = false
-        guard
-            fileManager.fileExists(
-                atPath: sourceURL.path,
-                isDirectory: &isDirectory
-            ),
-            isDirectory.boolValue
-        else {
-            throw ComponentStoreError.seedComponentMissing(relativePath)
-        }
-
-        let destinationURL = try resolveStorePath(relativePath)
-        if fileManager.fileExists(atPath: destinationURL.path) {
-            return
-        }
-
-        let stagedURL = stagingURL.appendingPathComponent(
-            UUID().uuidString,
-            isDirectory: true
-        )
-        try fileManager.copyItem(at: sourceURL, to: stagedURL)
-        try fileManager.createDirectory(
-            at: destinationURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        try fileManager.moveItem(at: stagedURL, to: destinationURL)
-    }
-
-    private func bundledExtensionIDs() throws -> [String] {
-        let root = seedURL.appendingPathComponent(
-            "components/extensions",
-            isDirectory: true
-        )
-        return try directoryIDs(at: root)
-    }
-
-    private func hasFlatExtensionLayout() throws -> Bool {
-        let root = rootURL.appendingPathComponent(
-            "components/extensions",
-            isDirectory: true
-        )
-        let ids = try directoryIDs(at: root)
-        guard !ids.isEmpty else { return false }
-        return ids.allSatisfy {
-            fileManager.fileExists(
-                atPath: root.appendingPathComponent($0)
-                    .appendingPathComponent("package.json").path
-            )
-        }
-    }
-
-    func reconcileExtensionSettings() throws -> [StoredExtension] {
-        let snapshot = try extensionSettingsSnapshot(
-            at: rootURL.appendingPathComponent(
-            "components/extensions",
-            isDirectory: true
-            )
-        )
-        try atomicWrite(
-            snapshot.data,
-            to: rootURL.appendingPathComponent("settings.json")
-        )
-        return snapshot.extensions
-    }
-
-    func extensionSettingsSnapshot(at componentsRoot: URL) throws
-        -> (data: Data, extensions: [StoredExtension])
-    {
-        let ids = try directoryIDs(at: componentsRoot)
-        var settings = try readExtensionSettings()
-        var reconciled: [String: ExtensionSetting] = [:]
-        var extensions: [StoredExtension] = []
-
-        for id in ids {
-            let packageURL = componentsRoot.appendingPathComponent(id)
-                .appendingPathComponent("package.json")
-            let manifest = try decode(
-                ExtensionPackageManifest.self,
-                at: packageURL
-            )
-            try validateExtensionManifest(
-                manifest,
-                expectedID: id,
-                packageRoot: componentsRoot.appendingPathComponent(id)
-            )
-            let enabled = manifest.required == true
-                ? true
-                : settings.extensions[id]?.enabled ?? true
-            reconciled[id] = ExtensionSetting(
-                enabled: enabled,
-                additionalValues:
-                    settings.extensions[id]?.additionalValues ?? [:]
-            )
-            extensions.append(
-                StoredExtension(
-                    id: id,
-                    name: manifest.name,
-                    description: manifest.description,
-                    version: manifest.version,
-                    enabled: enabled,
-                    required: manifest.required == true,
-                    compatibility: manifest.compatibility,
-                    path: "components/extensions/\(id)"
-                )
-            )
-        }
-
-        settings.extensions = reconciled
-        return (
-            data: try encodeExtensionSettings(settings),
-            extensions: extensions
-        )
-    }
-
-    func replaceExtensionPackages(
-        with stagedURL: URL,
-        settingsData: Data
-    ) throws {
-        let destinationURL = try resolveStorePath("components/extensions")
-        let backupName = ".extensions-backup-\(UUID().uuidString)"
-        let backupURL = destinationURL.deletingLastPathComponent()
-            .appendingPathComponent(backupName, isDirectory: true)
-        _ = try fileManager.replaceItemAt(
-            destinationURL,
-            withItemAt: stagedURL,
-            backupItemName: backupName,
-            options: [.withoutDeletingBackupItem]
-        )
+        let versions: ComponentVersionsLock
         do {
-            try atomicWrite(
-                settingsData,
-                to: rootURL.appendingPathComponent("settings.json")
+            versions = try JSONDecoder().decode(
+                ComponentVersionsLock.self,
+                from: Data(contentsOf: versionsLockURL)
             )
-            try fileManager.removeItem(at: backupURL)
         } catch {
-            if fileManager.fileExists(atPath: backupURL.path) {
-                _ = try? fileManager.replaceItemAt(
-                    destinationURL,
-                    withItemAt: backupURL
+            throw ComponentStoreError.invalidVersionsLock
+        }
+        try validate(versions)
+        try validateInstalledComponents(versions)
+        return versions
+    }
+
+    func reconcileExtensionSettings(
+        for selectedExtensions: [StoredExtension],
+        recoverInvalidSettings: Bool = false
+    ) throws -> [StoredExtension] {
+        let prepared = try prepareExtensionSettings(
+            for: selectedExtensions,
+            recoverInvalidSettings: recoverInvalidSettings
+        )
+        try commitExtensionSettings(prepared)
+        return prepared.extensions
+    }
+
+    func prepareExtensionSettings(
+        for selectedExtensions: [StoredExtension],
+        recoverInvalidSettings: Bool = false
+    ) throws -> PreparedExtensionSettings {
+        var extensionIDs = Set<String>()
+        var settings: ExtensionSettings
+        do {
+            settings = try readExtensionSettings()
+        } catch {
+            guard recoverInvalidSettings else { throw error }
+            settings = ExtensionSettings(
+                schemaVersion: Self.schemaVersion,
+                extensions: [:]
+            )
+        }
+        var effectiveExtensions: [StoredExtension] = []
+
+        for extensionComponent in selectedExtensions {
+            try validateExtensionShape(
+                extensionComponent,
+                extensionIDs: &extensionIDs
+            )
+            let manifest = try installedExtensionManifest(
+                for: extensionComponent
+            )
+            let required = manifest.required == true
+            guard extensionComponent.name == manifest.name,
+                extensionComponent.description == manifest.description,
+                extensionComponent.required == required
+            else {
+                throw ComponentStoreError.extensionManifestMismatch(
+                    extensionComponent.id
                 )
             }
-            throw error
+
+            let priorSetting = settings.extensions[extensionComponent.id]
+            let enabled = required
+                ? true
+                : priorSetting?.enabled ?? extensionComponent.enabled
+            settings.extensions[extensionComponent.id] = ExtensionSetting(
+                enabled: enabled,
+                additionalValues: priorSetting?.additionalValues ?? [:]
+            )
+            effectiveExtensions.append(
+                StoredExtension(
+                    id: extensionComponent.id,
+                    name: manifest.name,
+                    description: manifest.description,
+                    version: extensionComponent.version,
+                    enabled: enabled,
+                    required: required,
+                    compatibility: extensionComponent.compatibility,
+                    release: extensionComponent.release,
+                    sha256: extensionComponent.sha256,
+                    path: extensionComponent.path
+                )
+            )
+        }
+
+        return PreparedExtensionSettings(
+            extensions: effectiveExtensions,
+            settings: settings
+        )
+    }
+
+    func commitExtensionSettings(
+        _ prepared: PreparedExtensionSettings
+    ) throws {
+        try writeExtensionSettingsIfNeeded(prepared.settings)
+    }
+
+    func activeVersionsLockData() throws -> Data? {
+        let url = rootURL.appendingPathComponent("versions-lock.json")
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        return try Data(contentsOf: url)
+    }
+
+    func activeVersions() throws -> ComponentVersionsLock? {
+        let url = rootURL.appendingPathComponent("versions-lock.json")
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        return try readVersions(at: url)
+    }
+
+    func activeVersionsMetadata() throws -> ComponentVersionsLock? {
+        let url = rootURL.appendingPathComponent("versions-lock.json")
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        let versions: ComponentVersionsLock
+        do {
+            versions = try JSONDecoder().decode(
+                ComponentVersionsLock.self,
+                from: Data(contentsOf: url)
+            )
+        } catch {
+            throw ComponentStoreError.invalidVersionsLock
+        }
+        try validate(versions)
+        return versions
+    }
+
+    func withExclusiveMutationLock<Result>(
+        _ operation: () throws -> Result
+    ) throws -> Result {
+        try createStoreLayout()
+        let lockURL = rootURL.appendingPathComponent("update.lock")
+        let descriptor = lockURL.path.withCString {
+            Darwin.open($0, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        }
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer {
+            _ = Darwin.lockf(descriptor, F_ULOCK, 0)
+            _ = Darwin.close(descriptor)
+        }
+
+        while Darwin.lockf(descriptor, F_LOCK, 0) != 0 {
+            guard errno == EINTR else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        }
+        return try operation()
+    }
+
+    func restoreVersionsLock(_ data: Data?) throws {
+        let url = rootURL.appendingPathComponent("versions-lock.json")
+        if let data {
+            try atomicWrite(data, to: url)
+        } else if fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
         }
     }
 
@@ -490,59 +312,38 @@ struct ComponentStore {
                 extensions: [:]
             )
         }
+
         do {
-            let data = try Data(contentsOf: url)
-            let object = try JSONSerialization.jsonObject(with: data)
+            let object = try JSONSerialization.jsonObject(
+                with: Data(contentsOf: url)
+            )
             guard let root = object as? [String: Any],
-                root["schemaVersion"] as? Int == Self.schemaVersion
+                Set(root.keys) == Set(["schemaVersion", "extensions"]),
+                root["schemaVersion"] as? Int == Self.schemaVersion,
+                let records = root["extensions"] as? [String: Any]
             else {
                 throw ComponentStoreError.invalidSettings
             }
-            if let records = root["extensions"] as? [String: Any] {
-                var extensions: [String: ExtensionSetting] = [:]
-                for (id, rawSetting) in records {
-                    guard isExtensionID(id),
-                        let setting = rawSetting as? [String: Any],
-                        let enabled = setting["enabled"] as? Bool
-                    else {
-                        throw ComponentStoreError.invalidSettings
-                    }
-                    var additionalValues = setting
-                    additionalValues.removeValue(forKey: "enabled")
-                    extensions[id] = ExtensionSetting(
-                        enabled: enabled,
-                        additionalValues: additionalValues
-                    )
+
+            var extensions: [String: ExtensionSetting] = [:]
+            for (id, rawSetting) in records {
+                guard isExtensionID(id),
+                    let setting = rawSetting as? [String: Any],
+                    let enabled = setting["enabled"] as? Bool
+                else {
+                    throw ComponentStoreError.invalidSettings
                 }
-                return ExtensionSettings(
-                    schemaVersion: Self.schemaVersion,
-                    extensions: extensions
+                var additionalValues = setting
+                additionalValues.removeValue(forKey: "enabled")
+                extensions[id] = ExtensionSetting(
+                    enabled: enabled,
+                    additionalValues: additionalValues
                 )
             }
-            if let records = root["extensions"] as? [[String: Any]] {
-                var extensions: [String: ExtensionSetting] = [:]
-                for record in records {
-                    guard let id = record["id"] as? String,
-                        isExtensionID(id),
-                        extensions[id] == nil,
-                        let enabled = record["enabled"] as? Bool
-                    else {
-                        throw ComponentStoreError.invalidSettings
-                    }
-                    var additionalValues = record
-                    additionalValues.removeValue(forKey: "id")
-                    additionalValues.removeValue(forKey: "enabled")
-                    extensions[id] = ExtensionSetting(
-                        enabled: enabled,
-                        additionalValues: additionalValues
-                    )
-                }
-                return ExtensionSettings(
-                    schemaVersion: Self.schemaVersion,
-                    extensions: extensions
-                )
-            }
-            throw ComponentStoreError.invalidSettings
+            return ExtensionSettings(
+                schemaVersion: Self.schemaVersion,
+                extensions: extensions
+            )
         } catch let error as ComponentStoreError {
             throw error
         } catch {
@@ -550,14 +351,17 @@ struct ComponentStore {
         }
     }
 
-    private func directoryIDs(at root: URL) throws -> [String] {
-        try fileManager.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ).filter {
-            try $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
-        }.map(\.lastPathComponent).sorted()
+    private func writeExtensionSettingsIfNeeded(
+        _ settings: ExtensionSettings
+    ) throws {
+        let data = try encodeExtensionSettings(settings)
+        let url = rootURL.appendingPathComponent("settings.json")
+        if fileManager.fileExists(atPath: url.path),
+            try Data(contentsOf: url) == data
+        {
+            return
+        }
+        try atomicWrite(data, to: url)
     }
 
     private func encodeExtensionSettings(
@@ -579,28 +383,31 @@ struct ComponentStore {
         return data
     }
 
-    private func validateExtensionManifest(
-        _ manifest: ExtensionPackageManifest,
-        expectedID: String,
-        packageRoot: URL
-    ) throws {
-        guard manifest.id == expectedID,
+    private func installedExtensionManifest(
+        for extensionComponent: StoredExtension
+    ) throws -> ExtensionPackageManifest {
+        let packageRoot = try resolveStorePath(extensionComponent.path)
+        let manifest = try decode(
+            ExtensionPackageManifest.self,
+            at: packageRoot.appendingPathComponent("package.json")
+        )
+        guard manifest.id == extensionComponent.id,
             isExtensionID(manifest.id),
             !manifest.name.isEmpty,
-            isVersion(manifest.version),
+            manifest.version == extensionComponent.version,
             manifest.main == "contents/main.js",
-            !manifest.compatibility.chatgpt.isEmpty,
-            !manifest.compatibility.chatgptApi.isEmpty,
+            manifest.compatibility == extensionComponent.compatibility,
             fileManager.fileExists(
                 atPath: packageRoot.appendingPathComponent(
-                    "contents/main.js"
+                    manifest.main
                 ).path
             )
         else {
-            throw ComponentStoreError.componentFileMissing(
-                "components/extensions/\(expectedID)"
+            throw ComponentStoreError.extensionManifestMismatch(
+                extensionComponent.id
             )
         }
+        return manifest
     }
 
     func validate(_ versions: ComponentVersionsLock) throws {
@@ -608,6 +415,7 @@ struct ComponentStore {
             versions.schemaVersion == Self.schemaVersion,
             versions.generation > 0,
             isVersion(versions.chatgptApi.version),
+            !versions.chatgptApi.release.isEmpty,
             isHash(versions.chatgptApi.sha256),
             versions.chatgptApi.path
                 == "components/chatgpt-api/\(versions.chatgptApi.version)",
@@ -615,6 +423,7 @@ struct ComponentStore {
             isVersion(versions.binding.version),
             versions.binding.chatgptApi == versions.chatgptApi.version,
             isHash(versions.binding.asarSha256),
+            !versions.binding.release.isEmpty,
             isHash(versions.binding.sha256),
             versions.binding.path
                 == "components/bindings/\(versions.binding.chatgpt)/\(versions.binding.version)"
@@ -622,6 +431,36 @@ struct ComponentStore {
             throw ComponentStoreError.invalidVersionsLock
         }
 
+        var extensionIDs = Set<String>()
+        for extensionComponent in versions.extensions {
+            try validateExtensionShape(
+                extensionComponent,
+                extensionIDs: &extensionIDs
+            )
+            guard !extensionComponent.required || extensionComponent.enabled
+            else {
+                throw ComponentStoreError.invalidVersionsLock
+            }
+        }
+    }
+
+    private func validateExtensionShape(
+        _ extensionComponent: StoredExtension,
+        extensionIDs: inout Set<String>
+    ) throws {
+        guard
+            isExtensionID(extensionComponent.id),
+            extensionIDs.insert(extensionComponent.id).inserted,
+            !extensionComponent.name.isEmpty,
+            isVersion(extensionComponent.version),
+            !extensionComponent.compatibility.chatgptApi.isEmpty,
+            !extensionComponent.release.isEmpty,
+            isHash(extensionComponent.sha256),
+            extensionComponent.path
+                == "components/extensions/\(extensionComponent.id)/\(extensionComponent.version)"
+        else {
+            throw ComponentStoreError.invalidVersionsLock
+        }
     }
 
     func validateInstalledComponents(
@@ -635,7 +474,12 @@ struct ComponentStore {
             "\(versions.chatgptApi.path)/runtime/extension-launch-config.cjs",
             "\(versions.binding.path)/manifest.json",
             "\(versions.binding.path)/host.js",
-        ]
+        ] + versions.extensions.flatMap {
+            [
+                "\($0.path)/package.json",
+                "\($0.path)/contents/main.js",
+            ]
+        }
 
         for relativePath in requiredPaths {
             let fileURL = try resolveStorePath(relativePath)
@@ -650,10 +494,50 @@ struct ComponentStore {
                 throw ComponentStoreError.componentFileMissing(relativePath)
             }
         }
+
+        let apiManifest = try decode(
+            ChatGPTAPIPackageManifest.self,
+            at: try resolveStorePath(
+                "\(versions.chatgptApi.path)/manifest.json"
+            )
+        )
+        guard apiManifest.version == versions.chatgptApi.version else {
+            throw ComponentStoreError.componentManifestMismatch("chatgpt-api")
+        }
+
+        let bindingManifest = try decode(
+            BindingPackageManifest.self,
+            at: try resolveStorePath(
+                "\(versions.binding.path)/manifest.json"
+            )
+        )
+        guard bindingManifest.version == versions.binding.version,
+            bindingManifest.chatgpt == versions.binding.chatgpt,
+            bindingManifest.chatgptApi == versions.binding.chatgptApi,
+            bindingManifest.asarSha256 == versions.binding.asarSha256
+        else {
+            throw ComponentStoreError.componentManifestMismatch("binding")
+        }
+
+        for extensionComponent in versions.extensions {
+            let manifest = try installedExtensionManifest(
+                for: extensionComponent
+            )
+            let manifestIsRequired = manifest.required == true
+            guard manifest.name == extensionComponent.name,
+                manifest.description == extensionComponent.description,
+                manifestIsRequired == extensionComponent.required
+            else {
+                throw ComponentStoreError.extensionManifestMismatch(
+                    extensionComponent.id
+                )
+            }
+        }
     }
 
     func resolveStorePath(_ relativePath: String) throws -> URL {
         guard
+            !relativePath.isEmpty,
             !relativePath.hasPrefix("/"),
             !relativePath.split(separator: "/").contains("..")
         else {
@@ -742,19 +626,28 @@ struct ComponentStore {
     }
 }
 
+private struct ChatGPTAPIPackageManifest: Decodable {
+    let version: String
+}
+
+private struct BindingPackageManifest: Decodable {
+    let version: String
+    let chatgpt: String
+    let chatgptApi: String
+    let asarSha256: String
+}
+
 private enum ComponentStoreError: LocalizedError {
-    case resourcesMissing
     case invalidVersionsLock
     case invalidSettings
     case invalidPath(String)
     case invalidJSON(URL, any Error)
-    case seedComponentMissing(String)
     case componentFileMissing(String)
+    case componentManifestMismatch(String)
+    case extensionManifestMismatch(String)
 
     var errorDescription: String? {
         switch self {
-        case .resourcesMissing:
-            "ChatGPTX resources are missing."
         case .invalidVersionsLock:
             "The component versions lock is invalid."
         case .invalidSettings:
@@ -763,10 +656,12 @@ private enum ComponentStoreError: LocalizedError {
             "The component path is invalid: \(path)"
         case .invalidJSON(let url, let error):
             "Could not read \(url.path): \(error.localizedDescription)"
-        case .seedComponentMissing(let path):
-            "The bundled component is missing: \(path)"
         case .componentFileMissing(let path):
             "The installed component file is missing: \(path)"
+        case .componentManifestMismatch(let component):
+            "The installed \(component) manifest does not match the versions lock."
+        case .extensionManifestMismatch(let id):
+            "The installed extension manifest does not match the versions lock: \(id)"
         }
     }
 }

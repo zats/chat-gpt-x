@@ -651,10 +651,24 @@ private final class ComponentRowView: NSTableCellView {
         case .missing:
             localVersionLabel.stringValue = "Not installed"
             localVersionLabel.isHidden = false
+        case .incompatible(let version):
+            latestVersionLabel.stringValue = "Inactive"
+            localVersionLabel.stringValue = version.map {
+                "Installed \($0) · incompatible"
+            } ?? "No compatible version"
+            localVersionLabel.isHidden = false
         }
-        setAccessibilityLabel(
-            "\(item.name), latest \(item.latestVersion)"
-        )
+        if case .incompatible(let version) = item.localVersion {
+            setAccessibilityLabel(
+                version.map {
+                    "\(item.name), inactive, installed \($0) is incompatible"
+                } ?? "\(item.name), inactive, no compatible version"
+            )
+        } else {
+            setAccessibilityLabel(
+                "\(item.name), latest \(item.latestVersion)"
+            )
+        }
     }
 }
 

@@ -1,0 +1,950 @@
+import CryptoKit
+import Foundation
+import XCTest
+@testable import ChatGPTX
+
+final class ComponentUpdatesTests: XCTestCase {
+    private static let releaseBaseURL =
+        "https://github.com/zats/chat-gpt-x/releases/download"
+    private static let indexURL = URL(
+        string: "https://updates.invalid/latest.json"
+    )!
+    private static let chatgptVersion = "26.900.10000"
+    private static let nextChatgptVersion = "26.900.10001"
+    private static let asarHash = String(repeating: "a", count: 64)
+    private static let nextAsarHash = String(repeating: "b", count: 64)
+
+    private var codexHomeURL: URL!
+
+    override func setUpWithError() throws {
+        codexHomeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: codexHomeURL,
+            withIntermediateDirectories: false
+        )
+        ComponentUpdateURLProtocol.responses = [:]
+        ComponentUpdateURLProtocol.requestedURLs = []
+    }
+
+    override func tearDownWithError() throws {
+        ComponentUpdateURLProtocol.responses = [:]
+        ComponentUpdateURLProtocol.requestedURLs = []
+        if let codexHomeURL {
+            try? FileManager.default.removeItem(at: codexHomeURL)
+        }
+    }
+
+    @MainActor
+    func testStrictSchemaThreeIndexRejectsUnknownAndObsoleteFields() throws {
+        let valid = makeIndex(
+            apiHash: hash("api"),
+            bindingHash: hash("binding"),
+            extensionVersions: [
+                "sample": [
+                    "1.0.0": extensionEntry(
+                        apiRange: "^1.0.0",
+                        hash: hash("sample")
+                    )
+                ]
+            ]
+        )
+        let decoded = try ComponentUpdateIndex.decodeStrict(json(valid))
+        XCTAssertEqual(decoded.schemaVersion, 3)
+        XCTAssertEqual(decoded.minimumLauncherVersion, "1.1.0")
+        XCTAssertEqual(
+            decoded.bindings[Self.chatgptVersion]?.asarSha256,
+            Self.asarHash
+        )
+        XCTAssertEqual(
+            decoded.extensions["sample"]?.versions.keys.sorted(),
+            ["1.0.0"]
+        )
+
+        var unknownRoot = valid
+        unknownRoot["extra"] = true
+        XCTAssertThrowsError(
+            try ComponentUpdateIndex.decodeStrict(json(unknownRoot))
+        )
+
+        var obsoleteSchema = valid
+        obsoleteSchema["schemaVersion"] = 2
+        XCTAssertThrowsError(
+            try ComponentUpdateIndex.decodeStrict(json(obsoleteSchema))
+        )
+
+        var obsoleteCompatibility = valid
+        var catalogs = try XCTUnwrap(
+            obsoleteCompatibility["extensions"] as? [String: Any]
+        )
+        var catalog = try XCTUnwrap(catalogs["sample"] as? [String: Any])
+        var versions = try XCTUnwrap(
+            catalog["versions"] as? [String: Any]
+        )
+        var entry = try XCTUnwrap(versions["1.0.0"] as? [String: Any])
+        var compatibility = try XCTUnwrap(
+            entry["compatibility"] as? [String: Any]
+        )
+        compatibility["chatgpt"] = ">=26.0"
+        entry["compatibility"] = compatibility
+        versions["1.0.0"] = entry
+        catalog["versions"] = versions
+        catalogs["sample"] = catalog
+        obsoleteCompatibility["extensions"] = catalogs
+        XCTAssertThrowsError(
+            try ComponentUpdateIndex.decodeStrict(
+                json(obsoleteCompatibility)
+            )
+        )
+
+        var invalidRange = valid
+        var invalidCatalogs = try XCTUnwrap(
+            invalidRange["extensions"] as? [String: Any]
+        )
+        var invalidCatalog = try XCTUnwrap(
+            invalidCatalogs["sample"] as? [String: Any]
+        )
+        var invalidVersions = try XCTUnwrap(
+            invalidCatalog["versions"] as? [String: Any]
+        )
+        var invalidEntry = try XCTUnwrap(
+            invalidVersions["1.0.0"] as? [String: Any]
+        )
+        invalidEntry["compatibility"] = ["chatgptApi": "banana"]
+        invalidVersions["1.0.0"] = invalidEntry
+        invalidCatalog["versions"] = invalidVersions
+        invalidCatalogs["sample"] = invalidCatalog
+        invalidRange["extensions"] = invalidCatalogs
+        XCTAssertThrowsError(
+            try ComponentUpdateIndex.decodeStrict(json(invalidRange))
+        )
+
+        var unsupportedRuntime = valid
+        unsupportedRuntime["chatgptApis"] = [
+            "1.0.2": [
+                "release": "chatgpt-api-v1.0.2",
+                "sha256": hash("api"),
+            ]
+        ]
+        var unsupportedBindings = try XCTUnwrap(
+            unsupportedRuntime["bindings"] as? [String: Any]
+        )
+        var unsupportedBinding = try XCTUnwrap(
+            unsupportedBindings[Self.chatgptVersion] as? [String: Any]
+        )
+        unsupportedBinding["chatgptApi"] = "1.0.2"
+        unsupportedBindings[Self.chatgptVersion] = unsupportedBinding
+        unsupportedRuntime["bindings"] = unsupportedBindings
+        XCTAssertThrowsError(
+            try ComponentUpdateIndex.decodeStrict(json(unsupportedRuntime))
+        )
+    }
+
+    @MainActor
+    func testBootstrapSelectsLatestAPICompatibleExtensionAndKeepsSettings()
+        async throws
+    {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let binding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let selectedExtension = try makeExtensionArchive(
+            id: "sample",
+            version: "1.2.0",
+            apiRange: "^1.0.0"
+        )
+        let index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(binding),
+            extensionVersions: [
+                "future": [
+                    "2.0.0": extensionEntry(
+                        apiRange: "^2.0.0",
+                        hash: hash("future")
+                    )
+                ],
+                "sample": [
+                    "1.0.0": extensionEntry(
+                        apiRange: "^1.0.0",
+                        hash: hash("old")
+                    ),
+                    "1.2.0": extensionEntry(
+                        apiRange: "^1.0.0",
+                        hash: digest(selectedExtension)
+                    ),
+                    "2.0.0": extensionEntry(
+                        apiRange: "^2.0.0",
+                        hash: hash("new-major")
+                    ),
+                ],
+            ]
+        )
+        try writeSettings([
+            "future": ["enabled": false, "channel": "stable"],
+            "sample": ["enabled": false],
+        ])
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding,
+                "extension-sample-v1.2.0": selectedExtension,
+            ]
+        )
+
+        let outcome = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        guard case .installed(let prepared) = outcome.result else {
+            return XCTFail("Bootstrap must install the selected components.")
+        }
+        XCTAssertEqual(prepared.versions.generation, 7)
+        XCTAssertEqual(prepared.versions.chatgptApi.version, "1.1.0")
+        XCTAssertEqual(prepared.versions.binding.asarSha256, Self.asarHash)
+        XCTAssertEqual(prepared.versions.extensions.map(\.id), ["sample"])
+        XCTAssertEqual(prepared.versions.extensions[0].version, "1.2.0")
+        XCTAssertFalse(prepared.versions.extensions[0].enabled)
+        XCTAssertEqual(
+            prepared.versions.extensions[0].path,
+            "components/extensions/sample/1.2.0"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: prepared.rootURL.appendingPathComponent(
+                    prepared.versions.extensions[0].path
+                ).appendingPathComponent("contents/main.js").path
+            )
+        )
+
+        let settings = try settingsRecords()
+        XCTAssertEqual(settings["future"]?["enabled"] as? Bool, false)
+        XCTAssertEqual(settings["future"]?["channel"] as? String, "stable")
+        XCTAssertEqual(settings["sample"]?["enabled"] as? Bool, false)
+        XCTAssertEqual(
+            outcome.summary.items.first {
+                $0.id == "extension:future"
+            }?.localVersion,
+            .incompatible(nil)
+        )
+        XCTAssertEqual(
+            outcome.summary.items.filter {
+                $0.id != "extension:future"
+            }.map(\.localVersion),
+            [.current, .current, .current]
+        )
+
+        ComponentUpdateURLProtocol.responses = [
+            Self.indexURL: json(index)
+        ]
+        ComponentUpdateURLProtocol.requestedURLs = []
+        let secondOutcome = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+        guard case .upToDate = secondOutcome.result else {
+            return XCTFail("Exact installed versions must not download again.")
+        }
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [Self.indexURL]
+        )
+    }
+
+    @MainActor
+    func testSameGenerationCanInstallASecondExactChatGPTBuild() async throws {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let firstBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let firstIndex = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(firstBinding)
+        )
+        installResponses(
+            index: firstIndex,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": firstBinding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let nextBinding = try makeBindingArchive(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash
+        )
+        var secondIndex = firstIndex
+        var bindings = try XCTUnwrap(
+            secondIndex["bindings"] as? [String: Any]
+        )
+        bindings[Self.nextChatgptVersion] = bindingEntry(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash,
+            hash: digest(nextBinding)
+        )
+        secondIndex["bindings"] = bindings
+        installResponses(
+            index: secondIndex,
+            archives: [
+                "binding-\(Self.nextChatgptVersion)-v1.0.0": nextBinding
+            ]
+        )
+
+        let outcome = try await makeService().update(
+            for: Self.nextChatgptVersion,
+            chatgptAsarSHA256: Self.nextAsarHash
+        )
+
+        guard case .installed(let prepared) = outcome.result else {
+            return XCTFail("A same-generation exact build must install.")
+        }
+        XCTAssertEqual(prepared.versions.generation, 7)
+        XCTAssertEqual(
+            prepared.versions.binding.chatgpt,
+            Self.nextChatgptVersion
+        )
+        XCTAssertEqual(
+            prepared.versions.binding.asarSha256,
+            Self.nextAsarHash
+        )
+    }
+
+    @MainActor
+    func testStaleUpdaterCannotReplaceNewerActiveGeneration() async throws {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let originalBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let originalIndex = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(originalBinding)
+        )
+        installResponses(
+            index: originalIndex,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": originalBinding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let correctedBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.1",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        var staleIndex = originalIndex
+        staleIndex["generation"] = 8
+        var bindings = try XCTUnwrap(
+            staleIndex["bindings"] as? [String: Any]
+        )
+        bindings[Self.chatgptVersion] = bindingEntry(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.1",
+            api: "1.1.0",
+            asarHash: Self.asarHash,
+            hash: digest(correctedBinding)
+        )
+        staleIndex["bindings"] = bindings
+        installResponses(
+            index: staleIndex,
+            archives: [
+                "binding-\(Self.chatgptVersion)-v1.0.1": correctedBinding
+            ]
+        )
+
+        let lockURL = codexHomeURL.appendingPathComponent(
+            "extensions/versions-lock.json"
+        )
+        let service = try makeService {
+            var lock = try XCTUnwrap(
+                JSONSerialization.jsonObject(
+                    with: Data(contentsOf: lockURL)
+                ) as? [String: Any]
+            )
+            lock["generation"] = 9
+            try self.json(lock).write(to: lockURL, options: .atomic)
+        }
+
+        do {
+            _ = try await service.update(
+                for: Self.chatgptVersion,
+                chatgptAsarSHA256: Self.asarHash
+            )
+            XCTFail("A stale updater must not replace a newer active store.")
+        } catch ComponentUpdateError.olderGeneration(
+            let remote,
+            let installed
+        ) {
+            XCTAssertEqual(remote, 8)
+            XCTAssertEqual(installed, 9)
+        }
+
+        let active = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: lockURL)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(active["generation"] as? Int, 9)
+    }
+
+    @MainActor
+    func testUpdateRepairsCorruptComponentsAndInvalidSettings() async throws {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let binding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(binding)
+        )
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let extensionsRoot = codexHomeURL.appendingPathComponent(
+            "extensions",
+            isDirectory: true
+        )
+        let bridgeURL = extensionsRoot.appendingPathComponent(
+            "components/chatgpt-api/1.1.0/bridge/main.cjs"
+        )
+        try FileManager.default.removeItem(at: bridgeURL)
+        try Data("not-json".utf8).write(
+            to: extensionsRoot.appendingPathComponent("settings.json")
+        )
+        installResponses(
+            index: index,
+            archives: ["chatgpt-api-v1.1.0": api]
+        )
+
+        let outcome = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        guard case .installed(let prepared) = outcome.result else {
+            return XCTFail("A damaged selected component must be repaired.")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bridgeURL.path))
+        XCTAssertEqual(prepared.versions.chatgptApi.version, "1.1.0")
+        XCTAssertEqual(try settingsRecords().count, 0)
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [Self.indexURL, releaseURL("chatgpt-api-v1.1.0")]
+        )
+    }
+
+    @MainActor
+    func testFailedRepairKeepsCorruptPackageUntilReplacementIsReady()
+        async throws
+    {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let binding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(binding)
+        )
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let apiRootURL = codexHomeURL.appendingPathComponent(
+            "extensions/components/chatgpt-api/1.1.0",
+            isDirectory: true
+        )
+        try FileManager.default.removeItem(
+            at: apiRootURL.appendingPathComponent("bridge/main.cjs")
+        )
+        ComponentUpdateURLProtocol.responses = [Self.indexURL: json(index)]
+        ComponentUpdateURLProtocol.requestedURLs = []
+
+        do {
+            _ = try await makeService().update(
+                for: Self.chatgptVersion,
+                chatgptAsarSHA256: Self.asarHash
+            )
+            XCTFail("A failed component download must fail the repair.")
+        } catch {
+            XCTAssertTrue(
+                FileManager.default.fileExists(
+                    atPath: apiRootURL.appendingPathComponent(
+                        "manifest.json"
+                    ).path
+                )
+            )
+            XCTAssertFalse(
+                FileManager.default.fileExists(
+                    atPath: apiRootURL.appendingPathComponent(
+                        "bridge/main.cjs"
+                    ).path
+                )
+            )
+        }
+    }
+
+    @MainActor
+    func testSettingsCommitFailureRestoresPriorActiveLock() async throws {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let originalBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let originalIndex = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(originalBinding)
+        )
+        installResponses(
+            index: originalIndex,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": originalBinding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let extensionsRoot = codexHomeURL.appendingPathComponent(
+            "extensions",
+            isDirectory: true
+        )
+        let lockURL = extensionsRoot.appendingPathComponent(
+            "versions-lock.json"
+        )
+        let priorLock = try Data(contentsOf: lockURL)
+        let settingsURL = extensionsRoot.appendingPathComponent(
+            "settings.json"
+        )
+        try FileManager.default.removeItem(at: settingsURL)
+        try FileManager.default.createDirectory(
+            at: settingsURL,
+            withIntermediateDirectories: false
+        )
+
+        let correctedBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.1",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        var correctedIndex = originalIndex
+        var bindings = try XCTUnwrap(
+            correctedIndex["bindings"] as? [String: Any]
+        )
+        bindings[Self.chatgptVersion] = bindingEntry(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.1",
+            api: "1.1.0",
+            asarHash: Self.asarHash,
+            hash: digest(correctedBinding)
+        )
+        correctedIndex["bindings"] = bindings
+        installResponses(
+            index: correctedIndex,
+            archives: [
+                "binding-\(Self.chatgptVersion)-v1.0.1": correctedBinding
+            ]
+        )
+
+        do {
+            _ = try await makeService().update(
+                for: Self.chatgptVersion,
+                chatgptAsarSHA256: Self.asarHash
+            )
+            XCTFail("An unwritable settings target must fail the update.")
+        } catch {
+            XCTAssertEqual(try Data(contentsOf: lockURL), priorLock)
+        }
+    }
+
+    @MainActor
+    func testExactBuildHashAndMinimumLauncherAreRequired() async throws {
+        let index = makeIndex(
+            apiHash: hash("api"),
+            bindingHash: hash("binding")
+        )
+        ComponentUpdateURLProtocol.responses = [Self.indexURL: json(index)]
+
+        do {
+            _ = try await makeService().update(
+                for: Self.chatgptVersion,
+                chatgptAsarSHA256: Self.nextAsarHash
+            )
+            XCTFail("A different app.asar hash must be rejected.")
+        } catch ComponentUpdateError.bindingBuildUnavailable(let version) {
+            XCTAssertEqual(version, Self.chatgptVersion)
+        }
+
+        do {
+            _ = try await makeService(launcherVersion: "1.0.9").update(
+                for: Self.chatgptVersion,
+                chatgptAsarSHA256: Self.asarHash
+            )
+            XCTFail("An old launcher must be rejected.")
+        } catch ComponentUpdateError.launcherTooOld(
+            let installed,
+            let minimum
+        ) {
+            XCTAssertEqual(installed, "1.0.9")
+            XCTAssertEqual(minimum, "1.1.0")
+        }
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: codexHomeURL.appendingPathComponent(
+                    "extensions/versions-lock.json"
+                ).path
+            )
+        )
+        XCTAssertTrue(
+            ComponentUpdateURLProtocol.requestedURLs.allSatisfy {
+                $0 == Self.indexURL
+            }
+        )
+    }
+
+    @MainActor
+    private func makeService(
+        launcherVersion: String = "1.1.0",
+        beforeActivation: @escaping () throws -> Void = {}
+    ) throws -> ComponentUpdateService {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ComponentUpdateURLProtocol.self]
+        return ComponentUpdateService(
+            componentStore: try ComponentStore(
+                environment: ["CODEX_HOME": codexHomeURL.path]
+            ),
+            session: URLSession(configuration: configuration),
+            indexURL: Self.indexURL,
+            launcherVersion: launcherVersion,
+            beforeActivation: beforeActivation,
+            environment: [:]
+        )
+    }
+
+    private func makeIndex(
+        apiHash: String,
+        bindingHash: String,
+        extensionVersions: [String: [String: [String: Any]]] = [:]
+    ) -> [String: Any] {
+        [
+            "schemaVersion": 3,
+            "generation": 7,
+            "minimumLauncherVersion": "1.1.0",
+            "releaseBaseURL": Self.releaseBaseURL,
+            "chatgptApis": [
+                "1.1.0": [
+                    "release": "chatgpt-api-v1.1.0",
+                    "sha256": apiHash,
+                ]
+            ],
+            "bindings": [
+                Self.chatgptVersion: bindingEntry(
+                    chatgpt: Self.chatgptVersion,
+                    version: "1.0.0",
+                    api: "1.1.0",
+                    asarHash: Self.asarHash,
+                    hash: bindingHash
+                )
+            ],
+            "extensions": extensionCatalogs(extensionVersions),
+        ]
+    }
+
+    private func bindingEntry(
+        chatgpt: String,
+        version: String,
+        api: String,
+        asarHash: String,
+        hash: String
+    ) -> [String: Any] {
+        [
+            "version": version,
+            "chatgptApi": api,
+            "asarSha256": asarHash,
+            "release": "binding-\(chatgpt)-v\(version)",
+            "sha256": hash,
+        ]
+    }
+
+    private func extensionEntry(
+        apiRange: String,
+        hash: String
+    ) -> [String: Any] {
+        [
+            "compatibility": ["chatgptApi": apiRange],
+            "release": "placeholder",
+            "sha256": hash,
+        ]
+    }
+
+    private func installResponses(
+        index: [String: Any],
+        archives: [String: Data]
+    ) {
+        var responses = [Self.indexURL: json(index)]
+        for (release, data) in archives {
+            responses[releaseURL(release)] = data
+        }
+        ComponentUpdateURLProtocol.responses = responses
+        ComponentUpdateURLProtocol.requestedURLs = []
+    }
+
+    private func extensionCatalogs(
+        _ source: [String: [String: [String: Any]]]
+    ) -> [String: Any] {
+        Dictionary(uniqueKeysWithValues: source.map { id, versions in
+            let entries = Dictionary(
+                uniqueKeysWithValues: versions.map { version, rawEntry in
+                    var entry = rawEntry
+                    entry["release"] = "extension-\(id)-v\(version)"
+                    return (version, entry)
+                }
+            )
+            return (id, ["versions": entries])
+        })
+    }
+
+    private func makeAPIArchive(version: String) throws -> Data {
+        try makeArchive(files: [
+            "manifest.json": json(["version": version]),
+            "types.d.ts": Data("export {};".utf8),
+            "bridge/main.cjs": Data("module.exports = {};".utf8),
+            "bridge/preload.cjs": Data("module.exports = {};".utf8),
+            "runtime/codex-paths.cjs": Data("module.exports = {};".utf8),
+            "runtime/extension-launch-config.cjs": Data(
+                "module.exports = {};".utf8
+            ),
+        ])
+    }
+
+    private func makeBindingArchive(
+        chatgpt: String,
+        version: String,
+        api: String,
+        asarHash: String
+    ) throws -> Data {
+        try makeArchive(files: [
+            "manifest.json": json([
+                "version": version,
+                "chatgpt": chatgpt,
+                "chatgptApi": api,
+                "asarSha256": asarHash,
+            ]),
+            "host.js": Data("module.exports = {};".utf8),
+        ])
+    }
+
+    private func makeExtensionArchive(
+        id: String,
+        version: String,
+        apiRange: String
+    ) throws -> Data {
+        try makeArchive(files: [
+            "package.json": json([
+                "id": id,
+                "name": "Sample",
+                "description": "A test extension.",
+                "version": version,
+                "main": "contents/main.js",
+                "compatibility": ["chatgptApi": apiRange],
+            ]),
+            "contents/main.js": Data("module.exports = {};".utf8),
+        ])
+    }
+
+    private func makeArchive(files: [String: Data]) throws -> Data {
+        let root = codexHomeURL.appendingPathComponent(
+            "archive-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let archiveURL = codexHomeURL.appendingPathComponent(
+            "\(UUID().uuidString).zip"
+        )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: false
+        )
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: archiveURL)
+        }
+        for (path, data) in files {
+            let url = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url)
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-c", "-k", root.path, archiveURL.path]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw TestError.archiveCreationFailed
+        }
+        return try Data(contentsOf: archiveURL)
+    }
+
+    private func writeSettings(
+        _ records: [String: [String: Any]]
+    ) throws {
+        let extensionsRoot = codexHomeURL.appendingPathComponent(
+            "extensions",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: extensionsRoot,
+            withIntermediateDirectories: true
+        )
+        try json([
+            "schemaVersion": 1,
+            "extensions": records,
+        ]).write(
+            to: extensionsRoot.appendingPathComponent("settings.json")
+        )
+    }
+
+    private func settingsRecords() throws -> [String: [String: Any]] {
+        let url = codexHomeURL.appendingPathComponent(
+            "extensions/settings.json"
+        )
+        let root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url))
+                as? [String: Any]
+        )
+        return try XCTUnwrap(
+            root["extensions"] as? [String: [String: Any]]
+        )
+    }
+
+    private func releaseURL(_ release: String) -> URL {
+        URL(
+            string: "\(Self.releaseBaseURL)/\(release)/\(release).zip"
+        )!
+    }
+
+    private func json(_ object: Any) -> Data {
+        try! JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys]
+        )
+    }
+
+    private func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map {
+            String(format: "%02x", $0)
+        }.joined()
+    }
+
+    private func hash(_ seed: String) -> String {
+        digest(Data(seed.utf8))
+    }
+}
+
+private enum TestError: Error {
+    case archiveCreationFailed
+}
+
+private final class ComponentUpdateURLProtocol: URLProtocol,
+    @unchecked Sendable
+{
+    nonisolated(unsafe) static var responses: [URL: Data] = [:]
+    nonisolated(unsafe) static var requestedURLs: [URL] = []
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        let url = request.url!
+        Self.requestedURLs.append(url)
+        guard let data = Self.responses[url] else {
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: 404,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            client?.urlProtocol(
+                self,
+                didReceive: response,
+                cacheStoragePolicy: .notAllowed
+            )
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Length": "\(data.count)"]
+        )!
+        client?.urlProtocol(
+            self,
+            didReceive: response,
+            cacheStoragePolicy: .notAllowed
+        )
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}

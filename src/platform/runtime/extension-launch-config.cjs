@@ -6,15 +6,19 @@ const path = require("node:path");
 const extensionIdPattern = /^[a-z0-9][a-z0-9._-]*$/i;
 const semanticVersionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
 
-function readExtensionEntries({ configurationFile, extensionsDirectory }) {
+function readExtensionEntries({
+  configurationFile,
+  versions,
+  extensionsDirectory,
+}) {
   if (!configurationFile) {
-    return listInstalledExtensions(extensionsDirectory)
+    return listInstalledExtensions(extensionsDirectory, versions)
       .filter((extension) => extension.enabled)
       .map((extension) => ({
         id: extension.id,
         enabled: true,
         path: path.join(
-          extensionPackageDirectory(extensionsDirectory, extension.id),
+          extensionPackageDirectory(extensionsDirectory, extension.path),
           "contents/main.js",
         ),
       }));
@@ -54,29 +58,15 @@ function readExtensionEntries({ configurationFile, extensionsDirectory }) {
   });
 }
 
-function listInstalledExtensions(extensionsDirectory) {
+function listInstalledExtensions(extensionsDirectory, versions) {
   const settings = readSettings(extensionsDirectory);
-  const packageRoot = path.join(
-    extensionsDirectory,
-    "components/extensions",
-  );
-  const packageIds = fs
-    .readdirSync(packageRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort((left, right) => left.localeCompare(right));
-  const settingIds = Object.keys(settings.extensions).sort((left, right) =>
-    left.localeCompare(right),
-  );
-  if (
-    packageIds.length !== settingIds.length ||
-    packageIds.some((id, index) => id !== settingIds[index])
-  ) {
-    throw new Error("Extension settings must contain every installed extension id");
-  }
-
-  return settingIds.map((id) => {
-    const manifest = readExtensionManifest(extensionsDirectory, id);
+  const selected = selectedExtensions(versions);
+  return selected.map((extension) => {
+    const { id } = extension;
+    if (!Object.hasOwn(settings.extensions, id)) {
+      throw new Error("Extension settings are missing selected extension: " + id);
+    }
+    const manifest = readExtensionManifest(extensionsDirectory, extension);
     const setting = settings.extensions[id];
     return Object.freeze({
       id,
@@ -85,19 +75,31 @@ function listInstalledExtensions(extensionsDirectory) {
       version: manifest.version,
       enabled: manifest.required === true ? true : setting.enabled,
       required: manifest.required === true,
+      path: extension.path,
     });
   });
 }
 
-function setExtensionEnabled(extensionsDirectory, extensionId, enabled) {
+function setExtensionEnabled(
+  extensionsDirectory,
+  versions,
+  extensionId,
+  enabled,
+) {
   if (!extensionIdPattern.test(extensionId) || typeof enabled !== "boolean") {
     throw new TypeError("Invalid extension enablement request");
+  }
+  const extension = selectedExtensions(versions).find(
+    (candidate) => candidate.id === extensionId,
+  );
+  if (!extension) {
+    throw new Error("Unknown installed extension: " + extensionId);
   }
   const settings = readSettings(extensionsDirectory);
   if (!Object.hasOwn(settings.extensions, extensionId)) {
     throw new Error("Unknown installed extension: " + extensionId);
   }
-  const manifest = readExtensionManifest(extensionsDirectory, extensionId);
+  const manifest = readExtensionManifest(extensionsDirectory, extension);
   if (manifest.required === true && !enabled) {
     throw new Error("Cannot disable a required extension");
   }
@@ -135,12 +137,16 @@ function readSettings(extensionsDirectory) {
   return parsed;
 }
 
-function readExtensionManifest(extensionsDirectory, id) {
+function readExtensionManifest(extensionsDirectory, extension) {
+  const { id } = extension;
   let manifest;
   try {
     manifest = JSON.parse(
       fs.readFileSync(
-        path.join(extensionPackageDirectory(extensionsDirectory, id), "package.json"),
+        path.join(
+          extensionPackageDirectory(extensionsDirectory, extension.path),
+          "package.json",
+        ),
         "utf8",
       ),
     );
@@ -164,11 +170,40 @@ function readExtensionManifest(extensionsDirectory, id) {
   return manifest;
 }
 
-function extensionPackageDirectory(extensionsDirectory, id) {
-  if (!extensionIdPattern.test(id)) {
-    throw new Error("Invalid extension id: " + id);
+function selectedExtensions(versions) {
+  if (!versions || !Array.isArray(versions.extensions)) {
+    throw new Error("Invalid component versions lock");
   }
-  return path.join(extensionsDirectory, "components/extensions", id);
+  const ids = new Set();
+  return [...versions.extensions]
+    .map((extension) => {
+      if (
+        !extension ||
+        !extensionIdPattern.test(extension.id) ||
+        ids.has(extension.id) ||
+        typeof extension.path !== "string"
+      ) {
+        throw new Error("Invalid locked extension");
+      }
+      ids.add(extension.id);
+      return extension;
+    })
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function extensionPackageDirectory(extensionsDirectory, relativePath) {
+  if (
+    path.isAbsolute(relativePath) ||
+    relativePath.split(/[\\/]/).includes("..")
+  ) {
+    throw new Error("Invalid extension package path: " + relativePath);
+  }
+  const directory = path.resolve(extensionsDirectory, relativePath);
+  const root = path.resolve(extensionsDirectory) + path.sep;
+  if (!directory.startsWith(root)) {
+    throw new Error("Extension package path escapes the store");
+  }
+  return directory;
 }
 
 function atomicWriteJson(file, value) {

@@ -1,9 +1,10 @@
 /**
- * Renderer binding for ChatGPT 26.715.70719.
+ * Renderer binding for ChatGPT 26.810.52044.
  *
  * The binding patches the app's shared JSX runtime and transforms native
  * profile and thread menu item trees. Items remain inside the app's existing
  * Radix roots and use the app's exported menu components.
+ * Binding revisions can update this bridge without changing the public API.
  */
 (() => {
   "use strict";
@@ -11,32 +12,11 @@
   if (window.__CGPTX_HOST__) return;
 
   const LOG_PREFIX = "[cgptx-host]";
-  const CORE_MODULE =
-    "./assets/app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~kppdhley-Hrn9ylUK.js";
-  const MENU_MODULE =
-    "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~appgen-settings-p~evbmo86c-D4aWp9Ck.js";
-  const ICON_MODULE =
-    "./assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~dg0b1kws-Cen01Onw.js";
-  const PROFILE_ICON_MODULE =
-    "./assets/app-initial~app-main~settings-command-menu-section-items~pull-request-route~new-thread-pane~fnoshreu-CHWJP-re.js";
-  const PLUS_ICON_MODULE = "./assets/plus-BgCJgEEs-DSk_o46V.js";
-  const PALETTE_ICON_MODULE = "./assets/palette-lzFbWMQk-Cg3hGH0S.js";
-  const COLOR_PICKER_MODULE =
-    "./assets/app-initial~app-main~plugin-detail-page~settings-page~projects-index-page~appgen-library-pa~nsqr45u8-w2kLKHJV.js";
-  const REACT_DOM_MODULE =
-    "./assets/app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~gsbyx6su-BgGJHe-c.js";
-  const REACT_DOM_CORE_MODULE =
-    "./assets/app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~elr7dp2m-Dzby7gOc.js";
-  const THREAD_MENU_MODULE = "./assets/thread-overflow-menu-C_zMj6Vd.js";
-  const THREAD_ROW_MODULE =
-    "./assets/app-initial~app-main~onboarding-page~projects-index-page~hotkey-window-thread-page~chatgpt-~j34jmud9-BtWAey-a.js";
-  const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-CTvO8J1r.js";
-  const AUTH_CONTEXT_MODULE =
-    "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~k87y25tw-DjPeV3vC.js";
-  const BROWSER_MODULE =
-    "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~c1u3yp5s-9RGNa6St.js";
-  const QUERY_MODULE =
-    "./assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~ngwudnyz-DEp-3H1N.js";
+  const APP_INITIAL_MODULE = "./assets/app-initial-BqZ9AFkF.js";
+  const PLUS_ICON_MODULE = "./assets/plus-BgCJgEEs-BrmTB3Ae.js";
+  const PALETTE_ICON_MODULE = "./assets/palette-lzFbWMQk-x3Sg1y-R.js";
+  const THREAD_MENU_MODULE = "./assets/thread-overflow-menu-KDVvrOp6.js";
+  const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-Bq9N9f53.js";
   const AUTHENTICATION_RESTART_TIMEOUT_MS = 20_000;
   const HEADER_BACKGROUND_PROPERTY = "--header-background-color";
   const HEADER_FOREGROUND_PROPERTY = "--header-foreground-color";
@@ -46,31 +26,31 @@
   ]);
   const BINDING_STYLE_ID = "cgptx-binding-style";
   const BINDING_STYLE_SOURCE = `
-html[data-cgptx-header-background-color] header.app-header-tint {
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] {
   background-color: transparent !important;
 }
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(2),
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3),
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(5) {
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(2),
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(3),
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(5) {
   background-color: var(--header-background-color) !important;
 }
 html[data-cgptx-header-background-color]:has(
     aside[data-app-shell-focus-area="right-panel"][style*="opacity: 1"]
   )
-  header.app-header-tint > div:nth-of-type(5) {
+  header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(5) {
   background-color: transparent !important;
 }
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3) {
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(3) {
   box-shadow: -8px 0 var(--header-background-color);
 }
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
   [data-app-shell-tabs="true"] > .h-toolbar {
-  --color-token-main-surface-primary: var(--header-background-color);
+  --color-surface: var(--header-background-color);
 }
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
   [data-app-shell-tabs="true"] > .h-toolbar,
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
-  [data-app-shell-tabs="true"] > .h-toolbar [class~="bg-token-main-surface-primary"] {
+  [data-app-shell-tabs="true"] > .h-toolbar [class~="bg-surface"] {
   background-color: var(--header-background-color) !important;
 }
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
@@ -81,9 +61,21 @@ html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-
     var(--header-background-color)
   ) !important;
 }
-html[data-cgptx-header-foreground-color] header.app-header-tint {
+html[data-cgptx-header-foreground-color] header[data-pip-obstacle="app-shell-header"] {
+  --color-text: var(--header-foreground-color);
+  --color-text-secondary: color-mix(
+    in srgb,
+    var(--header-foreground-color) 76%,
+    transparent
+  );
+  --color-text-tertiary: color-mix(
+    in srgb,
+    var(--header-foreground-color) 72%,
+    transparent
+  );
   --color-token-foreground: var(--header-foreground-color);
   --color-token-text-primary: var(--header-foreground-color);
+  color: var(--header-foreground-color);
   --color-token-text-secondary: color-mix(
     in srgb,
     var(--header-foreground-color) 76%,
@@ -94,6 +86,20 @@ html[data-cgptx-header-foreground-color] header.app-header-tint {
     var(--header-foreground-color) 72%,
     transparent
   );
+}
+html[data-cgptx-header-background-color][data-cgptx-header-foreground-color]
+  header[data-pip-obstacle="app-shell-header"] button[class~="bg-token-bg-fog"] {
+  background-color: color-mix(
+    in srgb,
+    var(--header-background-color) 75%,
+    black
+  ) !important;
+  border-color: color-mix(
+    in srgb,
+    var(--header-foreground-color) 28%,
+    transparent
+  ) !important;
+  color: var(--header-foreground-color) !important;
 }
 html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-panel"]
   [data-app-shell-tabs="true"] > .h-toolbar [role="tab"] {
@@ -115,7 +121,7 @@ html[data-cgptx-header-foreground-color] aside[data-app-shell-focus-area="right-
     transparent
   ) !important;
 }
-[data-cgptx-thread-list-owner]
+[data-app-action-sidebar-thread-row]
   [data-thread-title-trigger]:has(> [data-cgptx-thread-list-leading-views]) {
   position: relative;
 }
@@ -186,7 +192,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function isThreadMessageId(id) {
     return (
       typeof id === "string" &&
-      (id.startsWith("threadHeader.") || id.startsWith("sidebarElectron."))
+      (id.startsWith("threadHeader.") ||
+        id.startsWith("sidebarElectron.") ||
+        id.startsWith("sidebar.threadProject."))
     );
   }
 
@@ -227,6 +235,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const extensions = new Map();
   const safeHandlers = new WeakSet();
   const renderListeners = new Set();
+  const mountedThreadListRows = new WeakMap();
   let renderVersion = 0;
   let builtInCache = Object.freeze([]);
   let builtInViews = new Map();
@@ -234,11 +243,17 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let currentThread = undefined;
   let currentThreadClearGeneration = 0;
   let native = null;
+  let nativeBindingInstalled = false;
+  let nativeBindingError = null;
+  let applicationRootRefreshCount = 0;
+  let threadMenuBoundaryRenderCount = 0;
   let pendingExpandedId = null;
   let pendingThreadExpanded = null;
   let nestedItemClassName = null;
   let refreshAuthentication = null;
   let openNativeProfile = null;
+  let profileNavigationAttemptCount = 0;
+  let profileNavigationLastRequestedPath = null;
   let profileMenuHasNativeProfileCallback = null;
   let nativeAppServerRegistry = null;
   let activeSignIn = null;
@@ -270,6 +285,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function emitChange() {
     renderVersion += 1;
     for (const listener of [...renderListeners]) listener();
+    if (native) queueMicrotask(refreshThreadListRows);
   }
 
   function emitAuthenticationChange() {
@@ -842,6 +858,89 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return Object.freeze(items);
   }
 
+  function sameThreadListItems(left, right) {
+    return (
+      left.length === right.length &&
+      left.every((item, index) => item === right[index])
+    );
+  }
+
+  function threadListContextFromRow(row) {
+    const scopedId = row.getAttribute("data-app-action-sidebar-thread-id");
+    const separator = scopedId?.lastIndexOf(":") ?? -1;
+    if (separator < 1 || separator === scopedId.length - 1) return null;
+    return Object.freeze({
+      threadId: scopedId.slice(separator + 1),
+      title: row.getAttribute("data-app-action-sidebar-thread-title") ?? "",
+    });
+  }
+
+  function removeMountedThreadListRow(row) {
+    const record = mountedThreadListRows.get(row);
+    if (!record) return;
+    record.host.remove();
+    mountedThreadListRows.delete(row);
+  }
+
+  function renderThreadListRow(row) {
+    const context = threadListContextFromRow(row);
+    const target = row.querySelector("[data-thread-title-trigger]");
+    if (!context || !target) {
+      removeMountedThreadListRow(row);
+      return;
+    }
+    const items = computeThreadListItems(context);
+    const current = mountedThreadListRows.get(row);
+    if (
+      current &&
+      current.target === target &&
+      sameThreadContext(current.context, context) &&
+      sameThreadListItems(current.items, items)
+    ) {
+      return;
+    }
+    removeMountedThreadListRow(row);
+    if (items.length === 0) return;
+
+    const host = document.createElement("span");
+    host.className =
+      "flex h-4 items-center gap-0.5 overflow-visible";
+    host.setAttribute("data-cgptx-thread-list-leading-views", "");
+    host.style.cssText =
+      "position:absolute;right:calc(100% + 3px);top:50%;" +
+      "transform:translateY(-50%);flex-direction:row-reverse;" +
+      "pointer-events:none;z-index:1";
+    for (const item of items) {
+      let element;
+      try {
+        element = item.view();
+      } catch (error) {
+        warn("thread-list item view threw; skipped", error);
+        continue;
+      }
+      if (!(element instanceof HTMLElement)) {
+        warn("thread-list item view did not return an HTMLElement; skipped");
+        continue;
+      }
+      const itemHost = document.createElement("span");
+      itemHost.className = "contents";
+      itemHost.setAttribute("data-cgptx-thread-list-item-view", "");
+      itemHost.append(element);
+      host.append(itemHost);
+    }
+    if (host.childElementCount === 0) return;
+    target.append(host);
+    mountedThreadListRows.set(row, { context, host, items, target });
+  }
+
+  function refreshThreadListRows() {
+    for (const row of document.querySelectorAll(
+      "[data-app-action-sidebar-thread-row]",
+    )) {
+      renderThreadListRow(row);
+    }
+  }
+
   function sameThreadDescriptor(left, right) {
     if (!left || !right || left.kind !== right.kind || left.id !== right.id) {
       return false;
@@ -1111,7 +1210,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return Boolean(
       block.matches?.('[role="separator"]') ||
         block.querySelector?.(
-          '[role="separator"], .h-\\[1px\\][class*="bg-token-menu-border"]',
+          '[role="separator"], .h-\\[1px\\][class*="bg-border"]',
         ),
     );
   }
@@ -2040,7 +2139,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       surface.current.querySelector('[role="slider"]').focus();
     }, []);
     const headerBottom = document
-      .querySelector("header.app-header-tint")
+      .querySelector('header[data-pip-obstacle="app-shell-header"]')
       .getBoundingClientRect().bottom;
     return native.jsx("div", {
       ref: surface,
@@ -2112,134 +2211,60 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
     function useNativeProfileNavigation() {
       const navigate = native.useNavigate();
-      openNativeProfile = () => navigate("/settings/profile");
+      openNativeProfile = () => {
+        profileNavigationAttemptCount += 1;
+        profileNavigationLastRequestedPath = "/settings/profile";
+        navigate(profileNavigationLastRequestedPath);
+      };
     }
 
-    function ThreadListItemViewHost({ view }) {
-      const ref = React.useRef(null);
-      React.useLayoutEffect(() => {
-        let element;
-        try {
-          element = view();
-        } catch (error) {
-          warn("thread-list item view threw; skipped", error);
-          return undefined;
-        }
-        if (!(element instanceof HTMLElement)) {
-          warn("thread-list item view did not return an HTMLElement; skipped");
-          return undefined;
-        }
-        const container = ref.current;
-        container.replaceChildren(element);
-        return () => container.replaceChildren();
-      }, [view]);
-      return native.jsx("span", {
-        ref,
-        className: "contents",
-        "data-cgptx-thread-list-item-view": "",
-      });
-    }
-
-    function ThreadListLeadingViews({ items }) {
-      const children = items.map((item, index) =>
-        native.jsx(
-          ThreadListItemViewHost,
-          { view: item.view },
-          `cgptx-thread-list-item-${index}`,
-        ),
+    function threadContextForMenuProps(props) {
+      const threadId = props.conversationId;
+      const row = Array.from(
+        document.querySelectorAll("[data-app-action-sidebar-thread-row]"),
+      ).find((candidate) =>
+        candidate
+          .getAttribute("data-app-action-sidebar-thread-id")
+          ?.endsWith(`:${threadId}`),
       );
-      return native.jsx("span", {
-        style: {
-          position: "absolute",
-          right: "calc(100% + 3px)",
-          top: "50%",
-          transform: "translateY(-50%)",
-          flexDirection: "row-reverse",
-          pointerEvents: "none",
-          zIndex: 1,
-        },
-        className: "flex h-4 items-center gap-0.5 overflow-visible",
-        "data-cgptx-thread-list-leading-views": "",
-        children,
-      });
-    }
-
-    let threadListRowOwnerSequence = 0;
-
-    function ThreadListRowBoundary({ child }) {
-      React.useSyncExternalStore(
-        subscribe,
-        () => renderVersion,
-        () => renderVersion,
-      );
-      const ownerRef = React.useRef();
-      if (ownerRef.current == null) {
-        threadListRowOwnerSequence += 1;
-        ownerRef.current = `cgptx-thread-list-row-${threadListRowOwnerSequence}`;
-      }
-      const owner = ownerRef.current;
-      const tree = child.type({
-        ...child.props,
-        dataAttributes: {
-          ...child.props.dataAttributes,
-          "data-cgptx-thread-list-owner": owner,
-        },
-      });
-      const [target, setTarget] = React.useState(null);
-      React.useLayoutEffect(() => {
-        const row = document.querySelector(
-          `[data-cgptx-thread-list-owner="${CSS.escape(owner)}"]`,
-        );
-        const titleTrigger = row?.querySelector("[data-thread-title-trigger]");
-        setTarget((current) =>
-          current === titleTrigger ? current : titleTrigger,
-        );
-      }, [owner, tree]);
-      const summary = child.props.threadSummary;
-      const renderedTitle = tree?.props?.title;
       const title =
-        typeof summary?.title === "string"
-          ? summary.title
-          : typeof renderedTitle === "string"
-            ? renderedTitle
-            : "";
-      const workingDirectory =
-        typeof child.props.displayCwd === "string"
-          ? child.props.displayCwd
-          : typeof summary?.cwd === "string"
-            ? summary.cwd
-            : undefined;
-      const context = Object.freeze({
-        threadId: child.props.conversationId,
+        typeof props.title === "string"
+          ? props.title
+          : row?.getAttribute("data-app-action-sidebar-thread-title") ?? "";
+      return Object.freeze({
+        threadId,
         title,
-        ...(workingDirectory ? { workingDirectory } : {}),
+        ...(typeof props.cwd === "string" && props.cwd.length > 0
+          ? { workingDirectory: props.cwd }
+          : {}),
       });
-      const items = computeThreadListItems(context);
-      const overlay =
-        target && items.length > 0
-          ? native.createPortal(
-              native.jsx(ThreadListLeadingViews, { items }),
-              target,
-            )
-          : null;
-      return native.jsx(React.Fragment, {
-        children: [tree, overlay],
-      });
+    }
+
+    function isRemoteThreadMenu(type, props) {
+      if (
+        type === native.ThreadMenu ||
+        typeof type !== "function" ||
+        typeof props?.conversationId !== "string" ||
+        props.conversationId.length === 0
+      ) {
+        return false;
+      }
+      const source = Function.prototype.toString.call(type);
+      return (
+        source.includes("toggle-thread-pin") &&
+        source.includes("copy-session-id") &&
+        source.includes("copy-deeplink")
+      );
     }
 
     function ThreadMenuBoundary({ child }) {
+      threadMenuBoundaryRenderCount += 1;
       React.useSyncExternalStore(
         subscribe,
         () => renderVersion,
         () => renderVersion,
       );
-      const context = Object.freeze({
-        threadId: child.props.conversationId,
-        title: typeof child.props.title === "string" ? child.props.title : "",
-        ...(typeof child.props.cwd === "string" && child.props.cwd.length > 0
-          ? { workingDirectory: child.props.cwd }
-          : {}),
-      });
+      const context = threadContextForMenuProps(child.props);
       React.useLayoutEffect(() => {
         setCurrentThread(context);
         return () => clearCurrentThreadAfterUnmount(context.threadId);
@@ -2284,18 +2309,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     function wrap(original) {
       return function cgptxJsx(type, props, key) {
         if (
-          type === native.ThreadListRow &&
-          typeof props?.conversationId === "string" &&
-          props.conversationId.length > 0
-        ) {
-          return originalJsx(
-            ThreadListRowBoundary,
-            { child: original(type, props, key) },
-            key,
-          );
-        }
-        if (
-          type === native.ThreadMenu &&
+          (type === native.ThreadMenu || isRemoteThreadMenu(type, props)) &&
           typeof props?.conversationId === "string" &&
           props.conversationId.length > 0
         ) {
@@ -2334,51 +2348,93 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     log("native JSX hook installed");
   }
 
+  function applicationReactRoot() {
+    if (!document.body) return null;
+    for (const node of document.body.querySelectorAll("*")) {
+      let fiber = fiberOf(node);
+      if (!fiber) continue;
+      while (fiber.return) fiber = fiber.return;
+      if (fiber.tag === 3 && fiber.stateNode?.current) {
+        return fiber.stateNode;
+      }
+    }
+    return null;
+  }
+
+  async function reconcileApplicationTree() {
+    const deadline = Date.now() + 10_000;
+    let root = null;
+    let element = null;
+    while (Date.now() < deadline) {
+      root = applicationReactRoot();
+      element = root?.current?.memoizedState?.element;
+      if (root && isElement(element)) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!root || !isElement(element)) {
+      throw new Error("ChatGPT React root is unavailable");
+    }
+
+    const existingThreadMenu = Array.from(
+      document.querySelectorAll('button[aria-label="Chat actions"]'),
+    ).some((button) => button.getBoundingClientRect().height > 0);
+    const probe = native.ReactDOM.createRoot(document.createElement("div"));
+    const render = Object.getPrototypeOf(probe)?.render;
+    probe.unmount();
+    if (typeof render !== "function") {
+      throw new Error("ChatGPT React root renderer is unavailable");
+    }
+    render.call(
+      { _internalRoot: root },
+      native.React.cloneElement(element),
+    );
+    applicationRootRefreshCount += 1;
+
+    if (!existingThreadMenu) return;
+    const boundaryDeadline = Date.now() + 10_000;
+    while (Date.now() < boundaryDeadline) {
+      const boundaryReady = Array.from(
+        document.querySelectorAll('button[aria-label="Chat actions"]'),
+      ).some(
+        (button) =>
+          button.getBoundingClientRect().height > 0 &&
+          typeof threadIdForTrigger(button) === "string",
+      );
+      if (boundaryReady) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error("ChatGPT thread menu did not enter the native boundary");
+  }
+
   async function installNativeBinding() {
     const [
-      coreModule,
-      menuModule,
-      iconModule,
-      profileIconModule,
+      appInitialModule,
       plusIconModule,
       paletteIconModule,
-      colorPickerModule,
-      reactDomModule,
-      reactDomCoreModule,
       threadMenuModule,
-      threadRowModule,
       authModule,
-      authContextModule,
-      browserModule,
-      queryModule,
     ] = await Promise.all([
-      import(CORE_MODULE),
-      import(MENU_MODULE),
-      import(ICON_MODULE),
-      import(PROFILE_ICON_MODULE),
+      import(APP_INITIAL_MODULE),
       import(PLUS_ICON_MODULE),
       import(PALETTE_ICON_MODULE),
-      import(COLOR_PICKER_MODULE),
-      import(REACT_DOM_MODULE),
-      import(REACT_DOM_CORE_MODULE),
       import(THREAD_MENU_MODULE),
-      import(THREAD_ROW_MODULE),
       import(AUTH_MODULE),
-      import(AUTH_CONTEXT_MODULE),
-      import(BROWSER_MODULE),
-      import(QUERY_MODULE),
     ]);
     authModule.r();
-    authContextModule.f();
-    browserModule.r();
-    iconModule.s();
-    profileIconModule.i();
+    appInitialModule.hG();
+    appInitialModule.myt();
+    appInitialModule.Qh();
+    appInitialModule.Zc();
+    appInitialModule.B2();
+    appInitialModule.jTt();
+    appInitialModule.q2();
+    appInitialModule.LTt();
+    appInitialModule.Jpt();
+    appInitialModule.Bft();
     plusIconModule.t();
     paletteIconModule.n();
-    colorPickerModule.i();
     threadMenuModule.n();
-    threadRowModule.o();
-    const jsxRuntime = coreModule.zt();
+    const jsxRuntime = appInitialModule.ZFt();
     const PlusIcon = ({ className = "", ...props }) =>
       jsxRuntime.jsx(plusIconModule.n, {
         ...props,
@@ -2386,36 +2442,35 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         size: 16,
       });
     native = {
-      React: coreModule.dn(),
-      ReactDOM: reactDomModule.t(),
-      createPortal: reactDomCoreModule.b().createPortal,
+      React: appInitialModule.iIt(),
+      ReactDOM: appInitialModule.Gkt(),
       jsxRuntime,
       jsx: jsxRuntime.jsx,
-      Item: menuModule.i,
-      Separator: menuModule.o,
-      SubmenuItem: menuModule.n,
-      FlyoutSubmenuItem: menuModule.r.FlyoutSubmenuItem,
-      MenuRoot: menuModule.t,
+      Item: appInitialModule.fG.Item,
+      Separator: appInitialModule.fG.Separator,
+      SubmenuItem: appInitialModule.fG.SubmenuItem,
+      FlyoutSubmenuItem: appInitialModule.fG.FlyoutSubmenuItem,
+      MenuRoot: appInitialModule.uG,
       ThreadMenu: threadMenuModule.t,
-      ThreadListRow: threadRowModule.a,
-      ColorPicker: colorPickerModule.r,
+      ColorPicker: appInitialModule.Xc,
       startChatGptSignIn: authModule.o,
       decorateAuthUrl: authModule.t,
-      useUpdateAuthNonce: authContextModule.g,
-      useAppServerRegistry: authContextModule.A,
-      useQueryClient: queryModule.Bl,
-      accountInfoQueryKey: queryModule.r,
-      messageBus: queryModule.m,
-      openInBrowser: browserModule.o,
-      useNavigate: browserModule.mt,
+      useUpdateAuthNonce: appInitialModule.U2,
+      useAppServerRegistry: appInitialModule.X2,
+      useQueryClient: appInitialModule.XFt,
+      accountInfoQueryKey: appInitialModule.OTt,
+      messageBus: appInitialModule.RTt,
+      openInBrowser: appInitialModule.Zpt,
+      useNavigate: appInitialModule.Wft,
       iconComponents: new Map([
-        ["chevron-right", iconModule.o],
-        ["person", profileIconModule.r],
+        ["chevron-right", appInitialModule.pyt],
+        ["person", appInitialModule.Zh],
         ["plus", PlusIcon],
         ["palette", paletteIconModule.t],
       ]),
     };
     installJsxHook();
+    await reconcileApplicationTree();
     mountColorPickerHost();
 
     const observer = new MutationObserver(() => {
@@ -2449,13 +2504,16 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
             requestThreadFlyout(row);
           }
         }
+        refreshThreadListRows();
       });
     });
     observer.observe(document.documentElement, {
       childList: true,
       subtree: true,
     });
+    refreshThreadListRows();
     warmModel();
+    nativeBindingInstalled = true;
   }
 
   // ------------------------------------------------------------------
@@ -2769,7 +2827,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   window.__CGPTX_HOST__ = Object.freeze({
-    version: "26.715.70719",
+    version: "26.810.52044",
     registerExtension,
     _debug: Object.freeze({
       captureBuiltInsFromOpenMenu,
@@ -2784,7 +2842,10 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       },
       visibleThreadMenuColumn,
       captureDynamicThreadItemsFromOpenMenus,
-      nativeReady: () => native !== null,
+      nativeReady: () => nativeBindingInstalled,
+      nativeBindingError: () => nativeBindingError,
+      applicationRootRefreshCount: () => applicationRootRefreshCount,
+      threadMenuBoundaryRenderCount: () => threadMenuBoundaryRenderCount,
       authenticationReady: () => typeof refreshAuthentication === "function",
       authenticationRefreshCount: () => authenticationRefreshCount,
       authenticationAccountInfoResetCount: () =>
@@ -2793,6 +2854,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         authenticationAppServerRestartCount,
       profileMenuHasNativeProfileCallback: () =>
         profileMenuHasNativeProfileCallback,
+      profileNavigationAttemptCount: () => profileNavigationAttemptCount,
+      profileNavigationLastRequestedPath: () =>
+        profileNavigationLastRequestedPath,
       nativeAccount: () => nativeAppServerRegistry?.getDefault().getAccount(),
       nativeSignInStartCount: () => nativeSignInStartCount,
       inspectAuthentication,
@@ -2814,7 +2878,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   });
 
   log("host installed");
-  void installNativeBinding().catch((error) => {
-    warn("native binding installation failed", error);
-  });
+  window.__CGPTX_NATIVE_READY__ = installNativeBinding().then(
+    () => true,
+    (error) => {
+      nativeBindingError = String(error?.stack ?? error);
+      warn("native binding installation failed", error);
+      return false;
+    },
+  );
 })();

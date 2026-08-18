@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let automaticUpdateInterval: Duration = .seconds(10 * 60)
 
     private let options: LaunchOptions
+    private var componentStore: ComponentStore?
     private var componentUpdateService: ComponentUpdateService?
     private var preparedComponents: PreparedComponentStore?
     private var launchTask: Task<Void, Never>?
@@ -59,9 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !ChatGPTXRuntimeEnvironment.isUnitTesting else { return }
 
-        let installedChatGPTVersion: String?
         do {
             let componentStore = try ComponentStore()
+            self.componentStore = componentStore
             componentUpdateService = ComponentUpdateService(
                 componentStore: componentStore
             )
@@ -69,12 +70,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ?? ChatGPTLauncher.installedApplicationURL(
                     workspace: .shared
                 )
-            installedChatGPTVersion = applicationURL.flatMap {
-                ChatGPTLauncher.applicationVersion(at: $0)
+            let installed = try? componentStore.prepareInstalled()
+            if let applicationURL,
+                let installed,
+                ChatGPTLauncher.bindingMatches(
+                    applicationURL: applicationURL,
+                    binding: installed.versions.binding
+                )
+            {
+                preparedComponents = installed
+            } else {
+                preparedComponents = nil
             }
-            preparedComponents = try componentStore.prepare(
-                forChatGPTVersion: installedChatGPTVersion
-            )
         } catch {
             failStartup(error)
             return
@@ -141,10 +148,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     await updateTask.value
                 }
                 guard launchTask == nil, updateTask == nil,
-                    let preparedComponents
+                    let componentStore,
+                    let preparedComponents = try componentStore
+                        .prepareInstalled(),
+                    ChatGPTLauncher.bindingMatches(
+                        applicationURL: applicationURL,
+                        binding: preparedComponents.versions.binding
+                    )
                 else {
                     throw AutomaticLaunchUnavailable()
                 }
+                self.preparedComponents = preparedComponents
                 return try await ChatGPTLauncher(
                     componentStore: preparedComponents
                 ).launch(
@@ -189,18 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.injectionMonitor = injectionMonitor
         injectionMonitor.start()
-        if let preparedComponents,
-            let installedChatGPTVersion,
-            preparedComponents.bundledComponentsChanged,
-            preparedComponents.versions.binding.chatgpt
-                == installedChatGPTVersion
-        {
-            showComponentsInstalled { [weak self] restarted in
-                self?.startAutomaticUpdates(checkImmediately: !restarted)
-            }
-        } else {
-            startAutomaticUpdates()
-        }
+        startAutomaticUpdates()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -258,19 +261,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func runAPITest() {
-        guard let preparedComponents else {
-            failStartup(ComponentStoreUnavailable())
-            return
-        }
-        launchTask = Task {
+        launchTask = Task { [weak self] in
+            guard let self else { return }
             do {
+                let applicationURL = try selectedChatGPTApplicationURL()
+                let preparedComponents = try await prepareComponentsForAPITest(
+                    applicationURL: applicationURL
+                )
                 try await ChatGPTLauncher(
                     componentStore: preparedComponents
                 ).launch(
                     mode: .apiTest,
                     arguments: options.chatGPTArguments,
                     localExtensionURLs: options.extensionURLs,
-                    applicationURL: options.applicationURL
+                    applicationURL: applicationURL
                 )
                 NSApplication.shared.terminate(nil)
             } catch {
@@ -283,13 +287,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openChatGPT(forceRestart: Bool = false) {
-        guard launchTask == nil, updateTask == nil,
+        guard launchTask == nil,
             launchRecoveryMonitor?.isAutomaticRecoveryActive != true
         else {
-            return
-        }
-        guard let preparedComponents else {
-            failStartup(ComponentStoreUnavailable())
             return
         }
         windowController?.setLaunching(true)
@@ -297,6 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         launchTask = Task { [weak self] in
             guard let self else { return }
+            var registeredExpectedLaunch = false
             defer {
                 launchTask = nil
                 windowController?.setLaunching(false)
@@ -309,26 +310,134 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             do {
-                let application = try await ChatGPTLauncher(
-                    componentStore: preparedComponents
-                ).launch(
-                    mode: .normal,
-                    localExtensionURLs: options.extensionURLs,
-                    runningApplicationPolicy:
-                        forceRestart ? .forceRestart : .normal,
-                    applicationURL: options.applicationURL,
-                    beforeOpen: { [weak self] token in
-                        self?.launchRecoveryMonitor?.registerExpectedLaunch(
-                            token: token
-                        )
-                    }
-                )
-                launchRecoveryMonitor?.openedExpectedApplication(application)
+                let applicationURL = try selectedChatGPTApplicationURL()
+                let installed = componentStore.flatMap {
+                    try? $0.prepareInstalled()
+                }
+                if let installed,
+                    ChatGPTLauncher.bindingMatches(
+                        applicationURL: applicationURL,
+                        binding: installed.versions.binding
+                    )
+                {
+                    preparedComponents = installed
+                    let application = try await ChatGPTLauncher(
+                        componentStore: installed
+                    ).launch(
+                        mode: .normal,
+                        localExtensionURLs: options.extensionURLs,
+                        runningApplicationPolicy:
+                            forceRestart ? .forceRestart : .normal,
+                        applicationURL: applicationURL,
+                        beforeOpen: { [weak self] token in
+                            registeredExpectedLaunch = true
+                            self?.launchRecoveryMonitor?
+                                .registerExpectedLaunch(token: token)
+                        }
+                    )
+                    launchRecoveryMonitor?.openedExpectedApplication(
+                        application
+                    )
+                } else {
+                    preparedComponents = nil
+                    try await ChatGPTLauncher.openStock(
+                        applicationURL: applicationURL
+                    )
+                }
             } catch {
-                launchRecoveryMonitor?.expectedLaunchFailed()
+                if registeredExpectedLaunch {
+                    launchRecoveryMonitor?.expectedLaunchFailed()
+                }
                 showLaunchError(error)
             }
         }
+    }
+
+    private func prepareComponentsForAPITest(
+        applicationURL: URL
+    ) async throws -> PreparedComponentStore {
+        guard let componentStore, let componentUpdateService else {
+            throw ComponentStoreUnavailable()
+        }
+        let cached = try? componentStore.prepareInstalled()
+        let exactCached = cached.flatMap { installed in
+            ChatGPTLauncher.bindingMatches(
+                applicationURL: applicationURL,
+                binding: installed.versions.binding
+            )
+                ? installed
+                : nil
+        }
+
+        let outcome: ComponentUpdateOutcome
+        do {
+            outcome = try await componentUpdateService.update(
+                for: try chatGPTVersion(at: applicationURL),
+                chatgptAsarSHA256: try chatGPTAsarSHA256(at: applicationURL)
+            )
+        } catch {
+            guard let exactCached,
+                canUseCachedAPITestComponents(after: error)
+            else {
+                throw error
+            }
+            preparedComponents = exactCached
+            return exactCached
+        }
+        let installed = outcome.result.preparedStore
+        guard ChatGPTLauncher.bindingMatches(
+            applicationURL: applicationURL,
+            binding: installed.versions.binding
+        ) else {
+            throw UpdateUIError.chatGPTChangedDuringUpdate
+        }
+        preparedComponents = installed
+        return installed
+    }
+
+    private func canUseCachedAPITestComponents(
+        after error: any Error
+    ) -> Bool {
+        if error is URLError { return true }
+        guard let error = error as? ComponentUpdateError else {
+            return false
+        }
+        switch error {
+        case .indexRequestFailed, .indexInvalid, .olderGeneration,
+            .bindingUnavailable, .bindingBuildUnavailable, .apiUnavailable:
+            return true
+        case .launcherVersionInvalid, .launcherTooOld, .releaseURLInvalid,
+            .archiveRequestFailed, .checksumMismatch, .extractionFailed,
+            .archiveLayoutInvalid, .installationStateInvalid:
+            return false
+        }
+    }
+
+    private func selectedChatGPTApplicationURL() throws -> URL {
+        guard let applicationURL = options.applicationURL
+            ?? ChatGPTLauncher.installedApplicationURL(workspace: .shared)
+        else {
+            throw UpdateUIError.chatGPTNotInstalled
+        }
+        return applicationURL
+    }
+
+    private func chatGPTVersion(at applicationURL: URL) throws -> String {
+        guard let version = ChatGPTLauncher.applicationVersion(
+            at: applicationURL
+        ) else {
+            throw UpdateUIError.chatGPTVersionUnavailable
+        }
+        return version
+    }
+
+    private func chatGPTAsarSHA256(at applicationURL: URL) throws -> String {
+        guard let sha256 = ChatGPTLauncher.applicationAsarSHA256(
+            at: applicationURL
+        ) else {
+            throw UpdateUIError.chatGPTBuildUnavailable
+        }
+        return sha256
     }
 
     private func approvedChatGPTApplicationURL() -> URL? {
@@ -348,7 +457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return applicationURL
     }
 
-    private func checkForUpdates() {
+    private func checkForUpdates(inBackground: Bool = false) {
         guard updateTask == nil, launchTask == nil,
             launchRecoveryMonitor?.isAutomaticRecoveryActive != true
         else {
@@ -359,31 +468,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        windowController?.setCheckingForUpdates(true)
-        systemMenuController?.setCheckingForUpdates(true)
+        if !inBackground {
+            windowController?.setCheckingForUpdates(true)
+            systemMenuController?.setCheckingForUpdates(true)
+        }
         updateTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 updateTask = nil
-                windowController?.setCheckingForUpdates(false)
-                systemMenuController?.setCheckingForUpdates(false)
+                if !inBackground {
+                    windowController?.setCheckingForUpdates(false)
+                    systemMenuController?.setCheckingForUpdates(false)
+                }
             }
 
             do {
-                let workspace = NSWorkspace.shared
-                guard let applicationURL = options.applicationURL
-                    ?? ChatGPTLauncher.installedApplicationURL(
-                        workspace: workspace
-                    ),
-                    let chatgptVersion =
-                        ChatGPTLauncher.applicationVersion(
-                            at: applicationURL
-                        )
-                else {
-                    throw UpdateUIError.chatGPTNotInstalled
-                }
+                let applicationURL = try selectedChatGPTApplicationURL()
+                let chatgptVersion = try chatGPTVersion(
+                    at: applicationURL
+                )
+                let chatgptAsarSHA256 = try chatGPTAsarSHA256(
+                    at: applicationURL
+                )
                 let outcome = try await componentUpdateService.update(
                     for: chatgptVersion,
+                    chatgptAsarSHA256: chatgptAsarSHA256,
                     planned: { [weak self] plan in
                         self?.windowController?.showUpdateSummary(plan.summary)
                     },
@@ -392,6 +501,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 )
                 let result = outcome.result
+                guard ChatGPTLauncher.bindingMatches(
+                    applicationURL: applicationURL,
+                    binding: result.preparedStore.versions.binding
+                ) else {
+                    preparedComponents = nil
+                    throw UpdateUIError.chatGPTChangedDuringUpdate
+                }
                 preparedComponents = result.preparedStore
                 launchRecoveryMonitor?.refreshApprovedApplication()
                 windowController?.showUpdateSummary(outcome.summary)
@@ -417,7 +533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startAutomaticUpdates(checkImmediately: Bool = true) {
         if checkImmediately {
-            checkForUpdates()
+            checkForUpdates(inBackground: true)
         }
         automaticUpdateTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -429,7 +545,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 guard let self else { return }
-                checkForUpdates()
+                checkForUpdates(inBackground: true)
             }
         }
     }
@@ -571,8 +687,20 @@ private struct AutomaticLaunchUnavailable: LocalizedError {
 
 private enum UpdateUIError: LocalizedError {
     case chatGPTNotInstalled
+    case chatGPTVersionUnavailable
+    case chatGPTBuildUnavailable
+    case chatGPTChangedDuringUpdate
 
     var errorDescription: String? {
-        "ChatGPT.app is not installed."
+        switch self {
+        case .chatGPTNotInstalled:
+            "ChatGPT.app is not installed."
+        case .chatGPTVersionUnavailable:
+            "The installed ChatGPT version could not be determined."
+        case .chatGPTBuildUnavailable:
+            "The installed ChatGPT build could not be identified."
+        case .chatGPTChangedDuringUpdate:
+            "ChatGPT changed while its components were being installed. Check for updates again."
+        }
     }
 }

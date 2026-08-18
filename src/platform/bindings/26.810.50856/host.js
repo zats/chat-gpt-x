@@ -1,9 +1,10 @@
 /**
- * Renderer binding for ChatGPT 26.715.72359.
+ * Renderer binding for ChatGPT 26.810.50856.
  *
  * The binding patches the app's shared JSX runtime and transforms native
  * profile and thread menu item trees. Items remain inside the app's existing
  * Radix roots and use the app's exported menu components.
+ * Binding revisions can update this bridge without changing the public API.
  */
 (() => {
   "use strict";
@@ -11,28 +12,11 @@
   if (window.__CGPTX_HOST__) return;
 
   const LOG_PREFIX = "[cgptx-host]";
-  const CORE_MODULE =
-    "./assets/app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~kppdhley-mFmI6cbL.js";
-  const MENU_MODULE =
-    "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~appgen-settings-p~evbmo86c-BIxmPNYv.js";
-  const ICON_MODULE =
-    "./assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~dg0b1kws-Cm26-F9e.js";
-  const PROFILE_ICON_MODULE =
-    "./assets/app-initial~app-main~settings-command-menu-section-items~pull-request-route~new-thread-pane~fnoshreu-D5mfSDoa.js";
-  const PLUS_ICON_MODULE = "./assets/plus-BgCJgEEs-Byjhdd05.js";
-  const PALETTE_ICON_MODULE = "./assets/palette-lzFbWMQk-C-Co91wY.js";
-  const COLOR_PICKER_MODULE =
-    "./assets/app-initial~app-main~plugin-detail-page~settings-page~projects-index-page~appgen-library-pa~nsqr45u8-C3he6mAT.js";
-  const REACT_DOM_MODULE =
-    "./assets/app-initial~avatarOverlayCompositionSurface~index-9fQ9wihu~index-BFCcxPM5~mapbox-gl-DVWlwqb~gsbyx6su-Cok-LK6_.js";
-  const THREAD_MENU_MODULE = "./assets/thread-overflow-menu-CaSSV4dF.js";
-  const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-BRvvtvzu.js";
-  const AUTH_CONTEXT_MODULE =
-    "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~k87y25tw-31XubniU.js";
-  const BROWSER_MODULE =
-    "./assets/app-initial~artifact-tab-content.electron~notebook-preview-panel~app-main~business-checkout~c1u3yp5s-DJt4asyD.js";
-  const QUERY_MODULE =
-    "./assets/app-initial~avatarOverlayCompositionSurface~artifact-tab-content.electron~notebook-preview-~ngwudnyz-CS1L_Amm.js";
+  const APP_INITIAL_MODULE = "./assets/app-initial-BuOiDQdP.js";
+  const PLUS_ICON_MODULE = "./assets/plus-BgCJgEEs-DiVTjspJ.js";
+  const PALETTE_ICON_MODULE = "./assets/palette-lzFbWMQk-DO2GVGMn.js";
+  const THREAD_MENU_MODULE = "./assets/thread-overflow-menu-BQ0hlS2o.js";
+  const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-BI_eIdLZ.js";
   const AUTHENTICATION_RESTART_TIMEOUT_MS = 20_000;
   const HEADER_BACKGROUND_PROPERTY = "--header-background-color";
   const HEADER_FOREGROUND_PROPERTY = "--header-foreground-color";
@@ -42,31 +26,31 @@
   ]);
   const BINDING_STYLE_ID = "cgptx-binding-style";
   const BINDING_STYLE_SOURCE = `
-html[data-cgptx-header-background-color] header.app-header-tint {
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] {
   background-color: transparent !important;
 }
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(2),
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3),
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(5) {
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(2),
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(3),
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(5) {
   background-color: var(--header-background-color) !important;
 }
 html[data-cgptx-header-background-color]:has(
     aside[data-app-shell-focus-area="right-panel"][style*="opacity: 1"]
   )
-  header.app-header-tint > div:nth-of-type(5) {
+  header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(5) {
   background-color: transparent !important;
 }
-html[data-cgptx-header-background-color] header.app-header-tint > div:nth-of-type(3) {
+html[data-cgptx-header-background-color] header[data-pip-obstacle="app-shell-header"] > div:nth-of-type(3) {
   box-shadow: -8px 0 var(--header-background-color);
 }
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
   [data-app-shell-tabs="true"] > .h-toolbar {
-  --color-token-main-surface-primary: var(--header-background-color);
+  --color-surface: var(--header-background-color);
 }
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
   [data-app-shell-tabs="true"] > .h-toolbar,
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
-  [data-app-shell-tabs="true"] > .h-toolbar [class~="bg-token-main-surface-primary"] {
+  [data-app-shell-tabs="true"] > .h-toolbar [class~="bg-surface"] {
   background-color: var(--header-background-color) !important;
 }
 html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-panel"]
@@ -77,7 +61,18 @@ html[data-cgptx-header-background-color] aside[data-app-shell-focus-area="right-
     var(--header-background-color)
   ) !important;
 }
-html[data-cgptx-header-foreground-color] header.app-header-tint {
+html[data-cgptx-header-foreground-color] header[data-pip-obstacle="app-shell-header"] {
+  --color-text: var(--header-foreground-color);
+  --color-text-secondary: color-mix(
+    in srgb,
+    var(--header-foreground-color) 76%,
+    transparent
+  );
+  --color-text-tertiary: color-mix(
+    in srgb,
+    var(--header-foreground-color) 72%,
+    transparent
+  );
   --color-token-foreground: var(--header-foreground-color);
   --color-token-text-primary: var(--header-foreground-color);
   color: var(--header-foreground-color);
@@ -93,7 +88,7 @@ html[data-cgptx-header-foreground-color] header.app-header-tint {
   );
 }
 html[data-cgptx-header-background-color][data-cgptx-header-foreground-color]
-  header.app-header-tint button[class~="bg-token-bg-fog"] {
+  header[data-pip-obstacle="app-shell-header"] button[class~="bg-token-bg-fog"] {
   background-color: color-mix(
     in srgb,
     var(--header-background-color) 75%,
@@ -197,7 +192,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function isThreadMessageId(id) {
     return (
       typeof id === "string" &&
-      (id.startsWith("threadHeader.") || id.startsWith("sidebarElectron."))
+      (id.startsWith("threadHeader.") ||
+        id.startsWith("sidebarElectron.") ||
+        id.startsWith("sidebar.threadProject."))
     );
   }
 
@@ -246,11 +243,17 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let currentThread = undefined;
   let currentThreadClearGeneration = 0;
   let native = null;
+  let nativeBindingInstalled = false;
+  let nativeBindingError = null;
+  let applicationRootRefreshCount = 0;
+  let threadMenuBoundaryRenderCount = 0;
   let pendingExpandedId = null;
   let pendingThreadExpanded = null;
   let nestedItemClassName = null;
   let refreshAuthentication = null;
   let openNativeProfile = null;
+  let profileNavigationAttemptCount = 0;
+  let profileNavigationLastRequestedPath = null;
   let profileMenuHasNativeProfileCallback = null;
   let nativeAppServerRegistry = null;
   let activeSignIn = null;
@@ -1207,7 +1210,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return Boolean(
       block.matches?.('[role="separator"]') ||
         block.querySelector?.(
-          '[role="separator"], .h-\\[1px\\][class*="bg-token-menu-border"]',
+          '[role="separator"], .h-\\[1px\\][class*="bg-border"]',
         ),
     );
   }
@@ -2136,7 +2139,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       surface.current.querySelector('[role="slider"]').focus();
     }, []);
     const headerBottom = document
-      .querySelector("header.app-header-tint")
+      .querySelector('header[data-pip-obstacle="app-shell-header"]')
       .getBoundingClientRect().bottom;
     return native.jsx("div", {
       ref: surface,
@@ -2208,7 +2211,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
     function useNativeProfileNavigation() {
       const navigate = native.useNavigate();
-      openNativeProfile = () => navigate("/settings/profile");
+      openNativeProfile = () => {
+        profileNavigationAttemptCount += 1;
+        profileNavigationLastRequestedPath = "/settings/profile";
+        navigate(profileNavigationLastRequestedPath);
+      };
     }
 
     function threadContextForMenuProps(props) {
@@ -2251,6 +2258,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     }
 
     function ThreadMenuBoundary({ child }) {
+      threadMenuBoundaryRenderCount += 1;
       React.useSyncExternalStore(
         subscribe,
         () => renderVersion,
@@ -2340,46 +2348,93 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     log("native JSX hook installed");
   }
 
+  function applicationReactRoot() {
+    if (!document.body) return null;
+    for (const node of document.body.querySelectorAll("*")) {
+      let fiber = fiberOf(node);
+      if (!fiber) continue;
+      while (fiber.return) fiber = fiber.return;
+      if (fiber.tag === 3 && fiber.stateNode?.current) {
+        return fiber.stateNode;
+      }
+    }
+    return null;
+  }
+
+  async function reconcileApplicationTree() {
+    const deadline = Date.now() + 10_000;
+    let root = null;
+    let element = null;
+    while (Date.now() < deadline) {
+      root = applicationReactRoot();
+      element = root?.current?.memoizedState?.element;
+      if (root && isElement(element)) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!root || !isElement(element)) {
+      throw new Error("ChatGPT React root is unavailable");
+    }
+
+    const existingThreadMenu = Array.from(
+      document.querySelectorAll('button[aria-label="Chat actions"]'),
+    ).some((button) => button.getBoundingClientRect().height > 0);
+    const probe = native.ReactDOM.createRoot(document.createElement("div"));
+    const render = Object.getPrototypeOf(probe)?.render;
+    probe.unmount();
+    if (typeof render !== "function") {
+      throw new Error("ChatGPT React root renderer is unavailable");
+    }
+    render.call(
+      { _internalRoot: root },
+      native.React.cloneElement(element),
+    );
+    applicationRootRefreshCount += 1;
+
+    if (!existingThreadMenu) return;
+    const boundaryDeadline = Date.now() + 10_000;
+    while (Date.now() < boundaryDeadline) {
+      const boundaryReady = Array.from(
+        document.querySelectorAll('button[aria-label="Chat actions"]'),
+      ).some(
+        (button) =>
+          button.getBoundingClientRect().height > 0 &&
+          typeof threadIdForTrigger(button) === "string",
+      );
+      if (boundaryReady) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error("ChatGPT thread menu did not enter the native boundary");
+  }
+
   async function installNativeBinding() {
     const [
-      coreModule,
-      menuModule,
-      iconModule,
-      profileIconModule,
+      appInitialModule,
       plusIconModule,
       paletteIconModule,
-      colorPickerModule,
-      reactDomModule,
       threadMenuModule,
       authModule,
-      authContextModule,
-      browserModule,
-      queryModule,
     ] = await Promise.all([
-      import(CORE_MODULE),
-      import(MENU_MODULE),
-      import(ICON_MODULE),
-      import(PROFILE_ICON_MODULE),
+      import(APP_INITIAL_MODULE),
       import(PLUS_ICON_MODULE),
       import(PALETTE_ICON_MODULE),
-      import(COLOR_PICKER_MODULE),
-      import(REACT_DOM_MODULE),
       import(THREAD_MENU_MODULE),
       import(AUTH_MODULE),
-      import(AUTH_CONTEXT_MODULE),
-      import(BROWSER_MODULE),
-      import(QUERY_MODULE),
     ]);
     authModule.r();
-    authContextModule.f();
-    browserModule.r();
-    iconModule.s();
-    profileIconModule.i();
+    appInitialModule.hG();
+    appInitialModule.myt();
+    appInitialModule.Qh();
+    appInitialModule.Zc();
+    appInitialModule.B2();
+    appInitialModule.jTt();
+    appInitialModule.q2();
+    appInitialModule.LTt();
+    appInitialModule.Jpt();
+    appInitialModule.Bft();
     plusIconModule.t();
     paletteIconModule.n();
-    colorPickerModule.i();
     threadMenuModule.n();
-    const jsxRuntime = coreModule.zt();
+    const jsxRuntime = appInitialModule.ZFt();
     const PlusIcon = ({ className = "", ...props }) =>
       jsxRuntime.jsx(plusIconModule.n, {
         ...props,
@@ -2387,34 +2442,35 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         size: 16,
       });
     native = {
-      React: coreModule.dn(),
-      ReactDOM: reactDomModule.t(),
+      React: appInitialModule.iIt(),
+      ReactDOM: appInitialModule.Gkt(),
       jsxRuntime,
       jsx: jsxRuntime.jsx,
-      Item: menuModule.i,
-      Separator: menuModule.o,
-      SubmenuItem: menuModule.n,
-      FlyoutSubmenuItem: menuModule.r.FlyoutSubmenuItem,
-      MenuRoot: menuModule.t,
+      Item: appInitialModule.fG.Item,
+      Separator: appInitialModule.fG.Separator,
+      SubmenuItem: appInitialModule.fG.SubmenuItem,
+      FlyoutSubmenuItem: appInitialModule.fG.FlyoutSubmenuItem,
+      MenuRoot: appInitialModule.uG,
       ThreadMenu: threadMenuModule.t,
-      ColorPicker: colorPickerModule.r,
+      ColorPicker: appInitialModule.Xc,
       startChatGptSignIn: authModule.o,
       decorateAuthUrl: authModule.t,
-      useUpdateAuthNonce: authContextModule.g,
-      useAppServerRegistry: authContextModule.A,
-      useQueryClient: queryModule.Bl,
-      accountInfoQueryKey: queryModule.r,
-      messageBus: queryModule.m,
-      openInBrowser: browserModule.o,
-      useNavigate: browserModule.mt,
+      useUpdateAuthNonce: appInitialModule.U2,
+      useAppServerRegistry: appInitialModule.X2,
+      useQueryClient: appInitialModule.XFt,
+      accountInfoQueryKey: appInitialModule.OTt,
+      messageBus: appInitialModule.RTt,
+      openInBrowser: appInitialModule.Zpt,
+      useNavigate: appInitialModule.Wft,
       iconComponents: new Map([
-        ["chevron-right", iconModule.o],
-        ["person", profileIconModule.r],
+        ["chevron-right", appInitialModule.pyt],
+        ["person", appInitialModule.Zh],
         ["plus", PlusIcon],
         ["palette", paletteIconModule.t],
       ]),
     };
     installJsxHook();
+    await reconcileApplicationTree();
     mountColorPickerHost();
 
     const observer = new MutationObserver(() => {
@@ -2457,6 +2513,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     });
     refreshThreadListRows();
     warmModel();
+    nativeBindingInstalled = true;
   }
 
   // ------------------------------------------------------------------
@@ -2770,7 +2827,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   window.__CGPTX_HOST__ = Object.freeze({
-    version: "26.715.72359",
+    version: "26.810.50856",
     registerExtension,
     _debug: Object.freeze({
       captureBuiltInsFromOpenMenu,
@@ -2785,7 +2842,10 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       },
       visibleThreadMenuColumn,
       captureDynamicThreadItemsFromOpenMenus,
-      nativeReady: () => native !== null,
+      nativeReady: () => nativeBindingInstalled,
+      nativeBindingError: () => nativeBindingError,
+      applicationRootRefreshCount: () => applicationRootRefreshCount,
+      threadMenuBoundaryRenderCount: () => threadMenuBoundaryRenderCount,
       authenticationReady: () => typeof refreshAuthentication === "function",
       authenticationRefreshCount: () => authenticationRefreshCount,
       authenticationAccountInfoResetCount: () =>
@@ -2794,6 +2854,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         authenticationAppServerRestartCount,
       profileMenuHasNativeProfileCallback: () =>
         profileMenuHasNativeProfileCallback,
+      profileNavigationAttemptCount: () => profileNavigationAttemptCount,
+      profileNavigationLastRequestedPath: () =>
+        profileNavigationLastRequestedPath,
       nativeAccount: () => nativeAppServerRegistry?.getDefault().getAccount(),
       nativeSignInStartCount: () => nativeSignInStartCount,
       inspectAuthentication,
@@ -2815,7 +2878,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   });
 
   log("host installed");
-  void installNativeBinding().catch((error) => {
-    warn("native binding installation failed", error);
-  });
+  window.__CGPTX_NATIVE_READY__ = installNativeBinding().then(
+    () => true,
+    (error) => {
+      nativeBindingError = String(error?.stack ?? error);
+      warn("native binding installation failed", error);
+      return false;
+    },
+  );
 })();
