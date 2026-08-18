@@ -557,60 +557,94 @@ test("retains immutable extension history during schema migration and updates", 
   );
 });
 
-test("removes only the unpublished schema-v2 manager bootstrap", () => {
-  const previous = {
-    schemaVersion: 2,
-    extensions: {
-      extensions: {
-        version: "0.1.0",
-        compatibility: {
-          chatgpt: ">=26.803.41515 <=26.803.41515",
-          chatgptApi: "^1.1.0",
-        },
-        release: "extension-extensions-v0.1.0",
-        sha256:
-          "45ae6c2ac40a8792d95a33d7d74ef293427f3d2e17d5724f52548a09a950802c",
-      },
+test("removes only known unpublished schema-v2 extensions", () => {
+  const fixtures = [
+    {
+      id: "extensions",
+      version: "0.1.0",
+      nextVersion: "0.1.1",
+      chatgptApi: "^1.1.0",
+      release: "extension-extensions-v0.1.0",
+      sha256:
+        "45ae6c2ac40a8792d95a33d7d74ef293427f3d2e17d5724f52548a09a950802c",
     },
-  };
-  const latest = {
-    schemaVersion: 3,
-    extensions: {
+    {
+      id: "multiple-accounts",
+      version: "0.1.11",
+      nextVersion: "0.1.12",
+      chatgptApi: "^1.0.0",
+      release: "extension-multiple-accounts-v0.1.11",
+      sha256:
+        "b723ee6ff766550643d45a0ea7323f84fa090b061baf3fef552dc1a76f0cb995",
+    },
+    {
+      id: "thread-colors",
+      version: "0.1.11",
+      nextVersion: "0.1.12",
+      chatgptApi: "^1.0.0",
+      release: "extension-thread-colors-v0.1.11",
+      sha256:
+        "c6e6d09cf874348fc9c445515d0e0198567332c4083676250346c0cb85b9dde9",
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    const previous = {
+      schemaVersion: 2,
       extensions: {
-        versions: {
-          "0.1.1": {
-            compatibility: { chatgptApi: "^1.1.0" },
-            release: "extension-extensions-v0.1.1",
-            sha256: "a".repeat(64),
+        [fixture.id]: {
+          version: fixture.version,
+          compatibility: {
+            chatgpt: ">=26.803.41515 <=26.814.41957",
+            chatgptApi: fixture.chatgptApi,
+          },
+          release: fixture.release,
+          sha256: fixture.sha256,
+        },
+      },
+    };
+    const latest = {
+      schemaVersion: 3,
+      extensions: {
+        [fixture.id]: {
+          versions: {
+            [fixture.nextVersion]: {
+              compatibility: { chatgptApi: fixture.chatgptApi },
+              release: `extension-${fixture.id}-v${fixture.nextVersion}`,
+              sha256: "a".repeat(64),
+            },
           },
         },
       },
-    },
-  };
+    };
 
-  assert.doesNotThrow(() => validateCatalogHistory(latest, previous));
+    assert.doesNotThrow(() => validateCatalogHistory(latest, previous));
 
-  const changedHash = structuredClone(previous);
-  changedHash.extensions.extensions.sha256 = "b".repeat(64);
-  assert.throws(
-    () => validateCatalogHistory(latest, changedHash),
-    /must retain extension extensions 0\.1\.0/,
-  );
+    const changedHash = structuredClone(previous);
+    changedHash.extensions[fixture.id].sha256 = "b".repeat(64);
+    assert.throws(
+      () => validateCatalogHistory(latest, changedHash),
+      new RegExp(
+        `must retain extension ${fixture.id} ${fixture.version.replaceAll(".", "\\.")}`,
+      ),
+    );
 
-  const schema3 = structuredClone(previous);
-  schema3.schemaVersion = 3;
-  schema3.extensions.extensions = {
-    versions: {
-      "0.1.0": {
-        compatibility: { chatgptApi: "^1.1.0" },
-        release: "extension-extensions-v0.1.0",
-        sha256:
-          "45ae6c2ac40a8792d95a33d7d74ef293427f3d2e17d5724f52548a09a950802c",
+    const schema3 = structuredClone(previous);
+    schema3.schemaVersion = 3;
+    schema3.extensions[fixture.id] = {
+      versions: {
+        [fixture.version]: {
+          compatibility: { chatgptApi: fixture.chatgptApi },
+          release: fixture.release,
+          sha256: fixture.sha256,
+        },
       },
-    },
-  };
-  assert.throws(
-    () => validateCatalogHistory(latest, schema3),
-    /must retain extension extensions 0\.1\.0/,
-  );
+    };
+    assert.throws(
+      () => validateCatalogHistory(latest, schema3),
+      new RegExp(
+        `must retain extension ${fixture.id} ${fixture.version.replaceAll(".", "\\.")}`,
+      ),
+    );
+  }
 });

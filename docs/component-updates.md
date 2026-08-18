@@ -60,7 +60,7 @@ Schema 3 contains exact bindings and all published public extension versions:
 ```json
 {
   "schemaVersion": 3,
-  "generation": 25,
+  "generation": 26,
   "minimumLauncherVersion": "1.1.0",
   "releaseBaseURL": "https://github.com/zats/chat-gpt-x/releases/download",
   "chatgptApis": {

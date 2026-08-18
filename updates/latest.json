@@ -1,6 +1,6 @@
 {
   "schemaVersion": 3,
-  "generation": 25,
+  "generation": 26,
   "minimumLauncherVersion": "1.1.0",
   "releaseBaseURL": "https://github.com/zats/chat-gpt-x/releases/download",
   "chatgptApis": {
@@ -80,6 +80,13 @@
       "asarSha256": "8fba32f8baa6d984b0f0f4149d3da46221e3adb3b52836f85fe65e31e655a8c0",
       "release": "binding-26.814.41407-v1.0.0",
       "sha256": "049a30b2e282031b3bbe2db1d59ea78f82defe047d26783a512a42e490ec7c6c"
+    },
+    "26.814.41957": {
+      "version": "1.0.1",
+      "chatgptApi": "1.0.4",
+      "asarSha256": "881d21270e41ea50a6de7835a3dda3516a001354d034933bb4a97677f3e0c479",
+      "release": "binding-26.814.41957-v1.0.1",
+      "sha256": "c62c11401f067333f57c49b6dee55c16a48c076ef275f1a9d14d09e342962bf5"
     }
   },
   "extensions": {
@@ -166,12 +173,12 @@
           "release": "extension-multiple-accounts-v0.1.10",
           "sha256": "1ea179a15a82afba1562c742b62dbf87cd7421afdcfb32ac2fdb8a51e161ce1e"
         },
-        "0.1.11": {
+        "0.1.12": {
           "compatibility": {
             "chatgptApi": "^1.0.0"
           },
-          "release": "extension-multiple-accounts-v0.1.11",
-          "sha256": "c63ea25cc27e534c7256edf13afab4b2332ef3dfbacb3db6696d898e53d33693"
+          "release": "extension-multiple-accounts-v0.1.12",
+          "sha256": "ba82c68f5ce370c9a0730dc032804d57ca02187e79e0da2a51c1844c0344e1fe"
         }
       }
     },
@@ -247,12 +254,12 @@
           "release": "extension-thread-colors-v0.1.10",
           "sha256": "e8ac3462d84da579cd129c8e0b9d4e9a9b8da7318dcf15b2406ba29d33e6d662"
         },
-        "0.1.11": {
+        "0.1.12": {
           "compatibility": {
             "chatgptApi": "^1.0.0"
           },
-          "release": "extension-thread-colors-v0.1.11",
-          "sha256": "e149d3cb5f2c7b4ab8e0619ec4a892254aaf882df053842d469b389080ebfa48"
+          "release": "extension-thread-colors-v0.1.12",
+          "sha256": "52213c0afba6eb52c54b80f54df8678781a8738880e5738ddf6fe6ed25b3162f"
         }
       }
     }

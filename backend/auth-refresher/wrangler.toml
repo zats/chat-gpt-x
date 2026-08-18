@@ -1,0 +1,24 @@
+name = "chatgptx-codex-auth-refresher"
+main = "src/index.ts"
+compatibility_date = "2026-08-14"
+workers_dev = true
+
+[vars]
+GITHUB_APP_ID = "4590222"
+GITHUB_INSTALLATION_ID = "153612071"
+GITHUB_OWNER = "zats"
+GITHUB_REPO = "chat-gpt-x"
+GITHUB_ENVIRONMENT = "codex-agent"
+GITHUB_SECRET_NAME = "CODEX_AGENT_AUTH_JSON"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "chatgptx-codex-auth"
+database_id = "8c62a044-42a1-437c-94f9-77d6981da8a0"
+
+[triggers]
+crons = ["17 4 * * *"]
+
+[observability.logs]
+enabled = true
+invocation_logs = true

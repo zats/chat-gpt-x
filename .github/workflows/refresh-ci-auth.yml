@@ -87,7 +87,6 @@ jobs:
           HANDOFF_PRIVATE_KEY: ${{ secrets.CHATGPTX_AUTH_HANDOFF_PRIVATE_KEY }}
           PRIMARY_AUTH_JSON: ${{ secrets.CHATGPTX_PRIMARY_AUTH_JSON }}
           SECONDARY_AUTH_JSON: ${{ secrets.CHATGPTX_SECONDARY_AUTH_JSON }}
-          AGENT_AUTH_JSON: ${{ secrets.CODEX_AGENT_AUTH_JSON }}
         run: |
           [[ -n "$HANDOFF_PRIVATE_KEY" ]] || {
             echo "CHATGPTX_AUTH_HANDOFF_PRIVATE_KEY is required" >&2
@@ -107,15 +106,6 @@ jobs:
           printf '%s' "$SECONDARY_AUTH_JSON" > "$current_root/secondary.json"
           chmod 600 "$key_path" "$current_root/primary.json" "$current_root/secondary.json"
           labels=(primary secondary)
-          if [[ -f "$RUNNER_TEMP/chatgptx-auth-handoff/agent.json" ]]; then
-            [[ -n "$AGENT_AUTH_JSON" ]] || {
-              echo "CODEX_AGENT_AUTH_JSON mirror is required" >&2
-              exit 1
-            }
-            printf '%s' "$AGENT_AUTH_JSON" > "$current_root/agent.json"
-            chmod 600 "$current_root/agent.json"
-            labels+=(agent)
-          fi
           node scripts/auth-handoff.mjs \
             decrypt \
             "$key_path" \
@@ -233,15 +223,6 @@ jobs:
             "$RUNNER_TEMP/chatgptx-candidate-auth/secondary.json" \
             1 \
             ""
-          if [[ -f "$RUNNER_TEMP/chatgptx-candidate-auth/agent.json" ]]; then
-            update_if_newer \
-              agent \
-              CODEX_AGENT_AUTH_JSON \
-              "$RUNNER_TEMP/chatgptx-current-auth/agent.json" \
-              "$RUNNER_TEMP/chatgptx-candidate-auth/agent.json" \
-              0 \
-              codex-agent
-          fi
       - name: Delete processed authentication handoff
         if: success()
         env:

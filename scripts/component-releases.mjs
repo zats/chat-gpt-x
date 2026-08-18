@@ -16,13 +16,32 @@ const repositoryRoot = path.resolve(
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const chatgptPattern = /^\d+(?:\.\d+)+$/;
 const minimumRemoteAPIVersion = "1.0.3";
-const unpublishedSchema2Manager = {
-  id: "extensions",
-  version: "0.1.0",
-  chatgptApi: "^1.1.0",
-  release: "extension-extensions-v0.1.0",
-  sha256: "45ae6c2ac40a8792d95a33d7d74ef293427f3d2e17d5724f52548a09a950802c",
-};
+const unpublishedSchema2Extensions = [
+  {
+    id: "extensions",
+    version: "0.1.0",
+    chatgptApi: "^1.1.0",
+    release: "extension-extensions-v0.1.0",
+    sha256:
+      "45ae6c2ac40a8792d95a33d7d74ef293427f3d2e17d5724f52548a09a950802c",
+  },
+  {
+    id: "multiple-accounts",
+    version: "0.1.11",
+    chatgptApi: "^1.0.0",
+    release: "extension-multiple-accounts-v0.1.11",
+    sha256:
+      "b723ee6ff766550643d45a0ea7323f84fa090b061baf3fef552dc1a76f0cb995",
+  },
+  {
+    id: "thread-colors",
+    version: "0.1.11",
+    chatgptApi: "^1.0.0",
+    release: "extension-thread-colors-v0.1.11",
+    sha256:
+      "c6e6d09cf874348fc9c445515d0e0198567332c4083676250346c0cb85b9dde9",
+  },
+];
 
 export function compareVersions(left, right) {
   const leftParts = parseVersion(left);
@@ -740,17 +759,18 @@ export function validateCatalogHistory(
       previousVersions ?? {},
     )) {
       const currentEntry = latest.extensions?.[id]?.versions?.[version];
-      if (
-        !currentEntry &&
+      const isKnownUnpublishedSchema2Entry =
         previousLatest.schemaVersion === 2 &&
         latest.schemaVersion === 3 &&
-        id === unpublishedSchema2Manager.id &&
-        version === unpublishedSchema2Manager.version &&
-        previousEntry.compatibility?.chatgptApi ===
-          unpublishedSchema2Manager.chatgptApi &&
-        previousEntry.release === unpublishedSchema2Manager.release &&
-        previousEntry.sha256 === unpublishedSchema2Manager.sha256
-      ) {
+        unpublishedSchema2Extensions.some(
+          (entry) =>
+            id === entry.id &&
+            version === entry.version &&
+            previousEntry.compatibility?.chatgptApi === entry.chatgptApi &&
+            previousEntry.release === entry.release &&
+            previousEntry.sha256 === entry.sha256,
+        );
+      if (!currentEntry && isKnownUnpublishedSchema2Entry) {
         continue;
       }
       if (!currentEntry) {
