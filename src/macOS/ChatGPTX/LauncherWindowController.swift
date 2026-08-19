@@ -6,6 +6,190 @@ private let componentScrollerInset = NSScroller.scrollerWidth(
     scrollerStyle: .overlay
 )
 
+enum UpdateButtonResult: Equatable {
+    case noUpdates
+    case updateAvailable
+    case failure
+}
+
+enum UpdateButtonFeedbackState: Equatable {
+    case reload
+    case checking
+    case result(UpdateButtonResult)
+
+    var systemSymbolName: String? {
+        switch self {
+        case .reload:
+            "arrow.clockwise.circle.fill"
+        case .checking:
+            nil
+        case .result(.noUpdates):
+            "checkmark.circle.fill"
+        case .result(.updateAvailable):
+            "gift.fill"
+        case .result(.failure):
+            "exclamationmark.circle.fill"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .reload:
+            "Check for Updates"
+        case .checking:
+            "Checking for updates"
+        case .result(.noUpdates):
+            "No updates available"
+        case .result(.updateAvailable):
+            "Update available"
+        case .result(.failure):
+            "Update check failed"
+        }
+    }
+
+    var tintColor: NSColor {
+        switch self {
+        case .reload, .checking:
+            .secondaryLabelColor
+        case .result(.noUpdates):
+            .systemGreen
+        case .result(.updateAvailable):
+            .systemPurple
+        case .result(.failure):
+            .systemRed
+        }
+    }
+
+    func animatesTransition(to nextState: Self) -> Bool {
+        systemSymbolName != nil && nextState.systemSymbolName != nil
+    }
+}
+
+@MainActor
+final class UpdateButtonFeedbackController {
+    static let defaultResultDuration = Duration.seconds(2)
+    static let defaultMinimumCheckingDuration = Duration.milliseconds(500)
+
+    private let resultDuration: Duration
+    private let minimumCheckingDuration: Duration
+    private let onStateChange: @MainActor (UpdateButtonFeedbackState) -> Void
+    private var pendingResult: UpdateButtonResult?
+    private var resetTask: Task<Void, Never>?
+    private var finishCheckingTask: Task<Void, Never>?
+    private var checkingStartedAt: ContinuousClock.Instant?
+    private var checkingGeneration = 0
+    private var generation = 0
+
+    private(set) var state = UpdateButtonFeedbackState.reload
+
+    init(
+        resultDuration: Duration = defaultResultDuration,
+        minimumCheckingDuration: Duration =
+            defaultMinimumCheckingDuration,
+        onStateChange: @escaping @MainActor (
+            UpdateButtonFeedbackState
+        ) -> Void
+    ) {
+        self.resultDuration = resultDuration
+        self.minimumCheckingDuration = minimumCheckingDuration
+        self.onStateChange = onStateChange
+    }
+
+    func setChecking(_ isChecking: Bool) {
+        if isChecking {
+            checkingGeneration &+= 1
+            finishCheckingTask?.cancel()
+            finishCheckingTask = nil
+            checkingStartedAt = ContinuousClock.now
+            pendingResult = nil
+            cancelReset()
+            transition(to: .checking)
+            return
+        }
+
+        guard state == .checking else { return }
+        guard let checkingStartedAt else {
+            finishChecking()
+            return
+        }
+        let elapsed = checkingStartedAt.duration(to: ContinuousClock.now)
+        let remaining = minimumCheckingDuration - elapsed
+        guard remaining > .zero else {
+            finishChecking()
+            return
+        }
+        finishCheckingTask?.cancel()
+        let expectedGeneration = checkingGeneration
+        finishCheckingTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: remaining)
+            } catch {
+                return
+            }
+            guard let self,
+                checkingGeneration == expectedGeneration,
+                !Task.isCancelled
+            else {
+                return
+            }
+            finishChecking()
+        }
+    }
+
+    private func finishChecking() {
+        finishCheckingTask = nil
+        checkingStartedAt = nil
+        if let pendingResult {
+            self.pendingResult = nil
+            present(pendingResult)
+        } else {
+            transition(to: .reload)
+        }
+    }
+
+    func showResult(_ result: UpdateButtonResult) {
+        if state == .checking {
+            pendingResult = result
+        } else {
+            pendingResult = nil
+            present(result)
+        }
+    }
+
+    private func present(_ result: UpdateButtonResult) {
+        cancelReset()
+        let expectedGeneration = generation
+        transition(to: .result(result))
+        resetTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: self?.resultDuration ?? .zero)
+            } catch {
+                return
+            }
+            guard let self,
+                generation == expectedGeneration,
+                !Task.isCancelled
+            else {
+                return
+            }
+            resetTask = nil
+            transition(to: .reload)
+        }
+    }
+
+    private func cancelReset() {
+        generation &+= 1
+        resetTask?.cancel()
+        resetTask = nil
+    }
+
+    private func transition(to newState: UpdateButtonFeedbackState) {
+        guard state != newState else { return }
+        state = newState
+        onStateChange(newState)
+    }
+}
+
 final class LauncherWindowController: NSWindowController {
     private let launcherViewController: LauncherViewController
 
@@ -22,8 +206,17 @@ final class LauncherWindowController: NSWindowController {
         set { launcherViewController.onSetLaunchAtLogin = newValue }
     }
 
-    init() {
-        launcherViewController = LauncherViewController()
+    init(
+        updateButtonResultDuration: Duration =
+            UpdateButtonFeedbackController.defaultResultDuration,
+        updateButtonMinimumCheckingDuration: Duration =
+            UpdateButtonFeedbackController.defaultMinimumCheckingDuration
+    ) {
+        launcherViewController = LauncherViewController(
+            updateButtonResultDuration: updateButtonResultDuration,
+            updateButtonMinimumCheckingDuration:
+                updateButtonMinimumCheckingDuration
+        )
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 390),
@@ -106,6 +299,7 @@ private final class LauncherViewController: NSViewController {
     private let runtimeWarningLabel = NSTextField(labelWithString: "")
     private let revealButton = NSButton()
     private let updateButton = NSButton()
+    private let updateButtonImageView = NSImageView()
     private let updateSpinner = NSProgressIndicator()
     private let openButton = NSButton()
     private let launchAtLoginButton = NSButton(
@@ -124,8 +318,28 @@ private final class LauncherViewController: NSViewController {
     private var runtimeStatus = ChatGPTRuntimeStatus.notRunning
     private var isLaunching = false
     private var isCheckingForUpdates = false
+    private var displayedUpdateButtonState = UpdateButtonFeedbackState.reload
+    private let updateButtonResultDuration: Duration
+    private let updateButtonMinimumCheckingDuration: Duration
+    private let actionSymbolConfiguration = NSImage.SymbolConfiguration(
+        pointSize: 18,
+        weight: .regular
+    )
+    private lazy var updateButtonFeedbackController =
+        UpdateButtonFeedbackController(
+            resultDuration: updateButtonResultDuration,
+            minimumCheckingDuration: updateButtonMinimumCheckingDuration
+        ) { [weak self] state in
+            self?.applyUpdateButtonFeedback(state)
+        }
 
-    init() {
+    init(
+        updateButtonResultDuration: Duration,
+        updateButtonMinimumCheckingDuration: Duration
+    ) {
+        self.updateButtonResultDuration = updateButtonResultDuration
+        self.updateButtonMinimumCheckingDuration =
+            updateButtonMinimumCheckingDuration
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -159,6 +373,7 @@ private final class LauncherViewController: NSViewController {
 
         let appRow = NSView()
         appRow.addSubview(appInfoStack)
+        appRow.addSubview(updateButtonImageView)
         appRow.addSubview(updateButton)
         appRow.addSubview(updateSpinner)
         appRow.addSubview(revealButton)
@@ -174,6 +389,10 @@ private final class LauncherViewController: NSViewController {
         }
         updateButton.snp.makeConstraints { make in
             make.trailing.centerY.equalToSuperview()
+            make.size.equalTo(16)
+        }
+        updateButtonImageView.snp.makeConstraints { make in
+            make.center.equalTo(updateButton)
             make.size.equalTo(16)
         }
         updateSpinner.snp.makeConstraints { make in
@@ -307,13 +526,7 @@ private final class LauncherViewController: NSViewController {
 
     func setCheckingForUpdates(_ isChecking: Bool) {
         isCheckingForUpdates = isChecking
-        updateButton.isHidden = isChecking
-        updateSpinner.isHidden = !isChecking
-        if isChecking {
-            updateSpinner.startAnimation(nil)
-        } else {
-            updateSpinner.stopAnimation(nil)
-        }
+        updateButtonFeedbackController.setChecking(isChecking)
         updateActionAvailability()
         guard isChecking else { return }
         updateStatusDismissalTask?.cancel()
@@ -372,6 +585,9 @@ private final class LauncherViewController: NSViewController {
         installed: Bool,
         restartRequired: Bool
     ) {
+        updateButtonFeedbackController.showResult(
+            installed ? .updateAvailable : .noUpdates
+        )
         hideProgress()
         if !installed {
             hideUpdateState()
@@ -388,6 +604,7 @@ private final class LauncherViewController: NSViewController {
     }
 
     func showUpdateFailure(_ error: any Error) {
+        updateButtonFeedbackController.showResult(.failure)
         updateStatusDismissalTask?.cancel()
         hideProgress()
         showUpdateStatus(
@@ -396,11 +613,6 @@ private final class LauncherViewController: NSViewController {
     }
 
     private func configureControls() {
-        let actionSymbolConfiguration = NSImage.SymbolConfiguration(
-            pointSize: 18,
-            weight: .regular
-        )
-
         appNameLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         appVersionLabel.font = .monospacedDigitSystemFont(
             ofSize: 12,
@@ -432,27 +644,22 @@ private final class LauncherViewController: NSViewController {
         revealButton.action = #selector(revealChatGPT)
         revealButton.setAccessibilityIdentifier("reveal-chatgpt")
 
-        let updateImage = NSImage(
-            systemSymbolName: "arrow.clockwise.circle.fill",
-            accessibilityDescription: "Check for Updates"
-        )?.withSymbolConfiguration(actionSymbolConfiguration)
-        updateImage?.isTemplate = true
-        updateButton.image = updateImage
-        updateButton.imagePosition = .imageOnly
-        updateButton.imageScaling = .scaleNone
+        updateButton.title = ""
         updateButton.isBordered = false
-        updateButton.contentTintColor = .secondaryLabelColor
         updateButton.focusRingType = .none
-        updateButton.toolTip = "Check for Updates"
         updateButton.target = self
         updateButton.action = #selector(checkForUpdates)
         updateButton.setAccessibilityIdentifier("check-for-updates")
+
+        updateButtonImageView.imageScaling = .scaleNone
+        updateButtonImageView.setAccessibilityElement(false)
 
         updateSpinner.style = .spinning
         updateSpinner.controlSize = .small
         updateSpinner.isHidden = true
         updateSpinner.setAccessibilityLabel("Checking for updates")
         updateSpinner.setAccessibilityIdentifier("checking-for-updates")
+        applyUpdateButtonFeedback(.reload, animated: false)
 
         openButton.title = "Open ChatGPT"
         openButton.bezelStyle = .glass
@@ -525,6 +732,45 @@ private final class LauncherViewController: NSViewController {
         }
 
         openButton.title = runtimeStatus.openAction.title
+    }
+
+    private func applyUpdateButtonFeedback(
+        _ state: UpdateButtonFeedbackState,
+        animated: Bool = true
+    ) {
+        let previousState = displayedUpdateButtonState
+        displayedUpdateButtonState = state
+        let isChecking = state == .checking
+        updateButton.isHidden = isChecking
+        updateButtonImageView.isHidden = isChecking
+        updateSpinner.isHidden = !isChecking
+        updateButton.toolTip = state.accessibilityLabel
+        updateButton.setAccessibilityLabel(state.accessibilityLabel)
+
+        if isChecking {
+            updateSpinner.startAnimation(nil)
+            return
+        }
+
+        updateSpinner.stopAnimation(nil)
+        guard let symbolName = state.systemSymbolName,
+            let image = NSImage(
+                systemSymbolName: symbolName,
+                accessibilityDescription: state.accessibilityLabel
+            )?.withSymbolConfiguration(actionSymbolConfiguration)
+        else {
+            return
+        }
+        image.isTemplate = true
+        updateButtonImageView.contentTintColor = state.tintColor
+        if animated && previousState.animatesTransition(to: state) {
+            updateButtonImageView.setSymbolImage(
+                image,
+                contentTransition: .replace
+            )
+        } else {
+            updateButtonImageView.image = image
+        }
     }
 
     private func showIndeterminateProgress() {
