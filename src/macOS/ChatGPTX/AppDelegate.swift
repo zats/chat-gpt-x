@@ -159,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             recoveryAllowed: { [weak self] in
                 guard let self else { return false }
-                return launchTask == nil
+                return launchTask == nil && updateTask == nil
             },
             relaunch: { [weak self] applicationURL in
                 guard let self else {
@@ -520,6 +520,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             defer {
                 updateTask = nil
+                launchRecoveryMonitor?.refreshApprovedApplication()
                 if !inBackground {
                     windowController?.setCheckingForUpdates(false)
                     systemMenuController?.setCheckingForUpdates(false)
@@ -553,7 +554,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     throw UpdateUIError.chatGPTChangedDuringUpdate
                 }
                 preparedComponents = result.preparedStore
-                launchRecoveryMonitor?.refreshApprovedApplication()
                 windowController?.showUpdateSummary(outcome.summary)
                 let installed: Bool
                 switch result {

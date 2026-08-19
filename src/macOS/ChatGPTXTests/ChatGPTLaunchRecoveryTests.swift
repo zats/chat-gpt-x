@@ -272,7 +272,7 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testApprovalRefreshReconsidersLaunchObservedBeforeApproval() async {
+    func testApprovalRefreshReconsidersLaunchAfterUpdateFinishes() async {
         let source = MockLifecycleSource()
         let direct = MockApplication(pid: 15, url: applicationURL)
         let injected = MockApplication(
@@ -281,13 +281,15 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
             injected: true
         )
         var approvedURL: URL?
+        var updateInProgress = true
         direct.onTerminate = {
             direct.isTerminated = true
         }
         var relaunchCount = 0
         let monitor = makeMonitor(
             source: source,
-            approvedApplicationURL: { approvedURL }
+            approvedApplicationURL: { approvedURL },
+            recoveryAllowed: { !updateInProgress }
         ) { _ in
             relaunchCount += 1
             source.applications = [injected]
@@ -303,6 +305,13 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
         XCTAssertEqual(relaunchCount, 0)
 
         approvedURL = applicationURL
+        monitor.refreshApprovedApplication()
+        await Task.yield()
+
+        XCTAssertEqual(direct.terminateCount, 0)
+        XCTAssertEqual(relaunchCount, 0)
+
+        updateInProgress = false
         monitor.refreshApprovedApplication()
 
         await waitUntil {
@@ -1115,6 +1124,7 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
         ) -> Bool)? = { application in
             !application.isTerminated
         },
+        recoveryAllowed: @escaping () -> Bool = { true },
         verificationPollLimit: Int = 2,
         pollDelay: @escaping () async -> Void = { await Task.yield() },
         reservationPollDelay: @escaping () async -> Void = {
@@ -1145,7 +1155,7 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
             },
             applicationLiveness: applicationLiveness,
             applicationIsRunning: applicationIsRunning,
-            recoveryAllowed: { true },
+            recoveryAllowed: recoveryAllowed,
             launchReservationState: launchReservationState,
             acquireRecoveryClaim: acquireRecoveryClaim,
             relaunch: relaunch,
