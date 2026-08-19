@@ -103,6 +103,38 @@ final class ComponentStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPrepareInstalledWaitsForSharedMutationLock() throws {
+        let store = try makeStore()
+        let extensionComponent = makeExtension(id: "alpha")
+        try installFixture(
+            makeLock(extensions: [extensionComponent]),
+            in: store
+        )
+
+        let output = Pipe()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/lockf")
+        process.arguments = [
+            "-k",
+            store.rootURL.appendingPathComponent("update.lock").path,
+            "/bin/sh",
+            "-c",
+            "printf 'ready\\n'; /bin/sleep 0.25",
+        ]
+        process.standardOutput = output
+        try process.run()
+        let ready = output.fileHandleForReading.readData(ofLength: 6)
+        XCTAssertEqual(String(decoding: ready, as: UTF8.self), "ready\n")
+
+        let started = Date()
+        XCTAssertNotNil(try store.prepareInstalled())
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(started), 0.1)
+
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+    }
+
+    @MainActor
     func testCompatibilityIgnoresOldChatGPTKeyAndEncodesOnlyAPI() throws {
         let data = Data(
             #"{"chatgpt":">=26.700.1","chatgptApi":"^1.0.0"}"#.utf8

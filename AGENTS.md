@@ -11,7 +11,7 @@ Properties that define the project:
 - **Non-invasive.** The ChatGPT app bundle is never modified, patched, or re-signed. Injection happens through the environment at launch (`NODE_OPTIONS=--require` into the Electron main process — verified against the installed app), so the app stays stock, keeps its signature, and auto-updates normally.
 - **Stable boundary.** Extensions access capabilities exposed by ChatGPT only through `src/platform/types.d.ts`. The app's internals are minified and re-scrambled on every build; the public API is not. Version-independent functionality supplied by ChatGPTX itself lives in shared TypeScript utilities under `src/platform/utilities/`, outside the ChatGPT API and its versioned bindings. Extension authors never see or depend on app internals. "Stable" means stable *across app updates* — not backward-compatible: the API itself evolves by direct in-place change, one way, with no deprecation shims or legacy paths.
 - **Native by construction.** Extensions must be indistinguishable from first-party UI — in look AND in behavior. APIs expose and reuse the app's own components (styling, keyboard navigation, focus, states, accessibility come for free); replicating an existing control is a documented last resort.
-- **Versioned bindings.** `src/platform/bindings/<app-version>/` bridges one specific ChatGPT build to one exact ChatGPT API version. Its manifest declares its own `version`, `chatgpt`, `chatgptApi`, and the build's `app.asar` SHA-256. `src/platform/bindings/manifest.json` identifies the current ChatGPT version and stock download URL used by CI. A correction for the same ChatGPT build increments the binding version.
+- **Versioned bindings.** `src/platform/bindings/<app-version>/` bridges one specific ChatGPT build to one exact ChatGPT API version. Its manifest declares its own `version`, `chatgpt`, `chatgptApi`, and the build's `app.asar` SHA-256. `src/platform/bindings/manifest.json` identifies the API-development binding and stock download URL used by CI. Later ChatGPT builds can remain in the release catalog on an older compatible API. A correction for the same ChatGPT build increments the binding version.
 - **Deterministic correctness.** The `api-test-suite` extension mechanically exercises every public API path inside the real app. A binding is "working" exactly when that suite passes — not before.
 
 ## Repository layout
@@ -23,7 +23,7 @@ src/
     types.d.ts                  # stable API for capabilities exposed by ChatGPT
     utilities/                  # shared version-independent TypeScript utilities for extensions
     bindings/
-      manifest.json             # current app version and stock download URL used by CI
+      manifest.json             # API-development app version and stock download URL used by CI
       <app-version>/            # per-build bridge to the API + manifest.json + DERIVATION.md
   extensions/
     api-test-suite/             # mechanical e2e test extension (defines "working")
@@ -52,9 +52,10 @@ persistent state lives under
 `<Codex home>/extensions/state/<extension-id>/`. The global
 `<Codex home>/extensions/settings.json` maps every installed extension ID to
 an extensible settings object with `enabled`; startup reads package metadata
-from the versioned packages selected by `versions-lock.json` and loads enabled
-extensions in lexical ID order. Settings for temporarily incompatible
-extensions remain stored. `resolveCodexHome()` defines Codex home from
+from the versioned packages selected by `versions-lock.json`. The required
+`extensions` manager activates first. All other enabled extensions activate in
+lexical ID order. Settings for temporarily incompatible extensions remain
+stored. `resolveCodexHome()` defines Codex home from
 `CODEX_HOME`, defaulting to `$HOME/.codex`.
 
 Run the packaged launcher with `--test-api` and an explicit locally built

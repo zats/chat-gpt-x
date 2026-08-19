@@ -65,11 +65,16 @@ export async function triggerChatGPTRebind({
     );
   }
 
-  if (!force && pinnedVersion === latest.version) {
-    return {
-      version: latest.version,
-      outcome: "binding-exists",
-    };
+  if (!force) {
+    const latestBindingExists =
+      pinnedVersion === latest.version ||
+      (await github.bindingDirectoryExists(latest.version));
+    if (latestBindingExists) {
+      return {
+        version: latest.version,
+        outcome: "binding-exists",
+      };
+    }
   }
 
   const title = `ChatGPT ${latest.version} available`;

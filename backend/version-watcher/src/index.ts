@@ -86,7 +86,10 @@ export async function checkCodexVersion(env: Env): Promise<CheckResult> {
     );
   }
 
-  if (pinnedVersion === latest.version) {
+  const latestBindingExists =
+    pinnedVersion === latest.version ||
+    (await bindingDirectoryExists(env, latest.version));
+  if (latestBindingExists) {
     return {
       version: latest.version,
       outcome: "binding-exists",

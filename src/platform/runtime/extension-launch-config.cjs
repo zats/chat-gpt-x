@@ -5,6 +5,10 @@ const path = require("node:path");
 
 const extensionIdPattern = /^[a-z0-9][a-z0-9._-]*$/i;
 const semanticVersionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+const updateLockFileName = "update.lock";
+// Node does not expose Darwin O_EXLOCK. This flag uses the BSD flock that the
+// component store uses for the same file.
+const darwinExclusiveOpenFlag = 0x00000020;
 
 function readExtensionEntries({
   configurationFile,
@@ -95,19 +99,45 @@ function setExtensionEnabled(
   if (!extension) {
     throw new Error("Unknown installed extension: " + extensionId);
   }
-  const settings = readSettings(extensionsDirectory);
-  if (!Object.hasOwn(settings.extensions, extensionId)) {
-    throw new Error("Unknown installed extension: " + extensionId);
-  }
   const manifest = readExtensionManifest(extensionsDirectory, extension);
   if (manifest.required === true && !enabled) {
     throw new Error("Cannot disable a required extension");
   }
-  settings.extensions[extensionId] = {
-    ...settings.extensions[extensionId],
-    enabled,
-  };
-  atomicWriteJson(path.join(extensionsDirectory, "settings.json"), settings);
+  withExclusiveMutationLock(extensionsDirectory, () => {
+    const settings = readSettings(extensionsDirectory);
+    if (!Object.hasOwn(settings.extensions, extensionId)) {
+      throw new Error("Unknown installed extension: " + extensionId);
+    }
+    settings.extensions[extensionId] = {
+      ...settings.extensions[extensionId],
+      enabled,
+    };
+    atomicWriteJson(path.join(extensionsDirectory, "settings.json"), settings);
+  });
+}
+
+function withExclusiveMutationLock(extensionsDirectory, operation) {
+  if (process.platform !== "darwin") {
+    return operation();
+  }
+
+  const lockFile = path.join(extensionsDirectory, updateLockFileName);
+  const flags =
+    fs.constants.O_CREAT | fs.constants.O_RDWR | darwinExclusiveOpenFlag;
+  let descriptor;
+  for (;;) {
+    try {
+      descriptor = fs.openSync(lockFile, flags, 0o600);
+      break;
+    } catch (error) {
+      if (error?.code !== "EINTR") throw error;
+    }
+  }
+  try {
+    return operation();
+  } finally {
+    fs.closeSync(descriptor);
+  }
 }
 
 function readSettings(extensionsDirectory) {

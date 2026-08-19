@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,17 +8,10 @@ const repositoryRoot = path.resolve(
 );
 const bindingsRoot = path.join(repositoryRoot, "src/platform/bindings");
 const pinnedManifestPath = path.join(bindingsRoot, "manifest.json");
-
-function compareVersions(left, right) {
-  const leftParts = left.split(".").map(Number);
-  const rightParts = right.split(".").map(Number);
-  const count = Math.max(leftParts.length, rightParts.length);
-  for (let index = 0; index < count; index += 1) {
-    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
-    if (difference !== 0) return difference;
-  }
-  return 0;
-}
+const platformManifestPath = path.join(
+  repositoryRoot,
+  "src/platform/manifest.json",
+);
 
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"));
@@ -55,31 +48,10 @@ if (binding.chatgpt !== pinned.chatgpt) {
   throw new Error("pinned and versioned binding manifests disagree");
 }
 
-const versions = (
-  await Promise.all(
-    (await readdir(bindingsRoot, { withFileTypes: true }))
-      .filter(
-        (entry) =>
-          entry.isDirectory() && /^\d+(?:\.\d+)+$/.test(entry.name),
-      )
-      .map(async (entry) => {
-        const manifest = await readJson(
-          path.join(bindingsRoot, entry.name, "manifest.json"),
-        );
-        if (manifest.chatgpt !== entry.name) {
-          throw new Error(
-            `${entry.name}/manifest.json chatgpt must match its directory`,
-          );
-        }
-        return entry.name;
-      }),
-  )
-).sort(compareVersions);
-
-const latestVersion = versions.at(-1);
-if (pinned.chatgpt !== latestVersion) {
+const platform = await readJson(platformManifestPath);
+if (binding.chatgptApi !== platform.version) {
   throw new Error(
-    `bindings/manifest.json must pin the newest binding ${latestVersion}`,
+    `pinned binding ${pinned.chatgpt} must use ChatGPT API ${platform.version}`,
   );
 }
 

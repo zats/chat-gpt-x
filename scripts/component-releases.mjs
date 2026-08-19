@@ -42,6 +42,25 @@ const unpublishedSchema2Extensions = [
       "c6e6d09cf874348fc9c445515d0e0198567332c4083676250346c0cb85b9dde9",
   },
 ];
+const unpublishedSchema2Binding = {
+  chatgpt: "26.814.41957",
+  catalog: {
+    version: "1.0.0",
+    chatgptApi: "1.0.4",
+    release: "binding-26.814.41957-v1.0.0",
+    sha256:
+      "907fa3a6641a02d698e46ea1885ce7b12060e810aebe4700723a584aa5aa8677",
+  },
+  manifest: {
+    version: "1.0.0",
+    chatgpt: "26.814.41957",
+    chatgptApi: "1.0.4",
+    asarSha256:
+      "881d21270e41ea50a6de7835a3dda3516a001354d034933bb4a97677f3e0c479",
+    electronVersion: "151.0.7922.137",
+    boundAt: "2026-08-18",
+  },
+};
 
 export function compareVersions(left, right) {
   const leftParts = parseVersion(left);
@@ -126,6 +145,17 @@ export function createReleasePlan({
       base,
       `src/platform/bindings/${chatgpt}/manifest.json`,
     );
+    if (
+      isUnpublishedSchema2BindingDeletion(
+        latest,
+        previousLatest,
+        chatgpt,
+      ) &&
+      isDeepStrictEqual(previous, unpublishedSchema2Binding.manifest)
+    ) {
+      affected.bindings.delete(chatgpt);
+      continue;
+    }
     if (
       previous?.chatgptApi &&
       compareVersions(previous.chatgptApi, minimumRemoteAPIVersion) < 0
@@ -712,6 +742,16 @@ export function validateCatalogHistory(
       continue;
     }
     const currentEntry = latest.bindings?.[chatgpt];
+    if (
+      !currentEntry &&
+      isUnpublishedSchema2BindingDeletion(
+        latest,
+        previousLatest,
+        chatgpt,
+      )
+    ) {
+      continue;
+    }
     if (!currentEntry) {
       throw new Error(
         `updates/latest.json must retain binding ${chatgpt}`,
@@ -785,6 +825,23 @@ export function validateCatalogHistory(
       }
     }
   }
+}
+
+function isUnpublishedSchema2BindingDeletion(
+  latest,
+  previousLatest,
+  chatgpt,
+) {
+  return (
+    previousLatest?.schemaVersion === 2 &&
+    latest.schemaVersion === 3 &&
+    chatgpt === unpublishedSchema2Binding.chatgpt &&
+    !latest.bindings?.[chatgpt] &&
+    isDeepStrictEqual(
+      previousLatest.bindings?.[chatgpt],
+      unpublishedSchema2Binding.catalog,
+    )
+  );
 }
 
 function validateReleaseEntry(entry, expectedRelease, label, exact = true) {

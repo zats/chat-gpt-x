@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       force:
-        description: Re-run and increment an existing binding version
+        description: Re-run and increment an existing current-API binding
         required: false
         default: false
         type: boolean
@@ -243,6 +243,12 @@ jobs:
               echo "Binding $APP_VERSION exists and requires a force request." >&2
               exit 1
             }
+            binding_api="$(jq -er '.chatgptApi | select(type == "string" and length > 0)' "$binding_root/manifest.json")"
+            current_api="$(jq -er '.version | select(type == "string" and length > 0)' src/platform/manifest.json)"
+            [[ "$binding_api" == "$current_api" ]] || {
+              echo "Binding $APP_VERSION uses ChatGPT API $binding_api. Correction supports only current API $current_api; create a new current-API binding instead." >&2
+              exit 1
+            }
             echo "mode=correction" >> "$GITHUB_OUTPUT"
           else
             echo "mode=new" >> "$GITHUB_OUTPUT"
@@ -392,7 +398,7 @@ jobs:
             binding_instructions="Edit src/platform/bindings/$APP_VERSION and increment its binding patch version by exactly one. Preserve its chatgpt and chatgptApi values. Keep every other binding directory, src/platform/types.d.ts, extension source, and extension manifests unchanged. Update src/platform/bindings/manifest.json only if needed to pin the exact version and URL. Increment updates/latest.json generation once and replace this build's schema-3 binding entry, including its exact asarSha256. Preserve every other API, binding, and extension entry and all extension version history. Set the changed binding sha256 to 64 zeroes; the workflow replaces it with the deterministic archive hash before validation."
           else
             task="complete the new binding for ChatGPT $APP_VERSION"
-            binding_instructions="Use the newest completed binding as the prior implementation. Keep src/platform/types.d.ts, extension source files, extension manifests, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. Update src/platform/bindings/manifest.json and add the exact binding to the schema-3 updates/latest.json map, including its asarSha256. Increment the update generation once and preserve every existing API, binding, extension, and historical extension version entry. Set the new binding sha256 to 64 zeroes; the workflow replaces it with the deterministic archive hash before validation."
+            binding_instructions="Use the API-development binding identified by src/platform/bindings/manifest.json as the prior implementation, and preserve its chatgptApi value. Keep src/platform/types.d.ts, extension source files, extension manifests, and every existing binding directory unchanged. Create src/platform/bindings/$APP_VERSION with binding version 1.0.0. Update src/platform/bindings/manifest.json and add the exact binding to the schema-3 updates/latest.json map, including its asarSha256. Increment the update generation once and preserve every existing API, binding, extension, and historical extension version entry. Set the new binding sha256 to 64 zeroes; the workflow replaces it with the deterministic archive hash before validation."
           fi
           if [[ "$AUTH_MODE" == "apikey" ]]; then
             authentication_files="- $AUTH_ROOT/primary.json (API-key authentication)"

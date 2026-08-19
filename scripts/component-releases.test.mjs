@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import test from "node:test";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   classifyPath,
   compareVersions,
+  createReleasePlan,
   findUtilityConsumers,
   isBootstrap,
   releaseTag,
@@ -17,6 +26,123 @@ const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
+const unpublishedBindingChatGPT = "26.814.41957";
+const unpublishedBindingCatalogEntry = {
+  version: "1.0.0",
+  chatgptApi: "1.0.4",
+  release: "binding-26.814.41957-v1.0.0",
+  sha256:
+    "907fa3a6641a02d698e46ea1885ce7b12060e810aebe4700723a584aa5aa8677",
+};
+const unpublishedBindingManifest = {
+  version: "1.0.0",
+  chatgpt: unpublishedBindingChatGPT,
+  chatgptApi: "1.0.4",
+  asarSha256:
+    "881d21270e41ea50a6de7835a3dda3516a001354d034933bb4a97677f3e0c479",
+  electronVersion: "151.0.7922.137",
+  boundAt: "2026-08-18",
+};
+
+function writeJson(root, filePath, value) {
+  const absolutePath = path.join(root, filePath);
+  mkdirSync(path.dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function createBindingDeletionFixture(bindingManifest) {
+  const root = mkdtempSync(
+    path.join(os.tmpdir(), "chatgptx-binding-deletion-test-"),
+  );
+  const retainedChatGPT = "26.814.41407";
+  const retainedManifest = {
+    version: "1.0.0",
+    chatgpt: retainedChatGPT,
+    chatgptApi: "1.0.4",
+    asarSha256: "a".repeat(64),
+  };
+  const apiEntry = {
+    release: "chatgpt-api-v1.0.4",
+    sha256: "b".repeat(64),
+  };
+  const retainedSchema2Entry = {
+    version: retainedManifest.version,
+    chatgptApi: retainedManifest.chatgptApi,
+    release: `binding-${retainedChatGPT}-v${retainedManifest.version}`,
+    sha256: "c".repeat(64),
+  };
+
+  writeJson(root, "src/platform/manifest.json", { version: "1.0.4" });
+  writeJson(root, "src/platform/bindings/manifest.json", {
+    chatgpt: retainedChatGPT,
+  });
+  writeJson(
+    root,
+    `src/platform/bindings/${retainedChatGPT}/manifest.json`,
+    retainedManifest,
+  );
+  writeJson(
+    root,
+    `src/platform/bindings/${unpublishedBindingChatGPT}/manifest.json`,
+    bindingManifest,
+  );
+  writeJson(root, "updates/latest.json", {
+    schemaVersion: 2,
+    generation: 25,
+    chatgptApis: { "1.0.4": apiEntry },
+    bindings: {
+      [retainedChatGPT]: retainedSchema2Entry,
+      [unpublishedBindingChatGPT]: unpublishedBindingCatalogEntry,
+    },
+    extensions: {},
+  });
+  mkdirSync(path.join(root, "src/extensions"), { recursive: true });
+  mkdirSync(path.join(root, "scripts"), { recursive: true });
+  writeFileSync(path.join(root, "scripts/component-releases.mjs"), "\n");
+
+  execFileSync("git", ["init", "--quiet"], { cwd: root });
+  execFileSync("git", ["add", "."], { cwd: root });
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      "base",
+    ],
+    { cwd: root },
+  );
+  const base = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim();
+
+  rmSync(
+    path.join(root, "src/platform/bindings", unpublishedBindingChatGPT),
+    { recursive: true },
+  );
+  writeJson(root, "updates/latest.json", {
+    schemaVersion: 3,
+    generation: 26,
+    minimumLauncherVersion: "1.1.0",
+    releaseBaseURL:
+      "https://github.com/zats/chat-gpt-x/releases/download",
+    chatgptApis: { "1.0.4": apiEntry },
+    bindings: {
+      [retainedChatGPT]: {
+        ...retainedSchema2Entry,
+        asarSha256: retainedManifest.asarSha256,
+      },
+    },
+    extensions: {},
+  });
+
+  return { base, root };
+}
 
 test("classifies predictable component paths", () => {
   assert.deepEqual(classifyPath("src/platform/types.d.ts"), {
@@ -494,6 +620,89 @@ test("retains immutable API and binding history", () => {
       obsolete,
       new Set(),
     ),
+  );
+});
+
+test("omits the exact unpublished binding deletion from release artifacts", () => {
+  const { base, root } = createBindingDeletionFixture(
+    unpublishedBindingManifest,
+  );
+  try {
+    const plan = createReleasePlan({ base, head: "--worktree", root });
+
+    assert.equal(plan.generation, 26);
+    assert.deepEqual(plan.bindings, []);
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
+
+test("requires the exact unpublished binding source metadata", () => {
+  const { base, root } = createBindingDeletionFixture({
+    ...unpublishedBindingManifest,
+    electronVersion: "151.0.7922.138",
+  });
+  try {
+    assert.throws(
+      () => createReleasePlan({ base, head: "--worktree", root }),
+      /Missing binding 26\.814\.41957/,
+    );
+  } finally {
+    rmSync(root, { recursive: true });
+  }
+});
+
+test("permits only the exact unpublished schema-v2 binding deletion", () => {
+  const previous = {
+    schemaVersion: 2,
+    chatgptApis: {},
+    bindings: {
+      [unpublishedBindingChatGPT]: unpublishedBindingCatalogEntry,
+    },
+    extensions: {},
+  };
+  const latest = {
+    schemaVersion: 3,
+    chatgptApis: {},
+    bindings: {},
+    extensions: {},
+  };
+
+  assert.doesNotThrow(() => validateCatalogHistory(latest, previous));
+
+  const changes = {
+    version: "1.0.1",
+    chatgptApi: "1.0.3",
+    release: "binding-26.814.41957-v1.0.1",
+    sha256: "d".repeat(64),
+  };
+  for (const [field, value] of Object.entries(changes)) {
+    const changed = structuredClone(previous);
+    changed.bindings[unpublishedBindingChatGPT][field] = value;
+    assert.throws(
+      () => validateCatalogHistory(latest, changed),
+      /must retain binding 26\.814\.41957/,
+    );
+  }
+
+  const otherChatGPT = "26.814.50000";
+  const other = structuredClone(previous);
+  other.bindings = {
+    [otherChatGPT]: {
+      ...unpublishedBindingCatalogEntry,
+      release: `binding-${otherChatGPT}-v1.0.0`,
+    },
+  };
+  assert.throws(
+    () => validateCatalogHistory(latest, other),
+    /must retain binding 26\.814\.50000/,
+  );
+
+  const schema3 = structuredClone(previous);
+  schema3.schemaVersion = 3;
+  assert.throws(
+    () => validateCatalogHistory(latest, schema3),
+    /must retain binding 26\.814\.41957/,
   );
 });
 

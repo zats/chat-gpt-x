@@ -10,7 +10,7 @@ src/
     runtime/
       codex-paths.cjs           # canonical Codex home and runtime path resolver
     bindings/
-      manifest.json             # current version and stock download URL used by CI
+      manifest.json             # API-development version and stock download URL used by CI
       <app-version>/            # e.g. 26.715.31925 — bindings bridging that build's internals to types.d.ts
         manifest.json           # binding version plus exact chatgpt and chatgptApi versions
         DERIVATION.md           # how each binding was found: anchors, locations, failure signatures
@@ -27,7 +27,7 @@ updates/
 
 `src/extensions/build.sh [<extension-id> ...]` is the local build entry point. With no ids it builds all extensions. Each manifest declares `"main": "contents/main.js"`, its semantic `version`, and a `compatibility.chatgptApi` range. The script compiles `<extension-id>.ts` as browser-targeted CommonJS under `${TMPDIR}/ChatGPTX/extension-builds/`; `CHATGPTX_EXTENSION_BUILD_DIR` overrides that root. Development builds enter a launch only through an explicit `--extension` path.
 
-The bindings directory name is the app's version (`CFBundleShortVersionString`). Its manifest owns a semantic `version` and pins exact `chatgpt`, `asarSha256`, and `chatgptApi` values. New ChatGPT versions start at binding version `1.0.0`; corrections increment it. `bindings/manifest.json` points to the current versioned directory and its exact Sparkle enclosure URL. A new binding does not change extension versions.
+The bindings directory name is the app's version (`CFBundleShortVersionString`). Its manifest owns a semantic `version` and pins exact `chatgpt`, `asarSha256`, and `chatgptApi` values. New ChatGPT versions start at binding version `1.0.0`; corrections increment it. `bindings/manifest.json` points to the API-development binding and its exact Sparkle enclosure URL. This binding uses the current ChatGPT API but does not have to be the numerically newest ChatGPT build. A new binding does not change extension versions.
 
 CI classifies changes by these paths. A pull request that changes the API, a binding directory, a public extension directory, or a shared utility consumed by public extensions must update affected component versions and `updates/latest.json`. Internal extensions declare `"private": true` and stay out of the public index. After the tested commit reaches `main`, CI builds version-addressed archives and creates predictable GitHub Releases:
 
@@ -56,6 +56,7 @@ GitHub Releases retain versioned contents. CI then verifies every release and pu
 extensible record such as `{ "enabled": true }`. The runtime preserves unknown
 fields and records for extensions that are not compatible with the selected
 API. `versions-lock.json` selects one immutable versioned package path for each
-compatible extension. Startup applies current settings and loads enabled
-extensions in lexical ID order. Registration order within each loaded extension
-remains the multi-consumer API ordering guarantee.
+compatible extension. Startup applies current settings. The required
+`extensions` manager activates first. All other enabled extensions activate in
+lexical ID order. Registration order within each loaded extension remains the
+multi-consumer API ordering guarantee.

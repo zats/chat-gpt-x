@@ -14,7 +14,7 @@ Read these files completely before editing:
 1. `../manage-platform-api/SKILL.md`
 2. `../manage-platform-api/references/app-facts.md`
 3. `../manage-platform-api/references/anchor-heuristics.md`
-4. The newest prior binding's `DERIVATION.md`
+4. The `DERIVATION.md` for the API-development binding named by `src/platform/bindings/manifest.json`
 
 Use `manage-platform-api` as the authority for platform invariants and research mechanics. This skill supplies the rebinding fast path.
 
@@ -22,7 +22,7 @@ Use `manage-platform-api` as the authority for platform invariants and research 
 
 Use `new` mode when the target build has no binding directory. Create `src/platform/bindings/<new-version>/` at version `1.0.0`. Keep every existing binding directory unchanged.
 
-Use `correction` mode when the target build already has a binding directory. Edit only that binding directory and increment its patch version by exactly one. Keep every other binding directory and all extension manifests unchanged.
+Use `correction` mode when the target build already has a binding directory and its `chatgptApi` matches the current version in `src/platform/manifest.json`. Edit only that binding directory and increment its patch version by exactly one. Keep every other binding directory and all extension manifests unchanged. If the existing binding uses an older API, stop and request a new current-API binding instead of correcting the historical implementation.
 
 In both modes, keep `src/platform/types.d.ts`, `src/extensions/api-test-suite/`, extension source, unrelated files, and user state unchanged. Do not add compatibility paths, fallback bindings, machine-specific paths, account names, or profile data.
 
@@ -34,7 +34,7 @@ If the current build makes the API impossible to implement, report that fact ins
 
 1. Inspect repository status and preserve unrelated work.
 2. Read `CFBundleShortVersionString`, the Electron version, and the SHA-256 of the installed `app.asar`.
-3. Identify the target binding for correction mode or the newest completed prior binding for new mode.
+3. Identify the target binding for correction mode or the API-development binding named by `src/platform/bindings/manifest.json` for new mode.
 4. Run the extraction script from `manage-platform-api` with `--expect-version <new-version>`. Work only in the returned temp directory.
 5. Stop if the version or hash changes during the task.
 
@@ -125,6 +125,7 @@ Keep version-specific facts in this derivation. Do not copy them into this skill
 Finish only when all conditions hold:
 
 - In `new` mode, the new directory and manifest declare binding version `1.0.0`. In `correction` mode, the target manifest increments its prior patch version by exactly one.
+- In `correction` mode, the target binding already used the current ChatGPT API before the correction.
 - The target manifest matches the tested ChatGPT version, API version, and app.asar.
 - The current bindings manifest points to the target version and exact download URL, and its validator passes.
 - `updates/latest.json` preserves schema 3, identifies the target binding release and exact app.asar hash by ChatGPT version, contains the deterministic archive hash, and the component release plan passes.

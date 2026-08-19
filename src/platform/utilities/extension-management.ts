@@ -69,11 +69,17 @@ function normalizeExtensions(value: unknown): readonly InstalledExtension[] {
   );
 }
 
-export function createExtensionManagement(): ExtensionManagement {
+export function createExtensionManagement(
+  authorization: string,
+): ExtensionManagement {
+  if (typeof authorization !== "string" || authorization.length === 0) {
+    throw new TypeError("Extension manager authorization is required");
+  }
+  const runtimeBridge = runtime();
   return Object.freeze({
     async list(): Promise<readonly InstalledExtension[]> {
       return normalizeExtensions(
-        await runtime().request("extensions.list", {}),
+        await runtimeBridge.request("extensions.list", { authorization }),
       );
     },
 
@@ -88,7 +94,8 @@ export function createExtensionManagement(): ExtensionManagement {
         throw new TypeError("Extension enablement must be boolean");
       }
       return normalizeExtensions(
-        await runtime().request("extensions.set-enabled", {
+        await runtimeBridge.request("extensions.set-enabled", {
+          authorization,
           extensionId: id,
           enabled,
         }),

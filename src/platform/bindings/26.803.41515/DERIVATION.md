@@ -157,7 +157,10 @@ reuse `Wa`; new groups and rows reuse `gr`, `HO`, and `JO`.
 The public control factories render the stock `QS` controlled toggle, the
 `GU`/`Ia`/`qU.Item` dropdown composition, and `Mbt`. Source inspection of the
 stock General and Voice settings implementations confirmed the `QS`
-`checked`/`onChange` contract. Control callbacks are isolated by the binding.
+`checked`/`onChange` contract. Binding-owned weak maps keep extension handlers
+and native React elements out of public control descriptors. A control renders
+only for its owning extension row, or for its original app row. Callback
+failures remain isolated.
 
 Native search input props are `searchQuery` and `onQueryChange`; result props
 are `searchResults`, `onSelect`, `intl`, and `listRef`. The binding adds one

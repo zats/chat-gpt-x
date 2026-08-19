@@ -14,7 +14,11 @@ const downloadUrl =
   "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.730.61639.zip";
 const latest = { version, downloadUrl };
 
-function fakeGitHub({ pinned = previousVersion, issue = null } = {}) {
+function fakeGitHub({
+  pinned = previousVersion,
+  bindings = [pinned],
+  issue = null,
+} = {}) {
   const calls = [];
   return {
     calls,
@@ -24,7 +28,7 @@ function fakeGitHub({ pinned = previousVersion, issue = null } = {}) {
     },
     async bindingDirectoryExists(bindingVersion) {
       calls.push(["bindingDirectoryExists", bindingVersion]);
-      return true;
+      return bindings.includes(bindingVersion);
     },
     async findIssueByTitle(title) {
       calls.push(["findIssueByTitle", title]);
@@ -77,6 +81,41 @@ test("stops when the latest binding exists", async () => {
   ]);
 });
 
+test("stops when the latest binding exists outside the development pin", async () => {
+  const github = fakeGitHub({
+    bindings: [previousVersion, version],
+  });
+  const result = await triggerChatGPTRebind({
+    github,
+    readLatestVersion: async () => latest,
+  });
+
+  assert.deepEqual(result, { version, outcome: "binding-exists" });
+  assert.deepEqual(github.calls, [
+    ["readPinnedVersion"],
+    ["bindingDirectoryExists", previousVersion],
+    ["bindingDirectoryExists", version],
+  ]);
+});
+
+test("fails when the development pin has no binding directory", async () => {
+  const github = fakeGitHub({ bindings: [version] });
+
+  await assert.rejects(
+    triggerChatGPTRebind({
+      github,
+      readLatestVersion: async () => latest,
+    }),
+    new RegExp(
+      `bindings/manifest\\.json pins ${previousVersion.replaceAll(".", "\\.")}, but its binding directory is missing`,
+    ),
+  );
+  assert.deepEqual(github.calls, [
+    ["readPinnedVersion"],
+    ["bindingDirectoryExists", previousVersion],
+  ]);
+});
+
 test("stops when an exact issue exists", async () => {
   const github = fakeGitHub({ issue: 19 });
   const result = await triggerChatGPTRebind({
@@ -117,8 +156,11 @@ test("creates and labels a standard issue for an unknown build", async () => {
   });
 });
 
-test("force creates a correction request for a known binding", async () => {
-  const github = fakeGitHub({ pinned: version, issue: 19 });
+test("force creates a correction request for a known latest binding", async () => {
+  const github = fakeGitHub({
+    bindings: [previousVersion, version],
+    issue: 19,
+  });
   const result = await triggerChatGPTRebind({
     force: true,
     github,
@@ -129,6 +171,10 @@ test("force creates a correction request for a known binding", async () => {
   assert.equal(
     github.calls.some(([name]) => name === "findIssueByTitle"),
     false,
+  );
+  assert.deepEqual(
+    github.calls.filter(([name]) => name === "bindingDirectoryExists"),
+    [["bindingDirectoryExists", previousVersion]],
   );
   const createCall = github.calls.find(([name]) => name === "createIssue");
   assert.deepEqual(JSON.parse(createCall[2]), {

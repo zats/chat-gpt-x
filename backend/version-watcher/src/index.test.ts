@@ -128,6 +128,36 @@ describe("version detection", () => {
     );
   });
 
+  it("stops when the latest version has a binding outside the development pin", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response(feed))
+      .mockResolvedValueOnce(
+        response(
+          JSON.stringify({
+            chatgpt: previousVersion,
+            downloadUrl:
+              "https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.715.70719.zip",
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(response([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(checkCodexVersion(env)).resolves.toMatchObject({
+      version,
+      outcome: "binding-exists",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls[2][0]).toContain(
+      `/contents/src/platform/bindings/${previousVersion}`,
+    );
+    expect(fetchMock.mock.calls[3][0]).toContain(
+      `/contents/src/platform/bindings/${version}`,
+    );
+  });
+
   it("fails when the pinned binding folder is missing", async () => {
     const fetchMock = vi
       .fn()
@@ -163,6 +193,7 @@ describe("version detection", () => {
         ),
       )
       .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(response({}, 404))
       .mockResolvedValueOnce(
         response({
           items: [
@@ -184,7 +215,7 @@ describe("version detection", () => {
       outcome: "issue-exists",
       issueNumber: 19,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
   it("creates one issue for an unbound and unreported version", async () => {
@@ -201,6 +232,7 @@ describe("version detection", () => {
         ),
       )
       .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(response({}, 404))
       .mockResolvedValueOnce(response({ items: [] }))
       .mockResolvedValueOnce(response({}, 404))
       .mockResolvedValueOnce(response({ name: "pending" }, 201))
@@ -235,6 +267,6 @@ describe("version detection", () => {
     expect(JSON.parse(issueLabelRequest?.[1]?.body as string)).toEqual({
       labels: ["pending"],
     });
-    expect(fetchMock).toHaveBeenCalledTimes(8);
+    expect(fetchMock).toHaveBeenCalledTimes(9);
   });
 });

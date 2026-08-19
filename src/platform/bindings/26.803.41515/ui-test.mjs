@@ -1730,6 +1730,8 @@ async function validateUi(
   const settingsButtonId = `${settingsFixtureId}.button`;
   const settingsBuiltInGroupId = `${settingsFixtureId}.built-in-group`;
   const settingsBuiltInItemId = `${settingsFixtureId}.built-in-item`;
+  const settingsObserverId = 'settings-observer-fixture';
+  const settingsObserverReplayId = `${settingsObserverId}.replay`;
   let settingsApi;
   let settingsToggleChecked = false;
   let settingsSelectedValue = 'first';
@@ -1842,6 +1844,52 @@ async function validateUi(
     },
   });
 
+  let settingsObserverFoundControl = false;
+  let settingsObserverHandlerCount = -1;
+  let settingsObserverInvokedOwner = false;
+  globalThis.__CGPTX_HOST__.registerExtension(settingsObserverId, {
+    activate(api) {
+      const control = api.settings
+        .getGroups(settingsPaneId)
+        .flatMap((group) => group.items)
+        .find((item) => item.id === settingsToggleId)?.control;
+      settingsObserverFoundControl = Boolean(control);
+      const exposedHandlers = Reflect.ownKeys(control ?? {})
+        .map((key) => control[key])
+        .filter((value) => typeof value === 'function');
+      settingsObserverHandlerCount = exposedHandlers.length;
+      for (const handler of exposedHandlers) handler(true);
+      settingsObserverInvokedOwner = settingsToggleChecked;
+      api.settings.transformItems((items, context) =>
+        context.group.id === settingsGroupId && control
+          ? [
+              ...items,
+              {
+                id: settingsObserverReplayId,
+                label: 'Foreign settings control replay',
+                control,
+              },
+            ]
+          : items,
+      );
+    },
+  });
+  if (settingsObserverInvokedOwner) {
+    settingsToggleChecked = false;
+    settingsItemRegistration.invalidate();
+  }
+  check(
+    settingsObserverFoundControl &&
+      settingsObserverHandlerCount === 0 &&
+      !settingsObserverInvokedOwner,
+    "one extension cannot obtain or invoke another extension's settings handler",
+    {
+      foundControl: settingsObserverFoundControl,
+      exposedHandlerCount: settingsObserverHandlerCount,
+      invokedOwner: settingsObserverInvokedOwner,
+    },
+  );
+
   const customPaneOpened = await settingsApi.open(settingsPaneId, {
     itemId: settingsToggleId,
   });
@@ -1854,6 +1902,9 @@ async function validateUi(
   const settingsButton = Array.from(
     document.getElementById(settingsButtonId)?.querySelectorAll('button') ?? [],
   ).find((button) => button.textContent?.trim() === 'Run fixture');
+  const settingsObserverReplay = document
+    .getElementById(settingsObserverReplayId)
+    ?.querySelector('[role="switch"]');
   check(
     customPaneOpened &&
       document.getElementById(settingsToggleId) != null &&
@@ -1865,6 +1916,12 @@ async function validateUi(
       Boolean(settingsSelect) &&
       Boolean(settingsButton),
     'custom settings rows render native toggle, select, and button controls',
+  );
+  check(
+    document.getElementById(settingsObserverReplayId) != null &&
+      !settingsObserverReplay &&
+      !settingsToggleChecked,
+    "one extension cannot replay another extension's opaque settings control",
   );
   activateButton(settingsToggle);
   await waitUntil(
@@ -1887,6 +1944,18 @@ async function validateUi(
         'Built-in pane item',
       ),
     'an extension row renders inside the stable General settings pane',
+  );
+  const builtInSettingsControl = settingsApi
+    .getGroups('codex.settings.general-settings')
+    .flatMap((group) => group.items)
+    .find((item) => item.origin === 'app' && item.control)?.control;
+  const builtInControlDetails = Reflect.ownKeys(builtInSettingsControl ?? {})
+    .filter((key) => key !== 'kind');
+  check(
+    builtInSettingsControl?.kind === 'native' &&
+      builtInControlDetails.length === 0,
+    "built-in settings controls do not expose React elements or callbacks",
+    { exposedKeys: builtInControlDetails.map(String) },
   );
 
   await settingsApi.open('codex.settings.appearance');

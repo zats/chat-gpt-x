@@ -129,7 +129,10 @@ row messages. Category, group, and item transformers compose in extension
 load and registration order. Normalization preserves native descriptors,
 enforces extension namespaces and unique IDs, isolates failures, and refreshes
 an open Settings window after invalidation or disposal. Contributed panes and
-items use only the current app's native Settings components.
+items use only the current app's native Settings components. Binding-owned
+weak maps keep extension handlers and native React elements out of public
+control descriptors. A control renders only for its owning extension row, or
+for its original app row.
 
 Native search keeps the `searchQuery`, `onQueryChange`, `searchResults`, and
 `onSelect` contracts. The binding adds one result for each matching effective

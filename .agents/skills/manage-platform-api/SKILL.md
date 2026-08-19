@@ -63,7 +63,7 @@ The suite fails closed: it must be impossible for it to pass without a working b
 
 ### 4. Locate and extract the pinned app version
 
-The pinned app version and stock download URL live in `src/platform/bindings/manifest.json`; its version must match the newest versioned binding directory. Verify that exact version is installed on this machine and extract it to a temp dir:
+The API-development app version and stock download URL live in `src/platform/bindings/manifest.json`; that exact version must have a versioned binding directory and use the current ChatGPT API. It does not have to be the numerically newest binding because later app builds can remain on an older API. Verify that exact version is installed on this machine and extract it to a temp dir:
 
 ```bash
 scripts/extract-app.sh --expect-version <version>
@@ -91,6 +91,6 @@ Update the schema-3 catalog in `updates/latest.json`: increment `generation` onc
 
 ## Rebinding to a new app version
 
-When the app updates: same process, new `src/platform/bindings/<new-version>/` directory with binding version `1.0.0`, exact `chatgpt`, exact `asarSha256`, and the unchanged `chatgptApi`. Feed the rebinding agent the previous version's DERIVATION.md as heuristics (things may have changed — verify, don't assume), then confirm with the unchanged deterministic test source. Keep extension manifests unchanged because extensions target the stable ChatGPTX API, not a ChatGPT build. After validation, update `src/platform/bindings/manifest.json` and `updates/latest.json`; both validators must pass. If the new build makes the API impossible, escalate to the user instead of silently changing semantics.
+When the app updates: same process, new `src/platform/bindings/<new-version>/` directory with binding version `1.0.0`, exact `chatgpt`, exact `asarSha256`, and the `chatgptApi` from the API-development binding named by `src/platform/bindings/manifest.json`. Feed that binding's DERIVATION.md to the rebinding agent as heuristics (things may have changed — verify, don't assume), then confirm with the unchanged deterministic test source. Keep extension manifests unchanged because extensions target the stable ChatGPTX API, not a ChatGPT build. After validation, update `src/platform/bindings/manifest.json` and `updates/latest.json`; both validators must pass. If the new build makes the API impossible, escalate to the user instead of silently changing semantics.
 
 After CI passes on `main`, the landing workflow detects affected public components, publishes version-addressed GitHub Release archives, downloads and verifies every release referenced by the index, and finally publishes `updates/latest.json` as the stable `updates` release asset. Versioned contents live in releases; source directories retain the latest implementation.

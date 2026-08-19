@@ -38,6 +38,13 @@ function init() {
     readExtensionEntries,
     setExtensionEnabled,
   } = require("../runtime/extension-launch-config.cjs");
+  const {
+    assertExtensionManagerAuthorization,
+    createExtensionManagerAuthorization,
+    isAuthorizedExtensionManagerEntry,
+    orderExtensionEntries,
+    wrapExtensionSource,
+  } = require("../runtime/extension-manager-authorization.cjs");
 
   const CODEX_HOME = resolveCodexHome();
   const STATE_DIR = resolveExtensionsDirectory();
@@ -52,6 +59,8 @@ function init() {
   const RENDERER_BOOTSTRAP_CHANNEL = "chatgptx:renderer-bootstrap";
   const RENDERER_BOOTSTRAP_ERROR_CHANNEL =
     "chatgptx:renderer-bootstrap-error";
+  const extensionManagerAuthorization =
+    createExtensionManagerAuthorization();
 
   function log(event, data) {
     try {
@@ -207,11 +216,23 @@ function init() {
       }
     }
 
-    const extensionEntries = readExtensionEntries({
-      configurationFile: LAUNCH_CONFIGURATION_FILE,
-      versions,
-      extensionsDirectory: STATE_DIR,
-    });
+    const lockedExtensionManager = versions.extensions.find(
+      (extension) => extension.id === "extensions",
+    );
+    const extensionManagerPath = lockedExtensionManager
+      ? path.join(
+          componentPath(lockedExtensionManager.path),
+          "contents/main.js",
+        )
+      : null;
+    const extensionEntries = orderExtensionEntries(
+      readExtensionEntries({
+        configurationFile: LAUNCH_CONFIGURATION_FILE,
+        versions,
+        extensionsDirectory: STATE_DIR,
+      }),
+      extensionManagerPath,
+    );
     const extensions = extensionEntries
       .filter((entry) => entry && entry.enabled && entry.id && entry.path)
       .map((entry) => {
@@ -220,11 +241,15 @@ function init() {
           log("extension-loaded", { id: entry.id, path: entry.path });
           return {
             id: entry.id,
-            wrapped:
-              ";(() => { const module = { exports: {} }; const exports = module.exports; try {\n" +
-              code +
-              `\nwindow.__CGPTX_HOST__?.registerExtension(${JSON.stringify(entry.id)}, module.exports);` +
-              `\nreturn true; } catch (e) { console.error("[cgptx-bridge] extension ${entry.id} failed to load", e); return false; } })();`,
+            wrapped: wrapExtensionSource({
+              id: entry.id,
+              code,
+              managerAuthorization: extensionManagerAuthorization,
+              managerAuthorized: isAuthorizedExtensionManagerEntry(
+                entry,
+                extensionManagerPath,
+              ),
+            }),
           };
         } catch (error) {
           log("extension-unreadable", { id: entry.id, error: String(error) });
@@ -370,8 +395,16 @@ function init() {
           return null;
         }
         case "extensions.list":
+          assertExtensionManagerAuthorization(
+            extensionManagerAuthorization,
+            parameters.authorization,
+          );
           return listInstalledExtensions(STATE_DIR, versions);
         case "extensions.set-enabled":
+          assertExtensionManagerAuthorization(
+            extensionManagerAuthorization,
+            parameters.authorization,
+          );
           setExtensionEnabled(
             STATE_DIR,
             versions,

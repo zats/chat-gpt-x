@@ -6,7 +6,7 @@ This Worker checks the Codex Sparkle feed every five minutes and opens one issue
 
 1. Reads `https://persistent.oaistatic.com/codex-app-prod/appcast.xml`.
 2. Reads `src/platform/bindings/manifest.json` and fails if its binding folder is missing.
-3. Stops when the manifest pins the latest Sparkle version.
+3. Stops when the latest Sparkle version has an exact binding folder.
 4. Stops when an issue named `ChatGPT <version> available` already exists.
 5. Opens an issue with versioned JSON metadata and applies `pending`.
 6. GitHub starts `Rebind ChatGPT` when `pending` is applied.

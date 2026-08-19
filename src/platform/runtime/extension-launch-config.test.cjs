@@ -1,15 +1,25 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { spawn } = require("node:child_process");
+const { once } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const vm = require("node:vm");
 const {
   listInstalledExtensions,
   readExtensionEntries,
   setExtensionEnabled,
 } = require("./extension-launch-config.cjs");
+const {
+  assertExtensionManagerAuthorization,
+  createExtensionManagerAuthorization,
+  isAuthorizedExtensionManagerEntry,
+  orderExtensionEntries,
+  wrapExtensionSource,
+} = require("./extension-manager-authorization.cjs");
 
 function makeStore(extensions) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "chatgptx-extensions."));
@@ -163,6 +173,74 @@ test("enablement writes preserve extensible per-extension settings", () => {
   );
 });
 
+test(
+  "enablement waits for the component store lock before it updates settings",
+  { skip: process.platform !== "darwin" },
+  async () => {
+    const { root, versions } = makeStore([
+      {
+        id: "multiple-accounts",
+        name: "Multiple Accounts",
+        description: "Switches accounts.",
+        enabled: false,
+      },
+      {
+        id: "thread-colors",
+        name: "Thread Colors",
+        description: "Adds thread colors.",
+        enabled: false,
+      },
+    ]);
+    const settingsFile = path.join(root, "settings.json");
+    const lockFile = path.join(root, "update.lock");
+    const writer = `
+      const fs = require("node:fs");
+      const settingsFile = ${JSON.stringify(settingsFile)};
+      const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+      settings.extensions["multiple-accounts"].enabled = true;
+      process.stdout.write("ready\\n");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+      const temporary = settingsFile + ".writer.tmp";
+      fs.writeFileSync(temporary, JSON.stringify(settings));
+      fs.renameSync(temporary, settingsFile);
+    `;
+    const child = spawn(
+      "/usr/bin/lockf",
+      ["-k", lockFile, process.execPath, "-e", writer],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let standardError = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (data) => {
+      standardError += data;
+    });
+    const exitPromise = once(child, "exit");
+    const [ready] = await Promise.race([
+      once(child.stdout, "data"),
+      exitPromise.then(([code, signal]) => {
+        throw new Error(
+          `lock holder exited before it was ready: ${code ?? signal}\n${standardError}`,
+        );
+      }),
+    ]);
+    assert.equal(ready.toString(), "ready\n");
+
+    const started = Date.now();
+    setExtensionEnabled(root, versions, "thread-colors", true);
+    assert.ok(Date.now() - started >= 100);
+
+    const [code, signal] = await exitPromise;
+    assert.equal(code, 0, `lock holder failed: ${signal}\n${standardError}`);
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, "utf8")), {
+      schemaVersion: 1,
+      extensions: {
+        "multiple-accounts": { enabled: true },
+        "thread-colors": { enabled: true },
+      },
+    });
+  },
+);
+
 test("launch configuration replaces the complete extension set", () => {
   const { root, versions } = makeStore([
     {
@@ -242,4 +320,170 @@ test("invalid launch configuration is rejected and consumed", () => {
     /Invalid ChatGPTX launch configuration/,
   );
   assert.equal(fs.existsSync(configurationFile), false);
+});
+
+test("extension management requires its exact random authorization", () => {
+  const authorization = createExtensionManagerAuthorization();
+  const otherAuthorization = createExtensionManagerAuthorization();
+
+  assert.notEqual(authorization, otherAuthorization);
+  assert.doesNotThrow(() =>
+    assertExtensionManagerAuthorization(authorization, authorization),
+  );
+  for (const rejected of [
+    undefined,
+    null,
+    "",
+    otherAuthorization,
+    authorization.slice(1),
+  ]) {
+    assert.throws(
+      () =>
+        assertExtensionManagerAuthorization(authorization, rejected),
+      /not authorized/,
+    );
+  }
+});
+
+test("only the locked extension manager receives management authorization", () => {
+  const authorization = createExtensionManagerAuthorization();
+  const managerPath =
+    "/component-store/extensions/extensions/0.1.1/contents/main.js";
+  const code =
+    "module.exports = { activate(...arguments_) { return arguments_; } };";
+
+  function load(id, extensionPath) {
+    let registered;
+    const managerAuthorized = isAuthorizedExtensionManagerEntry(
+      { id, path: extensionPath },
+      managerPath,
+    );
+    const wrapped = wrapExtensionSource({
+      id,
+      code,
+      managerAuthorization: authorization,
+      managerAuthorized,
+    });
+    const result = vm.runInNewContext(wrapped, {
+      console,
+      window: {
+        __CGPTX_HOST__: {
+          registerExtension(extensionId, moduleExports) {
+            registered = { id: extensionId, moduleExports };
+          },
+        },
+      },
+    });
+    assert.equal(result, true);
+    assert(registered);
+    return { registered, wrapped };
+  }
+
+  const manager = load("extensions", managerPath);
+  assert.deepEqual(
+    Array.from(manager.registered.moduleExports.activate("api")),
+    ["api", authorization],
+  );
+
+  const ordinary = load("thread-colors", "/tmp/thread-colors/main.js");
+  assert.deepEqual(
+    Array.from(ordinary.registered.moduleExports.activate("api")),
+    ["api"],
+  );
+  assert.equal(ordinary.wrapped.includes(authorization), false);
+
+  const forgedManager = load("extensions", "/tmp/forged-manager/main.js");
+  assert.deepEqual(
+    Array.from(forgedManager.registered.moduleExports.activate("api")),
+    ["api"],
+  );
+  assert.equal(forgedManager.wrapped.includes(authorization), false);
+  assert.deepEqual(
+    orderExtensionEntries(
+      [
+        { id: "thread-colors", path: "/tmp/thread-colors/main.js" },
+        { id: "extensions", path: "/tmp/forged-manager/main.js" },
+      ],
+      managerPath,
+    ).map((entry) => entry.id),
+    ["thread-colors", "extensions"],
+  );
+});
+
+test("the manager activates before an earlier third-party id can replace the host", () => {
+  const authorization = createExtensionManagerAuthorization();
+  const managerPath =
+    "/component-store/extensions/extensions/0.1.1/contents/main.js";
+  const entries = [
+    {
+      id: "aaa-third-party",
+      path: "/tmp/aaa-third-party/main.js",
+      code: `module.exports = { activate() {
+        window.__CGPTX_HOST__ = {
+          registerExtension(id, moduleExports) {
+            globalThis.intercepted.push({
+              id,
+              source: moduleExports.activate.toString(),
+            });
+          },
+        };
+      } };`,
+    },
+    {
+      id: "extensions",
+      path: managerPath,
+      code: `module.exports = { activate(_api, received) {
+        globalThis.managerAuthorization = received;
+      } };`,
+    },
+    {
+      id: "zzz-third-party",
+      path: "/tmp/zzz-third-party/main.js",
+      code: "module.exports = { activate() {} };",
+    },
+  ];
+  const context = {
+    console,
+    intercepted: [],
+    managerAuthorization: undefined,
+    window: {
+      __CGPTX_HOST__: {
+        registerExtension(_id, moduleExports) {
+          moduleExports.activate({});
+        },
+      },
+    },
+  };
+
+  const ordered = orderExtensionEntries(entries, managerPath);
+  assert.deepEqual(
+    ordered.map((entry) => entry.id),
+    ["extensions", "aaa-third-party", "zzz-third-party"],
+  );
+  for (const entry of ordered) {
+    assert.equal(
+      vm.runInNewContext(
+        wrapExtensionSource({
+          ...entry,
+          managerAuthorization: authorization,
+          managerAuthorized: isAuthorizedExtensionManagerEntry(
+            entry,
+            managerPath,
+          ),
+        }),
+        context,
+      ),
+      true,
+    );
+  }
+
+  assert.equal(context.managerAuthorization, authorization);
+  assert.deepEqual(
+    context.intercepted.map((entry) => entry.id),
+    ["zzz-third-party"],
+  );
+  assert.equal(
+    context.intercepted.some((entry) => entry.source.includes(authorization)),
+    false,
+  );
 });

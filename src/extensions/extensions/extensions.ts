@@ -34,7 +34,7 @@ export function createExtensionRows(
 
 export async function activateExtensions(
   api: PlatformApi,
-  management: ExtensionManagement = createExtensionManagement(),
+  management: ExtensionManagement,
 ): Promise<readonly Disposable[]> {
   let installed = await management.list();
   const navigation = api.settings.transformCategories((categories) =>
@@ -87,8 +87,11 @@ export async function activateExtensions(
   return Object.freeze([navigation, groups, items]);
 }
 
-export function activate(api: PlatformApi): void {
-  void activateExtensions(api).catch((error) => {
+export function activate(api: PlatformApi, authorization: string): void {
+  void activateExtensions(
+    api,
+    createExtensionManagement(authorization),
+  ).catch((error) => {
     console.error(`[${EXTENSION_ID}] activation failed`, error);
   });
 }

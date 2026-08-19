@@ -234,6 +234,8 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const settingsNavigationRows = new Map();
   const settingsNavigationGroupTemplates = new Map();
   const settingsGroupModels = new Map();
+  const settingsControlHandlers = new WeakMap();
+  const settingsNativeControlElements = new WeakMap();
   let renderVersion = 0;
   let builtInCache = Object.freeze([]);
   let builtInViews = new Map();
@@ -2267,20 +2269,20 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function captureSettingsItem(row) {
     const labelMessage = messageOf(row.props?.label);
     const id = labelMessage?.id;
+    const control =
+      row.props?.control === undefined
+        ? undefined
+        : Object.freeze({ kind: "native" });
+    if (control) {
+      settingsNativeControlElements.set(control, row.props.control);
+    }
     return freezeSettingsItem({
       ...(typeof id === "string" ? { id } : {}),
       label: settingsValueText(row.props?.label),
       ...(row.props?.description === undefined
         ? {}
         : { description: settingsValueText(row.props.description) }),
-      ...(row.props?.control === undefined
-        ? {}
-        : {
-            control: Object.freeze({
-              kind: "native",
-              element: row.props.control,
-            }),
-          }),
+      ...(control ? { control } : {}),
       origin: "app",
     });
   }
@@ -2364,14 +2366,20 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     };
   }
 
-  function renderSettingsControl(control, itemId) {
+  function renderSettingsControl(control, itemId, itemOrigin) {
     if (!control || typeof control !== "object") return undefined;
-    if (control.kind === "native") return control.element;
+    if (control.kind === "native") {
+      return itemOrigin === "app"
+        ? settingsNativeControlElements.get(control)
+        : undefined;
+    }
+    const handler = settingsControlHandlers.get(control);
+    if (!handler || handler.extId !== itemOrigin) return undefined;
     if (control.kind === "toggle") {
       return native.jsx(native.SettingsToggle, {
         checked: control.checked,
         disabled: control.disabled,
-        onChange: safeSettingsCallback(control.onChange, itemId),
+        onChange: safeSettingsCallback(handler.callback, itemId),
         ariaLabel: control.ariaLabel,
       });
     }
@@ -2397,7 +2405,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
             {
               disabled: option.disabled,
               onSelect: safeSettingsCallback(
-                () => control.onChange(option.value),
+                () => handler.callback(option.value),
                 itemId,
               ),
               children: option.label,
@@ -2417,7 +2425,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
               : "secondary",
         disabled: control.disabled,
         size: "toolbar",
-        onClick: safeSettingsCallback(control.onClick, itemId),
+        onClick: safeSettingsCallback(handler.callback, itemId),
         children: control.label,
       });
     }
@@ -2439,7 +2447,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         "data-settings-target-id": item.id,
         label: item.label,
         description: item.description,
-        control: renderSettingsControl(item.control, item.id ?? item.label),
+        control: renderSettingsControl(
+          item.control,
+          item.id ?? item.label,
+          item.origin,
+        ),
       },
       item.id,
     );
@@ -4011,7 +4023,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return value;
   }
 
-  function makeSettingsUiApi() {
+  function makeSettingsUiApi(extId) {
     return Object.freeze({
       toggle(rawOptions) {
         const options = settingsOptions(rawOptions, "settings toggle");
@@ -4027,12 +4039,16 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         if (typeof options.onChange !== "function") {
           throw new TypeError("settings toggle onChange must be a function");
         }
-        return Object.freeze({
+        const control = Object.freeze({
           kind: "toggle",
           checked: options.checked,
           disabled: options.disabled === true,
-          onChange: options.onChange,
         });
+        settingsControlHandlers.set(control, {
+          extId,
+          callback: options.onChange,
+        });
+        return control;
       },
 
       select(rawOptions) {
@@ -4102,14 +4118,18 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ) {
           throw new TypeError("settings select disabled must be boolean");
         }
-        return Object.freeze({
+        const control = Object.freeze({
           kind: "select",
           value: options.value,
           placeholder: options.placeholder,
           options: Object.freeze(normalized),
           disabled: options.disabled === true,
-          onChange: options.onChange,
         });
+        settingsControlHandlers.set(control, {
+          extId,
+          callback: options.onChange,
+        });
+        return control;
       },
 
       button(rawOptions) {
@@ -4132,20 +4152,24 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         if (typeof options.onClick !== "function") {
           throw new TypeError("settings button onClick must be a function");
         }
-        return Object.freeze({
+        const control = Object.freeze({
           kind: "button",
           label: options.label,
           appearance: options.appearance ?? "secondary",
           disabled: options.disabled === true,
-          onClick: options.onClick,
         });
+        settingsControlHandlers.set(control, {
+          extId,
+          callback: options.onClick,
+        });
+        return control;
       },
     });
   }
 
   function makeSettingsApi(extId) {
     return Object.freeze({
-      ui: makeSettingsUiApi(),
+      ui: makeSettingsUiApi(extId),
 
       transformCategories(transform) {
         return settingsRegistration(

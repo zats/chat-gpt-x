@@ -36,7 +36,7 @@ Sections are tagged by durability:
 
 ## Versioning and updates [durable]
 
-- Sparkle auto-updates swap the whole bundle. **Version key = the app version string** (`CFBundleShortVersionString`) — the bindings directory name. The launcher treats a version change as "bindings stale" and triggers rebinding.
+- Sparkle auto-updates swap the whole bundle. **Version key = the app version string** (`CFBundleShortVersionString`) — the bindings directory name. Version discovery requests rebinding only when the latest Sparkle version has no exact binding directory. The development pin can identify an older build that implements the current ChatGPT API.
 
 ## Testing constraints [durable]
 

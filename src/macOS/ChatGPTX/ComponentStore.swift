@@ -76,6 +76,7 @@ struct PreparedExtensionSettings {
 
 struct ComponentStore {
     private static let schemaVersion = 1
+    private static let mutationLockFileName = "update.lock"
 
     let fileManager: FileManager
     let rootURL: URL
@@ -100,24 +101,24 @@ struct ComponentStore {
     }
 
     func prepareInstalled() throws -> PreparedComponentStore? {
-        try createStoreLayout()
+        try withExclusiveMutationLock {
+            let versionsLockURL = rootURL.appendingPathComponent(
+                "versions-lock.json"
+            )
+            guard fileManager.fileExists(atPath: versionsLockURL.path) else {
+                return nil
+            }
 
-        let versionsLockURL = rootURL.appendingPathComponent(
-            "versions-lock.json"
-        )
-        guard fileManager.fileExists(atPath: versionsLockURL.path) else {
-            return nil
+            let versions = try readVersions(at: versionsLockURL)
+            let extensions = try reconcileExtensionSettings(
+                for: versions.extensions
+            )
+            return PreparedComponentStore(
+                rootURL: rootURL,
+                versions: versions,
+                extensions: extensions
+            )
         }
-
-        let versions = try readVersions(at: versionsLockURL)
-        let extensions = try reconcileExtensionSettings(
-            for: versions.extensions
-        )
-        return PreparedComponentStore(
-            rootURL: rootURL,
-            versions: versions,
-            extensions: extensions
-        )
     }
 
     private func createStoreLayout() throws {
@@ -275,23 +276,23 @@ struct ComponentStore {
         _ operation: () throws -> Result
     ) throws -> Result {
         try createStoreLayout()
-        let lockURL = rootURL.appendingPathComponent("update.lock")
-        let descriptor = lockURL.path.withCString {
-            Darwin.open($0, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-        }
+        let lockURL = rootURL.appendingPathComponent(
+            Self.mutationLockFileName
+        )
+        var descriptor: Int32
+        repeat {
+            descriptor = lockURL.path.withCString {
+                Darwin.open(
+                    $0,
+                    O_CREAT | O_RDWR | O_EXLOCK,
+                    S_IRUSR | S_IWUSR
+                )
+            }
+        } while descriptor < 0 && errno == EINTR
         guard descriptor >= 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-        defer {
-            _ = Darwin.lockf(descriptor, F_ULOCK, 0)
-            _ = Darwin.close(descriptor)
-        }
-
-        while Darwin.lockf(descriptor, F_LOCK, 0) != 0 {
-            guard errno == EINTR else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
-        }
+        defer { _ = Darwin.close(descriptor) }
         return try operation()
     }
 
