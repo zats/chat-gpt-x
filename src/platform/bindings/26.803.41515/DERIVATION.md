@@ -159,17 +159,46 @@ a new complete capture, so it cannot drop sibling groups or keep removed
 groups. Pages without a native group anchor retain their original content and
 render contributed groups in a separate stable slot.
 
+Private weak maps assign every normalized category, pane, group, and item to
+ChatGPT or to the extension that contributed it. Public `origin` values are
+not ownership input. A later extension can pass or reorder a foreign
+descriptor, but a copied override resolves to the trusted original object and
+an omission reinserts it at its previous index. ChatGPT-owned descriptors stay
+editable and removable. Group-transform output also routes inline items
+through item normalization, so it cannot bypass item ownership. A foreign pane
+can move only inside its existing category; a cross-category copy is dropped
+before an omitted source category is restored.
+
 The public control factories render the stock `QS` controlled toggle, the
 `GU`/`Ia`/`qU.Item` dropdown composition, and `Mbt`. Source inspection of the
 stock General and Voice settings implementations confirmed the `QS`
 `checked`/`onChange` contract. Binding-owned weak maps keep extension handlers,
 native controls, and native React content out of public descriptors. An
-unchanged app row renders its original localized label and description
-elements. A changed row renders its transformed public strings. A control
-renders only for its owning extension row, or for its original app row.
-Select values remain exact strings, including the empty string used by native
-Default or None choices. Non-string values and malformed option records fail
-validation. Callback failures remain isolated.
+unchanged app category heading renders its captured localized React title; a
+changed category label renders its transformed public string, and disposal
+restores the exact native title. An unchanged app row renders its original
+localized label and description elements. A changed row renders its
+transformed public strings. Native group headers and footers use the same rule:
+unchanged title, description, and footer values retain their original React
+content, while transformed values render as public strings. A private
+item-control owner records the extension that assigned each effective control
+separately from the row owner. This lets an extension render its own control on
+a ChatGPT-owned row. Passing or copying the same descriptor preserves the
+current control owner, and assigning a control created by another extension
+drops that control. Native controls render only with their original app
+authority. Select values remain exact strings, including the empty string used
+by native Default or None choices. The native `gr.Header` contract names its
+secondary-text prop
+`subtitle`; the binding maps the public group `description` to that prop and
+preserves the original localized subtitle element when the public value is
+unchanged. Non-string values and malformed option records fail validation. An
+explicit `undefined` removes a mutable optional Settings field; disposing the
+transform restores the original public metadata and the native content
+available in that fixture. The matching 26.803.61601 live probe found no
+confirmed native group with a non-empty subtitle, so the suite verifies
+transformed subtitle rendering and removal, but not restoration of a localized
+subtitle element. That preservation follows the same captured value identity
+path as the live-verified title restoration. Callback failures remain isolated.
 
 Native search input props are `searchQuery` and `onQueryChange`; result props
 are `searchResults`, `onSelect`, `intl`, and `listRef`. The binding adds one
@@ -202,10 +231,17 @@ the stable content boundary for this build.
 
 The stable API suite covers new panes and groups, insertion into General,
 standard control descriptors, empty-string select values, malformed select
-input rejection, transformer ordering and isolation, namespace enforcement,
-invalidation, disposal, and deep-link failure behavior. The version-specific
-UI suite covers native rendering, exact empty-string select callbacks,
-General-pane insertion, exact native-group snapshot replacement, child-only
+input rejection, built-in row control and group metadata transforms,
+transformer ordering and isolation, namespace enforcement, invalidation,
+disposal, and deep-link failure behavior. The version-specific UI suite uses
+concurrent `foo` and `foo.bar` APIs to verify copied, omitted, cross-category
+moved, and distinct owned categories, panes, groups, and items without
+duplicate pane IDs. It also assigns an extension button to a ChatGPT-owned
+row, passes a copied descriptor through a later extension with a forged public
+origin, and verifies that the button still invokes only the assigning
+extension. It also covers native rendering, exact empty-string
+select callbacks, General-pane insertion, transformed built-in category and
+group metadata, exact native-group snapshot replacement, child-only
 recapture, loading and stale-page rejection, deep links into an unvisited
 native pane and the titleless Profile pane, sidebar navigation from Appearance,
 all four search text levels, package title/description search for the Extensions
@@ -215,8 +251,9 @@ Failure signatures include missing category captures, a missing
 `data-settings-panel-slug`, an empty `#settings-search` result for contributed
 text, a custom pane that stays on the previous native content after selection,
 a row whose native `id` does not match its public item ID, an unchanged app row
-whose label is no longer a React element, or a control that does not use the
-stock component exports above.
+whose label is no longer a React element, a transformed category that keeps
+its native heading, or a control that does not use the stock component exports
+above.
 
 ## authentication
 
@@ -270,10 +307,10 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
 
 Results:
 
-- Launcher unit tests: `60/60`.
+- Launcher unit tests: `66/66`.
 - Extension and shared-utility unit tests: `35/35`.
 - Stable public API assertions: `44/44`.
-- Current native UI suite: `84/84`.
+- Current native UI suite: `91/91`.
 - The Multiple Accounts extension switched to another account and restored the
   original account.
 - Shipped-extension composition with the API suite enabled: passed.

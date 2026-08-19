@@ -1011,6 +1011,8 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
                 title: "API Settings",
                 description: "Mechanical settings API fixture.",
                 keywords: ["fixture-category"],
+                disabled: false,
+                external: false,
               },
             ],
           }
@@ -1101,6 +1103,112 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
     group?.items[0]?.description === "Searchable toggle description." &&
       group.items[0]?.keywords?.includes("fixture-toggle"),
     "item search text is preserved",
+  );
+
+  const clearPaneMetadata = api.settings.transformCategories((categories) =>
+    categories.map((category) => ({
+      ...category,
+      panes: category.panes.map((candidate) =>
+        candidate.id === SETTINGS_PANE_ID
+          ? {
+              ...candidate,
+              title: undefined,
+              description: undefined,
+              keywords: undefined,
+              disabled: undefined,
+              external: undefined,
+              origin: "forged",
+            }
+          : candidate,
+      ),
+    })),
+  );
+  const clearGroupMetadata = api.settings.transformGroups((current, pane) =>
+    pane.id === SETTINGS_PANE_ID
+      ? current.map((candidate) =>
+          candidate.id === SETTINGS_GROUP_ID
+            ? {
+                ...candidate,
+                title: undefined,
+                description: undefined,
+                footer: undefined,
+                keywords: undefined,
+                origin: "forged",
+              }
+            : candidate,
+        )
+      : current,
+  );
+  const clearItemMetadata = api.settings.transformItems((current, context) =>
+    context.group.id === SETTINGS_GROUP_ID
+      ? current.map((candidate) =>
+          candidate.id === SETTINGS_TOGGLE_ID
+            ? {
+                ...candidate,
+                description: undefined,
+                keywords: undefined,
+                control: undefined,
+                origin: "forged",
+              }
+            : candidate,
+        )
+      : current,
+  );
+  activeTestDisposables?.push(
+    clearPaneMetadata,
+    clearGroupMetadata,
+    clearItemMetadata,
+  );
+
+  const clearedPane = settingPane(SETTINGS_PANE_ID);
+  const clearedGroup = api.settings.getGroups(SETTINGS_PANE_ID)[0];
+  const clearedItem = clearedGroup?.items.find(
+    (candidate) => candidate.id === SETTINGS_TOGGLE_ID,
+  );
+  assert(
+    clearedPane !== undefined &&
+      clearedPane.title === undefined &&
+      clearedPane.description === undefined &&
+      clearedPane.keywords === undefined &&
+      clearedPane.disabled === undefined &&
+      clearedPane.external === undefined &&
+      clearedPane.origin === EXT_ID &&
+      clearedGroup !== undefined &&
+      clearedGroup.title === undefined &&
+      clearedGroup.description === undefined &&
+      clearedGroup.footer === undefined &&
+      clearedGroup.keywords === undefined &&
+      clearedGroup.origin === EXT_ID &&
+      clearedItem !== undefined &&
+      clearedItem.description === undefined &&
+      clearedItem.keywords === undefined &&
+      clearedItem.control === undefined &&
+      clearedItem.origin === EXT_ID,
+    "explicit undefined clears optional settings fields without changing ownership",
+  );
+
+  clearItemMetadata.dispose();
+  clearGroupMetadata.dispose();
+  clearPaneMetadata.dispose();
+  const restoredPane = settingPane(SETTINGS_PANE_ID);
+  const restoredGroup = api.settings.getGroups(SETTINGS_PANE_ID)[0];
+  const restoredItem = restoredGroup?.items.find(
+    (candidate) => candidate.id === SETTINGS_TOGGLE_ID,
+  );
+  assert(
+    restoredPane?.title === "API Settings" &&
+      restoredPane.description === "Mechanical settings API fixture." &&
+      restoredPane.keywords?.includes("fixture-category") &&
+      restoredPane.disabled === false &&
+      restoredPane.external === false &&
+      restoredGroup?.title === "General" &&
+      restoredGroup.description === "Fixture group description." &&
+      restoredGroup.footer === "Fixture group footer." &&
+      restoredGroup.keywords?.includes("fixture-group") &&
+      restoredItem?.description === "Searchable toggle description." &&
+      restoredItem.keywords?.includes("fixture-toggle") &&
+      restoredItem.control !== undefined,
+    "disposing the clearing transforms restores optional settings fields",
   );
 });
 
@@ -1236,6 +1344,31 @@ test("settings: inserts a searchable fixture into an existing pane", async () =>
     ),
     "the fixture group is present in the existing native pane",
   );
+  const builtInCategory = api.settings
+    .getCategories()
+    .find((category) => category.id === "integrations");
+  const originalBuiltInCategoryLabel = builtInCategory?.label;
+  const categoryMetadata = api.settings.transformCategories((categories) =>
+    categories.map((category) =>
+      category.id === builtInCategory?.id
+        ? { ...category, label: "Transformed built-in category" }
+        : category,
+    ),
+  );
+  const transformedBuiltInCategory = api.settings
+    .getCategories()
+    .find((category) => category.id === builtInCategory?.id);
+  categoryMetadata.dispose();
+  const restoredBuiltInCategory = api.settings
+    .getCategories()
+    .find((category) => category.id === builtInCategory?.id);
+  assert(
+    typeof originalBuiltInCategoryLabel === "string" &&
+      transformedBuiltInCategory?.label ===
+        "Transformed built-in category" &&
+      restoredBuiltInCategory?.label === originalBuiltInCategoryLabel,
+    "built-in category labels are changed and restored through the public model",
+  );
   const group = api.settings
     .getGroups(SETTINGS_BUILT_IN_PANE_ID)
     .find((candidate) => candidate.id === SETTINGS_EXISTING_GROUP_ID);
@@ -1243,6 +1376,117 @@ test("settings: inserts a searchable fixture into an existing pane", async () =>
     group?.items[0]?.label === "Existing pane fixture" &&
       group.items[0]?.description?.includes("built-in pane"),
     "the inserted row exposes searchable title and description text",
+  );
+
+  const builtInItem = api.settings
+    .getGroups(SETTINGS_BUILT_IN_PANE_ID)
+    .flatMap((candidate) => candidate.items)
+    .find(
+      (candidate) =>
+        candidate.origin === "app" && typeof candidate.id === "string",
+    );
+  const originalBuiltInControl = builtInItem?.control;
+  const replacementBuiltInControl = api.settings.ui.button({
+    label: "Replacement built-in control",
+    onClick() {},
+  });
+  const builtInControl = api.settings.transformItems((current, context) =>
+    context.pane.id === SETTINGS_BUILT_IN_PANE_ID
+      ? current.map((candidate) =>
+          candidate.id === builtInItem?.id
+            ? { ...candidate, control: replacementBuiltInControl }
+            : candidate,
+        )
+      : current,
+  );
+  activeTestDisposables?.push(builtInControl);
+  const transformedBuiltInItem = api.settings
+    .getGroups(SETTINGS_BUILT_IN_PANE_ID)
+    .flatMap((candidate) => candidate.items)
+    .find((candidate) => candidate.id === builtInItem?.id);
+  builtInControl.dispose();
+  const restoredBuiltInItem = api.settings
+    .getGroups(SETTINGS_BUILT_IN_PANE_ID)
+    .flatMap((candidate) => candidate.items)
+    .find((candidate) => candidate.id === builtInItem?.id);
+  assert(
+    builtInItem !== undefined &&
+      transformedBuiltInItem?.origin === "app" &&
+      transformedBuiltInItem.control === replacementBuiltInControl &&
+      restoredBuiltInItem?.control === originalBuiltInControl,
+    "an extension control replaces and restores a built-in row control",
+  );
+
+  const builtInGroup = api.settings
+    .getGroups(SETTINGS_BUILT_IN_PANE_ID)
+    .find(
+      (candidate) =>
+        candidate.origin === "app" && typeof candidate.id === "string",
+    );
+  const builtInGroupId = builtInGroup?.id ?? "missing-built-in-group";
+  const originalBuiltInDescription = builtInGroup?.description;
+  const originalBuiltInFooter = builtInGroup?.footer;
+  const originalBuiltInKeywords = builtInGroup?.keywords;
+  let clearBuiltInMetadata = false;
+  const metadata = api.settings.transformGroups((current, pane) =>
+    pane.id === SETTINGS_BUILT_IN_PANE_ID
+      ? current.map((candidate) =>
+          candidate.id === builtInGroupId
+            ? clearBuiltInMetadata
+              ? {
+                  ...candidate,
+                  title: undefined,
+                  description: undefined,
+                  footer: undefined,
+                  keywords: undefined,
+                }
+              : {
+                ...candidate,
+                title: "Transformed built-in title",
+                description: "Transformed built-in description",
+                footer: "Transformed built-in footer",
+                keywords: ["transformed-built-in-keyword"],
+              }
+            : candidate,
+        )
+      : current,
+  );
+  const metadataPassThrough = api.settings.transformGroups((current) => current);
+  activeTestDisposables?.push(metadata, metadataPassThrough);
+  const transformedBuiltInGroup = api.settings
+    .getGroups(SETTINGS_BUILT_IN_PANE_ID)
+    .find((candidate) => candidate.id === builtInGroupId);
+  clearBuiltInMetadata = true;
+  metadata.invalidate();
+  const clearedBuiltInGroup = api.settings
+    .getGroups(SETTINGS_BUILT_IN_PANE_ID)
+    .find((candidate) => candidate.id === builtInGroupId);
+  metadataPassThrough.dispose();
+  metadata.dispose();
+  const restoredBuiltInGroup = api.settings
+    .getGroups(SETTINGS_BUILT_IN_PANE_ID)
+    .find((candidate) => candidate.id === builtInGroupId);
+  assert(
+    builtInGroup?.id !== undefined &&
+      transformedBuiltInGroup?.title === "Transformed built-in title" &&
+      transformedBuiltInGroup.description ===
+        "Transformed built-in description" &&
+      transformedBuiltInGroup.footer === "Transformed built-in footer" &&
+      transformedBuiltInGroup.keywords?.includes(
+        "transformed-built-in-keyword",
+      ) &&
+      clearedBuiltInGroup !== undefined &&
+      clearedBuiltInGroup.title === undefined &&
+      clearedBuiltInGroup.description === undefined &&
+      clearedBuiltInGroup.footer === undefined &&
+      clearedBuiltInGroup.keywords === undefined &&
+      restoredBuiltInGroup !== undefined &&
+      restoredBuiltInGroup.title === builtInGroup.title &&
+      restoredBuiltInGroup.description === originalBuiltInDescription &&
+      restoredBuiltInGroup.footer === originalBuiltInFooter &&
+      JSON.stringify(restoredBuiltInGroup.keywords) ===
+        JSON.stringify(originalBuiltInKeywords),
+    "built-in group metadata is changed and removed through the public model",
   );
 });
 

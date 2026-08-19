@@ -248,8 +248,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const settingsNavigationGroupTemplates = new Map();
   const settingsGroupModels = new Map();
   const settingsPaneRenderCounts = new Map();
+  const settingsCategoryOwners = new WeakMap();
+  const settingsPaneOwners = new WeakMap();
+  const settingsGroupOwners = new WeakMap();
+  const settingsItemOwners = new WeakMap();
+  const settingsItemControlOwners = new WeakMap();
   const settingsControlHandlers = new WeakMap();
   const settingsNativeControlElements = new WeakMap();
+  const settingsNativeCategoryViews = new WeakMap();
+  const settingsNativeGroupViews = new WeakMap();
   const settingsNativeItemContent = new WeakMap();
   const debugSettingsSnapshotRequests = new Map();
   let renderVersion = 0;
@@ -751,49 +758,174 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       : undefined;
   }
 
-  function freezeSettingsItem(item) {
+  function freezeSettingsItem(
+    item,
+    owner = settingsItemOwners.get(item),
+    nativeSource = item,
+    controlOwner = settingsItemControlOwners.get(nativeSource),
+  ) {
+    if (
+      owner !== undefined &&
+      settingsItemOwners.get(item) === owner &&
+      settingsItemControlOwners.get(item) === controlOwner &&
+      Object.isFrozen(item)
+    ) {
+      return item;
+    }
     const descriptor = Object.freeze({
       ...item,
       ...(item.keywords === undefined
         ? {}
         : { keywords: freezeStrings(item.keywords) }),
     });
-    const nativeContent = settingsNativeItemContent.get(item);
+    if (owner !== undefined) settingsItemOwners.set(descriptor, owner);
+    if (item.control !== undefined && controlOwner !== undefined) {
+      settingsItemControlOwners.set(descriptor, controlOwner);
+    }
+    const nativeContent = settingsNativeItemContent.get(nativeSource);
     if (nativeContent) settingsNativeItemContent.set(descriptor, nativeContent);
     return descriptor;
   }
 
-  function freezeSettingsGroup(group) {
-    return Object.freeze({
+  function freezeSettingsGroup(
+    group,
+    owner = settingsGroupOwners.get(group),
+    nativeSource = group,
+  ) {
+    if (
+      owner !== undefined &&
+      settingsGroupOwners.get(group) === owner &&
+      Object.isFrozen(group)
+    ) {
+      return group;
+    }
+    const descriptor = Object.freeze({
       ...group,
       ...(group.keywords === undefined
         ? {}
         : { keywords: freezeStrings(group.keywords) }),
-      items: Object.freeze(group.items.map(freezeSettingsItem)),
+      items: Object.freeze(group.items.map((item) => freezeSettingsItem(item))),
     });
+    if (owner !== undefined) settingsGroupOwners.set(descriptor, owner);
+    const nativeView = settingsNativeGroupViews.get(nativeSource);
+    if (nativeView) settingsNativeGroupViews.set(descriptor, nativeView);
+    return descriptor;
   }
 
-  function freezeSettingsPane(pane) {
-    return Object.freeze({
+  function freezeSettingsPane(pane, owner = settingsPaneOwners.get(pane)) {
+    if (
+      owner !== undefined &&
+      settingsPaneOwners.get(pane) === owner &&
+      Object.isFrozen(pane)
+    ) {
+      return pane;
+    }
+    const descriptor = Object.freeze({
       ...pane,
       ...(pane.keywords === undefined
         ? {}
         : { keywords: freezeStrings(pane.keywords) }),
     });
+    if (owner !== undefined) settingsPaneOwners.set(descriptor, owner);
+    return descriptor;
   }
 
-  function freezeSettingsCategory(category) {
-    return Object.freeze({
+  function freezeSettingsCategory(
+    category,
+    owner = settingsCategoryOwners.get(category),
+    nativeSource = category,
+  ) {
+    if (
+      owner !== undefined &&
+      settingsCategoryOwners.get(category) === owner &&
+      Object.isFrozen(category)
+    ) {
+      return category;
+    }
+    const descriptor = Object.freeze({
       ...category,
       ...(category.keywords === undefined
         ? {}
         : { keywords: freezeStrings(category.keywords) }),
-      panes: Object.freeze(category.panes.map(freezeSettingsPane)),
+      panes: Object.freeze(
+        category.panes.map((pane) => freezeSettingsPane(pane)),
+      ),
     });
+    if (owner !== undefined) settingsCategoryOwners.set(descriptor, owner);
+    const nativeView = settingsNativeCategoryViews.get(nativeSource);
+    if (nativeView) settingsNativeCategoryViews.set(descriptor, nativeView);
+    return descriptor;
   }
 
   function freezeSettingsCategories(categories) {
-    return Object.freeze(categories.map(freezeSettingsCategory));
+    return Object.freeze(
+      categories.map((category) => freezeSettingsCategory(category)),
+    );
+  }
+
+  function canChangeSettingsDescriptor(owners, descriptor, extId) {
+    const owner = owners.get(descriptor);
+    return owner === "app" || owner === extId;
+  }
+
+  function mergeSettingsDescriptor(base, override) {
+    const merged = { ...base };
+    for (const [key, value] of Object.entries(override)) {
+      if (key === "origin") continue;
+      if (value === undefined) delete merged[key];
+      else merged[key] = value;
+    }
+    merged.origin = base.origin;
+    return merged;
+  }
+
+  function normalizeSettingsItemControl(existing, raw, extId) {
+    const previousControl = existing?.control;
+    const previousOwner = existing
+      ? settingsItemControlOwners.get(existing)
+      : undefined;
+    if (
+      !Object.prototype.hasOwnProperty.call(raw, "control") ||
+      raw.control === previousControl
+    ) {
+      return { control: previousControl, owner: previousOwner };
+    }
+    if (raw.control === undefined) {
+      return { control: undefined, owner: undefined };
+    }
+    if (settingsControlHandlers.get(raw.control)?.extId === extId) {
+      return { control: raw.control, owner: extId };
+    }
+    warn(
+      "dropping settings control not created by transformer extension: " +
+        (typeof raw.id === "string" ? raw.id : "unidentified item"),
+    );
+    return { control: undefined, owner: undefined };
+  }
+
+  function restoreForeignSettingsDescriptors(
+    previous,
+    normalized,
+    seen,
+    owners,
+    extId,
+    kind,
+  ) {
+    for (const [index, descriptor] of previous.entries()) {
+      const id = descriptor.id;
+      if (
+        typeof id !== "string" ||
+        seen.has(id) ||
+        canChangeSettingsDescriptor(owners, descriptor, extId)
+      ) {
+        continue;
+      }
+      normalized.splice(Math.min(index, normalized.length), 0, descriptor);
+      seen.add(id);
+      warn(
+        `restoring omitted settings ${kind} owned by another extension: ${id}`,
+      );
+    }
   }
 
   function baseSettingsCategories() {
@@ -819,6 +951,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       [...builtIns, ...previous].map((category) => [category.id, category]),
     );
     const existingPanes = settingsPanesById([...builtIns, ...previous]);
+    const existingPaneParents = new WeakMap();
+    for (const category of [...builtIns, ...previous]) {
+      for (const pane of category.panes) {
+        existingPaneParents.set(pane, category.id);
+      }
+    }
     const seenCategories = new Set();
     const seenPanes = new Set();
     const normalized = [];
@@ -839,11 +977,23 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         );
         continue;
       }
-      if (typeof rawCategory.label !== "string") continue;
-      if (!Array.isArray(rawCategory.panes)) continue;
+      const canChangeCategory =
+        !existingCategory ||
+        canChangeSettingsDescriptor(
+          settingsCategoryOwners,
+          existingCategory,
+          extId,
+        );
+      if (canChangeCategory && typeof rawCategory.label !== "string") continue;
+      const rawPanes = Array.isArray(rawCategory.panes)
+        ? rawCategory.panes
+        : canChangeCategory
+          ? null
+          : existingCategory.panes;
+      if (!rawPanes) continue;
 
       const panes = [];
-      for (const rawPane of rawCategory.panes) {
+      for (const rawPane of rawPanes) {
         if (!rawPane || typeof rawPane !== "object") continue;
         if (typeof rawPane.id !== "string" || rawPane.id.length === 0) continue;
         if (seenPanes.has(rawPane.id)) {
@@ -857,20 +1007,71 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           );
           continue;
         }
-        if (typeof rawPane.label !== "string") continue;
-        const pane = existingPane
-          ? mergeDescriptor(existingPane, rawPane)
-          : { ...rawPane, origin: extId };
-        panes.push(freezeSettingsPane(pane));
+        const canChangePane =
+          !existingPane ||
+          canChangeSettingsDescriptor(settingsPaneOwners, existingPane, extId);
+        if (
+          existingPane &&
+          !canChangePane &&
+          existingPaneParents.get(existingPane) !== rawCategory.id
+        ) {
+          warn(
+            "dropping settings pane moved from its owner category: " +
+              rawPane.id,
+          );
+          continue;
+        }
+        if (canChangePane && typeof rawPane.label !== "string") continue;
+        const pane = !existingPane
+          ? freezeSettingsPane({ ...rawPane, origin: extId }, extId)
+          : !canChangePane || rawPane === existingPane
+            ? existingPane
+            : freezeSettingsPane(
+                mergeSettingsDescriptor(existingPane, rawPane),
+                settingsPaneOwners.get(existingPane),
+              );
+        panes.push(pane);
         seenPanes.add(rawPane.id);
       }
+      restoreForeignSettingsDescriptors(
+        existingCategory?.panes ?? [],
+        panes,
+        seenPanes,
+        settingsPaneOwners,
+        extId,
+        "pane",
+      );
 
-      const category = existingCategory
-        ? mergeDescriptor(existingCategory, { ...rawCategory, panes })
-        : { ...rawCategory, panes, origin: extId };
-      normalized.push(freezeSettingsCategory(category));
+      const category = !existingCategory
+        ? freezeSettingsCategory(
+            { ...rawCategory, panes, origin: extId },
+            extId,
+          )
+        : !canChangeCategory &&
+            panes.length === existingCategory.panes.length &&
+            panes.every((pane, index) => pane === existingCategory.panes[index])
+          ? existingCategory
+          : freezeSettingsCategory(
+              canChangeCategory
+                ? mergeSettingsDescriptor(existingCategory, {
+                    ...rawCategory,
+                    panes,
+                  })
+                : { ...existingCategory, panes },
+              settingsCategoryOwners.get(existingCategory),
+              existingCategory,
+            );
+      normalized.push(category);
       seenCategories.add(rawCategory.id);
     }
+    restoreForeignSettingsDescriptors(
+      previous,
+      normalized,
+      seenCategories,
+      settingsCategoryOwners,
+      extId,
+      "category",
+    );
     return freezeSettingsCategories(normalized);
   }
 
@@ -930,17 +1131,45 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         warn("dropping duplicate settings group id: " + raw.id);
         continue;
       }
-      const existing = builtInsById.get(raw.id) ?? previousById.get(raw.id);
+      const existing = previousById.get(raw.id) ?? builtInsById.get(raw.id);
       if (!existing && !raw.id.startsWith(extId + ".")) {
         warn("dropping settings group with foreign-namespace id: " + raw.id);
         continue;
       }
+      if (
+        existing &&
+        (!canChangeSettingsDescriptor(settingsGroupOwners, existing, extId) ||
+          raw === existing)
+      ) {
+        groups.push(existing);
+        seen.add(raw.id);
+        continue;
+      }
+      const items = normalizeSettingsItems(
+        existing?.items ?? Object.freeze([]),
+        raw.items,
+        extId,
+      );
       const group = existing
-        ? mergeDescriptor(existing, raw)
-        : { ...raw, origin: extId };
-      groups.push(freezeSettingsGroup(group));
+        ? mergeSettingsDescriptor(existing, { ...raw, items })
+        : { ...raw, items, origin: extId };
+      groups.push(
+        freezeSettingsGroup(
+          group,
+          existing ? settingsGroupOwners.get(existing) : extId,
+          existing ?? group,
+        ),
+      );
       seen.add(raw.id);
     }
+    restoreForeignSettingsDescriptors(
+      previous,
+      groups,
+      seen,
+      settingsGroupOwners,
+      extId,
+      "group",
+    );
     return Object.freeze(groups);
   }
 
@@ -970,18 +1199,40 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         warn("dropping settings item with foreign-namespace id: " + raw.id);
         continue;
       }
-      if (raw === existing) {
+      if (
+        existing &&
+        (!canChangeSettingsDescriptor(settingsItemOwners, existing, extId) ||
+          raw === existing)
+      ) {
         items.push(existing);
         seen.add(raw.id);
         continue;
       }
       if (typeof raw.label !== "string") continue;
+      const control = normalizeSettingsItemControl(existing, raw, extId);
       const item = existing
-        ? mergeDescriptor(existing, raw)
+        ? mergeSettingsDescriptor(existing, raw)
         : { ...raw, origin: extId };
-      items.push(freezeSettingsItem(item));
+      if (control.control === undefined) delete item.control;
+      else item.control = control.control;
+      items.push(
+        freezeSettingsItem(
+          item,
+          existing ? settingsItemOwners.get(existing) : extId,
+          existing ?? item,
+          control.owner,
+        ),
+      );
       seen.add(raw.id);
     }
+    restoreForeignSettingsDescriptors(
+      previous,
+      items,
+      seen,
+      settingsItemOwners,
+      extId,
+      "item",
+    );
     return Object.freeze(items);
   }
 
@@ -1033,7 +1284,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
             );
           }
         }
-        return freezeSettingsGroup({ ...group, items });
+        return freezeSettingsGroup(
+          { ...group, items },
+          settingsGroupOwners.get(group),
+          group,
+        );
       }),
     );
   }
@@ -2187,12 +2442,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ? button.props["aria-label"]
         : labelMessage?.defaultMessage ?? slug;
     return {
-      pane: freezeSettingsPane({
-        id: "codex.settings." + slug,
-        label,
-        disabled: button.props.disabled === true,
-        origin: "app",
-      }),
+      pane: freezeSettingsPane(
+        {
+          id: "codex.settings." + slug,
+          label,
+          disabled: button.props.disabled === true,
+          origin: "app",
+        },
+        "app",
+      ),
       button,
     };
   }
@@ -2234,13 +2492,22 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       }
       if (confirmedChanged) scheduleSettingsRefresh();
     }
-    const title = messageOf(source.props?.title);
-    const category = freezeSettingsCategory({
-      id: categoryId,
-      label: title?.defaultMessage ?? categoryId,
-      panes,
-      origin: "app",
-    });
+    const nativeTitle = source.props?.title;
+    const title = messageOf(nativeTitle);
+    const label = title?.defaultMessage ?? categoryId;
+    const category = freezeSettingsCategory(
+      {
+        id: categoryId,
+        label,
+        panes,
+        origin: "app",
+      },
+      "app",
+    );
+    settingsNativeCategoryViews.set(
+      category,
+      Object.freeze({ label, title: nativeTitle }),
+    );
     const previous = builtInSettingsCategories.get(categoryId);
     builtInSettingsCategories.set(categoryId, category);
     if (
@@ -2261,7 +2528,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       "data-settings-panel-slug",
     );
     if (!sourceButton) return null;
-    const isBuiltIn = pane.origin === "app";
+    const isBuiltIn = settingsPaneOwners.get(pane) === "app";
     const sourceOnClick = sourceButton.props.onClick;
     const button = native.jsx(
       sourceButton.type,
@@ -2323,12 +2590,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       .filter(Boolean);
     const extras =
       category.id === "personal" ? originalChildren.slice(1) : [];
+    const nativeView = settingsNativeCategoryViews.get(category);
     return native.jsx(
       source.type,
       {
         ...source.props,
         title:
-          category.origin === "app" ? source.props.title : category.label,
+          nativeView && category.label === nativeView.label
+            ? nativeView.title
+            : category.label,
         children: [rows, ...extras],
       },
       category.id,
@@ -2363,14 +2633,18 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return messageOf(value)?.defaultMessage ?? "";
   }
 
-  function settingsRowsElement(value) {
-    if (!isElement(value)) return null;
-    if (value.type === native.SettingsRows) return value;
+  function settingsElement(value, type) {
+    if (!type || !isElement(value)) return null;
+    if (value.type === type) return value;
     for (const child of flattenedChildren(value.props?.children)) {
-      const found = settingsRowsElement(child);
+      const found = settingsElement(child, type);
       if (found) return found;
     }
     return null;
+  }
+
+  function settingsRowsElement(value) {
+    return settingsElement(value, native.SettingsRows);
   }
 
   function captureSettingsItem(row) {
@@ -2383,20 +2657,27 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     if (control) {
       settingsNativeControlElements.set(control, row.props.control);
     }
-    const item = freezeSettingsItem({
-      ...(typeof id === "string" ? { id } : {}),
-      label: settingsValueText(row.props?.label),
-      ...(row.props?.description === undefined
-        ? {}
-        : { description: settingsValueText(row.props.description) }),
-      ...(control ? { control } : {}),
-      origin: "app",
-    });
+    const item = freezeSettingsItem(
+      {
+        ...(typeof id === "string" ? { id } : {}),
+        label: settingsValueText(row.props?.label),
+        ...(row.props?.description === undefined
+          ? {}
+          : { description: settingsValueText(row.props.description) }),
+        ...(control ? { control } : {}),
+        origin: "app",
+      },
+      "app",
+      undefined,
+      control ? "app" : undefined,
+    );
     settingsNativeItemContent.set(
       item,
       Object.freeze({
         label: row.props?.label,
+        labelText: item.label,
         description: row.props?.description,
+        descriptionText: item.description,
       }),
     );
     return item;
@@ -2417,9 +2698,8 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   function captureNativeSettingsGroup(source) {
-    const header = flattenedChildren(source.props?.children).find(
-      (child) => isElement(child) && child.type === native.SettingsGroup.Header,
-    );
+    const header = settingsElement(source, native.SettingsGroup.Header);
+    const footer = settingsElement(source, native.SettingsGroup.Footer);
     const titleMessage = messageOf(header?.props?.title);
     const id = titleMessage?.id;
     const rows = settingsRowsElement(source);
@@ -2436,18 +2716,26 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ),
       ].join("|");
     const items = Object.freeze(rowElements.map(captureSettingsItem));
-    const descriptor = freezeSettingsGroup({
-      ...(typeof id === "string" ? { id } : {}),
-      ...(header?.props?.title === undefined
-        ? {}
-        : { title: settingsValueText(header.props.title) }),
-      ...(header?.props?.description === undefined
-        ? {}
-        : { description: settingsValueText(header.props.description) }),
-      items,
-      origin: "app",
-    });
-    return { source, rows, rowElements, descriptor, key };
+    const descriptor = freezeSettingsGroup(
+      {
+        ...(typeof id === "string" ? { id } : {}),
+        ...(header?.props?.title === undefined
+          ? {}
+          : { title: settingsValueText(header.props.title) }),
+        ...(header?.props?.subtitle === undefined
+          ? {}
+          : { description: settingsValueText(header.props.subtitle) }),
+        ...(footer?.props?.children === undefined
+          ? {}
+          : { footer: settingsValueText(footer.props.children) }),
+        items,
+        origin: "app",
+      },
+      "app",
+    );
+    const view = { source, header, footer, rows, rowElements, descriptor, key };
+    settingsNativeGroupViews.set(descriptor, view);
+    return view;
   }
 
   function finalizeNativeSettingsGroups(paneId, captures, confirmsPage) {
@@ -2516,17 +2804,23 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           children: rows,
         }),
       }),
-      descriptor: freezeSettingsGroup({
-        id,
-        items: Object.freeze([
-          freezeSettingsItem({
-            id: `${id}.item`,
-            label: id,
-            origin: "app",
-          }),
-        ]),
-        origin: "app",
-      }),
+      descriptor: freezeSettingsGroup(
+        {
+          id,
+          items: Object.freeze([
+            freezeSettingsItem(
+              {
+                id: `${id}.item`,
+                label: id,
+                origin: "app",
+              },
+              "app",
+            ),
+          ]),
+          origin: "app",
+        },
+        "app",
+      ),
     };
   }
 
@@ -2597,7 +2891,8 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function settingsGroupView(model, group) {
     return typeof group.id === "string"
       ? model.viewsById.get(group.id)
-      : model.viewsByDescriptor.get(group);
+      : settingsNativeGroupViews.get(group) ??
+          model.viewsByDescriptor.get(group);
   }
 
   function safeSettingsCallback(handler, id) {
@@ -2612,15 +2907,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     };
   }
 
-  function renderSettingsControl(control, itemId, itemOrigin) {
+  function renderSettingsControl(control, itemId, controlOwner) {
     if (!control || typeof control !== "object") return undefined;
     if (control.kind === "native") {
-      return itemOrigin === "app"
+      return controlOwner === "app"
         ? settingsNativeControlElements.get(control)
         : undefined;
     }
     const handler = settingsControlHandlers.get(control);
-    if (!handler || handler.extId !== itemOrigin) return undefined;
+    if (!handler || handler.extId !== controlOwner) return undefined;
     if (control.kind === "toggle") {
       return native.jsx(native.SettingsToggle, {
         checked: control.checked,
@@ -2685,46 +2980,149 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
             (row) => messageOf(row.props?.label)?.id === item.id,
           )
         : null;
+    const itemOwner = settingsItemOwners.get(item);
+    const controlOwner = settingsItemControlOwners.get(item);
     const nativeContent =
-      item.origin === "app" ? settingsNativeItemContent.get(item) : undefined;
+      itemOwner === "app" ? settingsNativeItemContent.get(item) : undefined;
     return native.jsx(
       native.SettingsRow,
       {
         ...(view?.props ?? {}),
         id: item.id,
         "data-settings-target-id": item.id,
-        label: nativeContent ? nativeContent.label : item.label,
-        description: nativeContent
-          ? nativeContent.description
-          : item.description,
+        label:
+          nativeContent && item.label === nativeContent.labelText
+            ? nativeContent.label
+            : item.label,
+        description:
+          nativeContent &&
+          item.description === nativeContent.descriptionText
+            ? nativeContent.description
+            : item.description,
         control: renderSettingsControl(
           item.control,
           item.id ?? item.label,
-          item.origin,
+          controlOwner,
         ),
       },
       item.id,
     );
   }
 
-  function replaceSettingsRows(value, rows) {
+  function nativeSettingsMetadata(publicValue, originalValue, nativeValue) {
+    return publicValue === originalValue ? nativeValue : publicValue;
+  }
+
+  function replaceCapturedSettingsGroupChildren(value, items, metadata) {
+    if (Array.isArray(value)) {
+      return value.map((child) =>
+        replaceCapturedSettingsGroupChildren(child, items, metadata),
+      );
+    }
     if (!isElement(value)) return value;
-    if (value.type === native.SettingsRows) {
+    if (value.type === native.SettingsGroup.Header) {
+      metadata.hasHeader = true;
+      if (metadata.title === undefined && metadata.description === undefined) {
+        return null;
+      }
       return native.jsx(
         value.type,
-        { ...value.props, children: rows },
+        {
+          ...value.props,
+          title: metadata.title,
+          subtitle: metadata.description,
+        },
         value.key ?? undefined,
       );
     }
+    if (
+      native.SettingsGroup.Footer &&
+      value.type === native.SettingsGroup.Footer
+    ) {
+      metadata.hasFooter = true;
+      if (metadata.footer === undefined) return null;
+      return native.jsx(
+        value.type,
+        { ...value.props, children: metadata.footer },
+        value.key ?? undefined,
+      );
+    }
+    if (value.type === native.SettingsRows) {
+      return native.jsx(
+        value.type,
+        { ...value.props, children: items },
+        value.key ?? undefined,
+      );
+    }
+    if (!Object.hasOwn(value.props ?? {}, "children")) return value;
     return native.jsx(
       value.type,
       {
         ...value.props,
-        children: flattenedChildren(value.props?.children).map((child) =>
-          replaceSettingsRows(child, rows),
+        children: replaceCapturedSettingsGroupChildren(
+          value.props.children,
+          items,
+          metadata,
         ),
       },
       value.key ?? undefined,
+    );
+  }
+
+  function renderCapturedSettingsGroup(view, group, items) {
+    const title = nativeSettingsMetadata(
+      group.title,
+      view.descriptor.title,
+      view.header?.props?.title,
+    );
+    const description = nativeSettingsMetadata(
+      group.description,
+      view.descriptor.description,
+      view.header?.props?.subtitle,
+    );
+    const footer = nativeSettingsMetadata(
+      group.footer,
+      view.descriptor.footer,
+      view.footer?.props?.children,
+    );
+    const metadata = {
+      title,
+      description,
+      footer,
+      hasHeader: false,
+      hasFooter: false,
+    };
+    let children = replaceCapturedSettingsGroupChildren(
+      view.source.props?.children,
+      items,
+      metadata,
+    );
+    if (
+      !metadata.hasHeader &&
+      (title !== undefined || description !== undefined)
+    ) {
+      children = [
+        native.jsx(native.SettingsGroup.Header, {
+          title,
+          subtitle: description,
+        }),
+        children,
+      ];
+    }
+    if (
+      !metadata.hasFooter &&
+      footer !== undefined &&
+      native.SettingsGroup.Footer
+    ) {
+      children = [
+        children,
+        native.jsx(native.SettingsGroup.Footer, { children: footer }),
+      ];
+    }
+    return native.jsx(
+      view.source.type,
+      { ...view.source.props, children },
+      view.source.key ?? undefined,
     );
   }
 
@@ -2733,13 +3131,13 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       renderSettingsItem(model, group, item),
     );
     const view = settingsGroupView(model, group);
-    if (view) return replaceSettingsRows(view.source, items);
+    if (view) return renderCapturedSettingsGroup(view, group, items);
     const children = [];
     if (group.title !== undefined || group.description !== undefined) {
       children.push(
         native.jsx(native.SettingsGroup.Header, {
           title: group.title,
-          description: group.description,
+          subtitle: group.description,
         }),
       );
     }

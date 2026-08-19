@@ -1744,10 +1744,18 @@ async function validateUi(
   let settingsToggleChecked = false;
   let settingsSelectedValue = 'first';
   let settingsButtonClicks = 0;
+  let settingsBuiltInOverrideItemId;
+  let settingsBuiltInOverrideClicks = 0;
   let settingsItemRegistration;
   globalThis.__CGPTX_HOST__.registerExtension(settingsFixtureId, {
     activate(api) {
       settingsApi = api.settings;
+      const settingsBuiltInOverrideControl = settingsApi.ui.button({
+        label: 'Run built-in override',
+        onClick() {
+          settingsBuiltInOverrideClicks += 1;
+        },
+      });
       settingsApi.transformCategories((categories) =>
         categories.map((category) =>
           category.id === 'integrations'
@@ -1843,6 +1851,19 @@ async function validateUi(
       });
       settingsItemRegistration = settingsApi.transformItems(
         (items, context) => {
+          if (
+            context.pane.id === 'codex.settings.general-settings' &&
+            context.group.origin === 'app'
+          ) {
+            settingsBuiltInOverrideItemId ??= items.find(
+              (item) => item.origin === 'app' && typeof item.id === 'string',
+            )?.id;
+            return items.map((item) =>
+              item.id === settingsBuiltInOverrideItemId
+                ? { ...item, control: settingsBuiltInOverrideControl }
+                : item,
+            );
+          }
           if (context.group.id === settingsSecondGroupId) {
             return [
               ...items,
@@ -1924,8 +1945,18 @@ async function validateUi(
       settingsObserverHandlerCount = exposedHandlers.length;
       for (const handler of exposedHandlers) handler(true);
       settingsObserverInvokedOwner = settingsToggleChecked;
-      api.settings.transformItems((items, context) =>
-        context.group.id === settingsGroupId && control
+      api.settings.transformItems((items, context) => {
+        if (
+          context.pane.id === 'codex.settings.general-settings' &&
+          settingsBuiltInOverrideItemId
+        ) {
+          return items.map((item) =>
+            item.id === settingsBuiltInOverrideItemId
+              ? { ...item, origin: settingsObserverId }
+              : item,
+          );
+        }
+        return context.group.id === settingsGroupId && control
           ? [
               ...items,
               {
@@ -1934,8 +1965,8 @@ async function validateUi(
                 control,
               },
             ]
-          : items,
-      );
+          : items;
+      });
     },
   });
   if (settingsObserverInvokedOwner) {
@@ -1953,6 +1984,367 @@ async function validateUi(
       invokedOwner: settingsObserverInvokedOwner,
     },
   );
+
+  const shortOwnerId = 'foo';
+  const dottedOwnerId = 'foo.bar';
+  const ownershipOverrideCategoryId = `${dottedOwnerId}.override-category`;
+  const ownershipOmittedCategoryId = `${dottedOwnerId}.omitted-category`;
+  const ownershipOverridePaneId = `${dottedOwnerId}.override-pane`;
+  const ownershipOmittedPaneId = `${dottedOwnerId}.omitted-pane`;
+  const ownershipMovedPaneId = `${dottedOwnerId}.moved-pane`;
+  const dottedOwnPaneId = `${dottedOwnerId}.own-pane`;
+  const ownershipOverrideGroupId = `${dottedOwnerId}.override-group`;
+  const ownershipOmittedGroupId = `${dottedOwnerId}.omitted-group`;
+  const dottedOwnGroupId = `${dottedOwnerId}.own-group`;
+  const ownershipOverrideItemId = `${dottedOwnerId}.override-item`;
+  const ownershipOmittedItemId = `${dottedOwnerId}.omitted-item`;
+  const dottedOwnItemId = `${dottedOwnerId}.own-item`;
+  const ownershipRegistrations = [];
+  let ownershipSettingsApi;
+  let capturedOverrideCategory;
+  let capturedOmittedCategory;
+  let capturedOverridePane;
+  let capturedOmittedPane;
+  let capturedMovedPane;
+  let capturedOverrideGroup;
+  let capturedOmittedGroup;
+  let capturedOverrideItem;
+  let capturedOmittedItem;
+  let categoryOwnershipIdentityPreserved = false;
+  let paneOwnershipIdentityPreserved = false;
+  let groupOwnershipIdentityPreserved = false;
+  let itemOwnershipIdentityPreserved = false;
+  globalThis.__CGPTX_HOST__.registerExtension(shortOwnerId, {
+    activate(api) {
+      ownershipSettingsApi = api.settings;
+      ownershipRegistrations.push(
+        api.settings.transformCategories((categories) => [
+          ...categories.map((category) =>
+            category.id === 'integrations'
+              ? {
+                  ...category,
+                  panes: [
+                    ...category.panes,
+                    {
+                      id: ownershipOverridePaneId,
+                      label: 'Short owner override pane',
+                    },
+                    {
+                      id: ownershipOmittedPaneId,
+                      label: 'Short owner omitted pane',
+                    },
+                  ],
+                }
+              : category,
+          ),
+          {
+            id: ownershipOverrideCategoryId,
+            label: 'Short owner override category',
+            panes: [],
+          },
+          {
+            id: ownershipOmittedCategoryId,
+            label: 'Short owner omitted category',
+            panes: [
+              {
+                id: ownershipMovedPaneId,
+                label: 'Short owner moved pane',
+              },
+            ],
+          },
+        ]),
+        api.settings.transformGroups((groups, pane) =>
+          pane.id === ownershipOverridePaneId
+            ? [
+                ...groups,
+                {
+                  id: ownershipOverrideGroupId,
+                  title: 'Short owner override group',
+                  items: [],
+                },
+                {
+                  id: ownershipOmittedGroupId,
+                  title: 'Short owner omitted group',
+                  items: [],
+                },
+              ]
+            : groups,
+        ),
+        api.settings.transformItems((items, context) =>
+          context.group.id === ownershipOverrideGroupId
+            ? [
+                ...items,
+                {
+                  id: ownershipOverrideItemId,
+                  label: 'Short owner override item',
+                },
+                {
+                  id: ownershipOmittedItemId,
+                  label: 'Short owner omitted item',
+                },
+              ]
+            : items,
+        ),
+      );
+    },
+  });
+  globalThis.__CGPTX_HOST__.registerExtension(dottedOwnerId, {
+    activate(api) {
+      ownershipRegistrations.push(
+        api.settings.transformCategories((categories) => {
+          capturedOverrideCategory = categories.find(
+            (category) => category.id === ownershipOverrideCategoryId,
+          );
+          capturedOmittedCategory = categories.find(
+            (category) => category.id === ownershipOmittedCategoryId,
+          );
+          const panes = categories.flatMap((category) => category.panes);
+          capturedOverridePane = panes.find(
+            (pane) => pane.id === ownershipOverridePaneId,
+          );
+          capturedOmittedPane = panes.find(
+            (pane) => pane.id === ownershipOmittedPaneId,
+          );
+          capturedMovedPane = panes.find(
+            (pane) => pane.id === ownershipMovedPaneId,
+          );
+          return categories;
+        }),
+        api.settings.transformCategories((categories) =>
+          categories.flatMap((category) =>
+            category.id === ownershipOmittedCategoryId
+              ? []
+              : category.id === ownershipOverrideCategoryId
+                ? [
+                    {
+                      ...category,
+                      label: 'Dotted owner category override',
+                    },
+                  ]
+                : category.id === 'integrations'
+                  ? [
+                      {
+                        ...category,
+                        panes: [
+                          ...category.panes.flatMap((pane) =>
+                            pane.id === ownershipOmittedPaneId
+                              ? []
+                              : [
+                                  pane.id === ownershipOverridePaneId
+                                    ? {
+                                        ...pane,
+                                        label: 'Dotted owner pane override',
+                                      }
+                                    : pane,
+                                ],
+                          ),
+                          { id: dottedOwnPaneId, label: 'Dotted owner pane' },
+                          capturedMovedPane,
+                        ],
+                      },
+                    ]
+                  : [category],
+          ),
+        ),
+        api.settings.transformCategories((categories) => {
+          categoryOwnershipIdentityPreserved =
+            capturedOverrideCategory !== undefined &&
+            capturedOmittedCategory !== undefined &&
+            categories.find(
+              (category) => category.id === ownershipOverrideCategoryId,
+            ) === capturedOverrideCategory &&
+            categories.find(
+              (category) => category.id === ownershipOmittedCategoryId,
+            ) === capturedOmittedCategory;
+          const panes = categories.flatMap((category) => category.panes);
+          paneOwnershipIdentityPreserved =
+            capturedOverridePane !== undefined &&
+            capturedOmittedPane !== undefined &&
+            capturedMovedPane !== undefined &&
+            panes.find((pane) => pane.id === ownershipOverridePaneId) ===
+              capturedOverridePane &&
+            panes.find((pane) => pane.id === ownershipOmittedPaneId) ===
+              capturedOmittedPane &&
+            panes.find((pane) => pane.id === ownershipMovedPaneId) ===
+              capturedMovedPane;
+          return categories;
+        }),
+        api.settings.transformGroups((groups, pane) => {
+          if (pane.id === ownershipOverridePaneId) {
+            capturedOverrideGroup = groups.find(
+              (group) => group.id === ownershipOverrideGroupId,
+            );
+            capturedOmittedGroup = groups.find(
+              (group) => group.id === ownershipOmittedGroupId,
+            );
+          }
+          return groups;
+        }),
+        api.settings.transformGroups((groups, pane) =>
+          pane.id === ownershipOverridePaneId
+            ? groups.flatMap((group) =>
+                group.id === ownershipOmittedGroupId
+                  ? []
+                  : [
+                      group.id === ownershipOverrideGroupId
+                        ? { ...group, title: 'Dotted owner group override' }
+                        : group,
+                    ],
+              )
+            : pane.id === dottedOwnPaneId
+              ? [...groups, { id: dottedOwnGroupId, items: [] }]
+              : groups,
+        ),
+        api.settings.transformGroups((groups, pane) => {
+          if (pane.id === ownershipOverridePaneId) {
+            groupOwnershipIdentityPreserved =
+              capturedOverrideGroup !== undefined &&
+              capturedOmittedGroup !== undefined &&
+              groups.find(
+                (group) => group.id === ownershipOverrideGroupId,
+              ) === capturedOverrideGroup &&
+              groups.find(
+                (group) => group.id === ownershipOmittedGroupId,
+              ) === capturedOmittedGroup;
+          }
+          return groups;
+        }),
+        api.settings.transformItems((items, context) => {
+          if (context.group.id === ownershipOverrideGroupId) {
+            capturedOverrideItem = items.find(
+              (item) => item.id === ownershipOverrideItemId,
+            );
+            capturedOmittedItem = items.find(
+              (item) => item.id === ownershipOmittedItemId,
+            );
+          }
+          return items;
+        }),
+        api.settings.transformItems((items, context) =>
+          context.group.id === ownershipOverrideGroupId
+            ? items.flatMap((item) =>
+                item.id === ownershipOmittedItemId
+                  ? []
+                  : [
+                      item.id === ownershipOverrideItemId
+                        ? { ...item, label: 'Dotted owner item override' }
+                        : item,
+                    ],
+              )
+            : context.group.id === dottedOwnGroupId
+              ? [...items, { id: dottedOwnItemId, label: 'Dotted owner item' }]
+              : items,
+        ),
+        api.settings.transformItems((items, context) => {
+          if (context.group.id === ownershipOverrideGroupId) {
+            itemOwnershipIdentityPreserved =
+              capturedOverrideItem !== undefined &&
+              capturedOmittedItem !== undefined &&
+              items.find((item) => item.id === ownershipOverrideItemId) ===
+                capturedOverrideItem &&
+              items.find((item) => item.id === ownershipOmittedItemId) ===
+                capturedOmittedItem;
+          }
+          return items;
+        }),
+      );
+    },
+  });
+  const ownershipCategories = ownershipSettingsApi.getCategories();
+  const ownershipOverrideCategory = ownershipCategories.find(
+    (category) => category.id === ownershipOverrideCategoryId,
+  );
+  const ownershipOmittedCategory = ownershipCategories.find(
+    (category) => category.id === ownershipOmittedCategoryId,
+  );
+  check(
+    categoryOwnershipIdentityPreserved &&
+      ownershipOverrideCategory?.label === 'Short owner override category' &&
+      ownershipOverrideCategory.origin === shortOwnerId &&
+      ownershipOmittedCategory?.label === 'Short owner omitted category' &&
+      ownershipOmittedCategory.origin === shortOwnerId &&
+      ownershipCategories.indexOf(ownershipOverrideCategory) + 1 ===
+        ownershipCategories.indexOf(ownershipOmittedCategory),
+    'dotted extension ids cannot override or omit foreign settings categories',
+  );
+  const ownershipPanes = ownershipCategories.flatMap(
+    (category) => category.panes,
+  );
+  const ownershipOverridePane = ownershipPanes.find(
+    (pane) => pane.id === ownershipOverridePaneId,
+  );
+  const ownershipOmittedPane = ownershipPanes.find(
+    (pane) => pane.id === ownershipOmittedPaneId,
+  );
+  const ownershipMovedPanes = ownershipPanes.filter(
+    (pane) => pane.id === ownershipMovedPaneId,
+  );
+  const ownershipMovedPaneParent = ownershipCategories.find((category) =>
+    category.panes.some((pane) => pane.id === ownershipMovedPaneId),
+  );
+  check(
+    paneOwnershipIdentityPreserved &&
+      ownershipOverridePane?.label === 'Short owner override pane' &&
+      ownershipOverridePane.origin === shortOwnerId &&
+      ownershipOmittedPane?.label === 'Short owner omitted pane' &&
+      ownershipOmittedPane.origin === shortOwnerId &&
+      ownershipPanes.indexOf(ownershipOverridePane) + 1 ===
+        ownershipPanes.indexOf(ownershipOmittedPane) &&
+      ownershipMovedPanes.length === 1 &&
+      ownershipMovedPanes[0] === capturedMovedPane &&
+      ownershipMovedPaneParent?.id === ownershipOmittedCategoryId,
+    'dotted extension ids cannot override, omit, or move foreign settings panes',
+  );
+  const ownershipGroups = ownershipSettingsApi.getGroups(
+    ownershipOverridePaneId,
+  );
+  const ownershipOverrideGroup = ownershipGroups.find(
+    (group) => group.id === ownershipOverrideGroupId,
+  );
+  const ownershipOmittedGroup = ownershipGroups.find(
+    (group) => group.id === ownershipOmittedGroupId,
+  );
+  check(
+    groupOwnershipIdentityPreserved &&
+      ownershipOverrideGroup?.title === 'Short owner override group' &&
+      ownershipOverrideGroup.origin === shortOwnerId &&
+      ownershipOmittedGroup?.title === 'Short owner omitted group' &&
+      ownershipOmittedGroup.origin === shortOwnerId &&
+      ownershipGroups.indexOf(ownershipOverrideGroup) + 1 ===
+        ownershipGroups.indexOf(ownershipOmittedGroup),
+    'dotted extension ids cannot override or omit foreign settings groups',
+  );
+  const ownershipItems = ownershipOverrideGroup?.items ?? [];
+  const ownershipOverrideItem = ownershipItems.find(
+    (item) => item.id === ownershipOverrideItemId,
+  );
+  const ownershipOmittedItem = ownershipItems.find(
+    (item) => item.id === ownershipOmittedItemId,
+  );
+  check(
+    itemOwnershipIdentityPreserved &&
+      ownershipOverrideItem?.label === 'Short owner override item' &&
+      ownershipOverrideItem.origin === shortOwnerId &&
+      ownershipOmittedItem?.label === 'Short owner omitted item' &&
+      ownershipOmittedItem.origin === shortOwnerId &&
+      ownershipItems.indexOf(ownershipOverrideItem) + 1 ===
+        ownershipItems.indexOf(ownershipOmittedItem),
+    'dotted extension ids cannot override or omit foreign settings items',
+  );
+  const dottedOwnPane = ownershipPanes.find(
+    (pane) => pane.id === dottedOwnPaneId,
+  );
+  const dottedOwnGroup = ownershipSettingsApi
+    .getGroups(dottedOwnPaneId)
+    .find((group) => group.id === dottedOwnGroupId);
+  check(
+    dottedOwnPane?.origin === dottedOwnerId &&
+      dottedOwnGroup?.origin === dottedOwnerId &&
+      dottedOwnGroup.items.find((item) => item.id === dottedOwnItemId)
+        ?.origin === dottedOwnerId,
+    'both prefix-overlapping extensions retain distinct owned contributions',
+  );
+  for (const registration of ownershipRegistrations) registration.dispose();
 
   const snapshotFirstGroupId = `${settingsFixtureId}.snapshot-first`;
   const snapshotRemovedGroupId = `${settingsFixtureId}.snapshot-removed`;
@@ -2417,8 +2809,33 @@ async function validateUi(
   const builtInSettingsItems = builtInSettingsGroups.flatMap(
     (group) => group.items,
   );
+  const settingsBuiltInOverrideItem = builtInSettingsItems.find(
+    (item) => item.id === settingsBuiltInOverrideItemId,
+  );
+  const settingsBuiltInOverrideButton = Array.from(
+    document
+      .getElementById(settingsBuiltInOverrideItemId)
+      ?.querySelectorAll('button') ?? [],
+  ).find((button) => button.textContent?.trim() === 'Run built-in override');
+  if (settingsBuiltInOverrideButton) {
+    activateButton(settingsBuiltInOverrideButton);
+    await waitUntil(() => settingsBuiltInOverrideClicks === 1);
+  }
+  check(
+    settingsBuiltInOverrideItem?.origin === 'app' &&
+      Boolean(settingsBuiltInOverrideButton) &&
+      settingsBuiltInOverrideClicks === 1,
+    'a transformed built-in settings row renders the assigning extension control after foreign pass-through',
+    {
+      itemId: settingsBuiltInOverrideItemId,
+      origin: settingsBuiltInOverrideItem?.origin,
+      clicks: settingsBuiltInOverrideClicks,
+    },
+  );
   const builtInSettingsControl = builtInSettingsItems
-    .find((item) => item.origin === 'app' && item.control)?.control;
+    .find(
+      (item) => item.origin === 'app' && item.control?.kind === 'native',
+    )?.control;
   const builtInControlDetails = Reflect.ownKeys(builtInSettingsControl ?? {})
     .filter((key) => key !== 'kind');
   check(
@@ -2477,6 +2894,263 @@ async function validateUi(
   check(
     !exposesPrivateSettingsValue(builtInSettingsGroups),
     'the public settings model excludes React elements and callbacks',
+  );
+
+  const settingsNavigationTitleShape = (expectedString) => {
+    const containsPaneButton = (value) => {
+      if (Array.isArray(value)) return value.some(containsPaneButton);
+      if (value == null || typeof value !== 'object') return false;
+      if (
+        value.props?.['data-settings-panel-slug'] === settingsPaneId
+      ) {
+        return true;
+      }
+      return containsPaneButton(value.props?.children);
+    };
+    const paneButton = document.querySelector(
+      `button[data-settings-panel-slug="${settingsPaneId}"]`,
+    );
+    const fiberKey = paneButton
+      ? Object.keys(paneButton).find((key) =>
+          key.startsWith('__reactFiber$'),
+        )
+      : undefined;
+    let fiber = fiberKey ? paneButton[fiberKey] : null;
+    for (let hops = 0; fiber && hops < 60; hops += 1) {
+      for (const branch of [fiber, fiber.alternate]) {
+        const title = branch?.memoizedProps?.title;
+        if (
+          containsPaneButton(branch?.memoizedProps?.children) &&
+          (expectedString === undefined
+            ? typeof title?.$$typeof === 'symbol'
+            : title === expectedString)
+        ) {
+          return {
+            titleIsElement: typeof title?.$$typeof === 'symbol',
+            titleIsString: typeof title === 'string',
+            titleText: typeof title === 'string' ? title : undefined,
+          };
+        }
+      }
+      fiber = fiber.return;
+    }
+    return null;
+  };
+  const builtInMetadataCategory = settingsApi
+    .getCategories()
+    .find((category) => category.id === 'integrations');
+  const originalBuiltInCategoryLabel = builtInMetadataCategory?.label ?? '';
+  const unchangedBuiltInCategoryTitleShape =
+    settingsNavigationTitleShape();
+  const transformedBuiltInCategoryLabel =
+    'Transformed built-in category title';
+  const builtInCategoryMetadataRegistration =
+    settingsApi.transformCategories((categories) =>
+      categories.map((category) =>
+        category.id === builtInMetadataCategory?.id
+          ? { ...category, label: transformedBuiltInCategoryLabel }
+          : category,
+      ),
+    );
+  await waitUntil(
+    () =>
+      settingsNavigationTitleShape(transformedBuiltInCategoryLabel)
+        ?.titleIsString === true &&
+      document.body.textContent?.includes(transformedBuiltInCategoryLabel),
+  );
+  const transformedBuiltInCategory = settingsApi
+    .getCategories()
+    .find((category) => category.id === builtInMetadataCategory?.id);
+  const transformedBuiltInCategoryTitleShape =
+    settingsNavigationTitleShape(transformedBuiltInCategoryLabel);
+  builtInCategoryMetadataRegistration.dispose();
+  await waitUntil(
+    () =>
+      !document.body.textContent?.includes(transformedBuiltInCategoryLabel) &&
+      settingsNavigationTitleShape()?.titleIsElement === true,
+  );
+  const restoredBuiltInCategory = settingsApi
+    .getCategories()
+    .find((category) => category.id === builtInMetadataCategory?.id);
+  const restoredBuiltInCategoryTitleShape =
+    settingsNavigationTitleShape();
+
+  const builtInMetadataGroup = builtInSettingsGroups.find(
+    (group) =>
+      group.origin === 'app' &&
+      typeof group.id === 'string' &&
+      typeof group.title === 'string' &&
+      group.title.length > 0,
+  );
+  const builtInMetadataGroupId =
+    builtInMetadataGroup?.id ?? 'missing-built-in-metadata-group';
+  const originalBuiltInTitle = builtInMetadataGroup?.title ?? '';
+  const originalBuiltInDescription = builtInMetadataGroup?.description;
+  const originalBuiltInFooter = builtInMetadataGroup?.footer;
+  const originalBuiltInKeywords = builtInMetadataGroup?.keywords;
+  const nativeSettingsGroupHeaderShape = (description, expectedTitle) => {
+    const textElement = Array.from(document.querySelectorAll('*')).find(
+      (element) =>
+        element.textContent?.includes(description) &&
+        !Array.from(element.children).some((child) =>
+          child.textContent?.includes(description),
+        ),
+    );
+    const fiberKey = textElement
+      ? Object.keys(textElement).find((key) => key.startsWith('__reactFiber$'))
+      : undefined;
+    let fiber = fiberKey ? textElement[fiberKey] : null;
+    for (let hops = 0; fiber && hops < 40; hops += 1) {
+      for (const branch of [fiber, fiber.alternate]) {
+        const props = branch?.memoizedProps;
+        const titleMatches =
+          expectedTitle === undefined
+            ? typeof props?.title?.$$typeof === 'symbol'
+            : props?.title === expectedTitle;
+        if (props?.subtitle === description && titleMatches) {
+          return {
+            titleIsElement: typeof props.title?.$$typeof === 'symbol',
+            titleText: typeof props.title === 'string' ? props.title : undefined,
+          };
+        }
+      }
+      fiber = fiber.return;
+    }
+    return null;
+  };
+  let effectiveBuiltInTitle = originalBuiltInTitle;
+  let clearBuiltInMetadata = false;
+  const builtInMetadataRegistration = settingsApi.transformGroups(
+    (groups, pane) =>
+      pane.id === 'codex.settings.general-settings'
+        ? groups.map((group) =>
+            group.id === builtInMetadataGroupId
+              ? clearBuiltInMetadata
+                ? {
+                    ...group,
+                    title: undefined,
+                    description: undefined,
+                    footer: undefined,
+                    keywords: undefined,
+                  }
+                : {
+                    ...group,
+                    title: effectiveBuiltInTitle,
+                    description: 'Transformed built-in description',
+                    footer: 'Transformed built-in footer',
+                    keywords: ['transformed-built-in-keyword'],
+                  }
+              : group,
+          )
+        : groups,
+  );
+  const builtInMetadataPassThroughRegistration =
+    settingsApi.transformGroups((groups) => groups);
+  await waitUntil(
+    () =>
+      document.body.textContent?.includes(originalBuiltInTitle) &&
+      document.body.textContent?.includes(
+        'Transformed built-in description',
+      ) &&
+      document.body.textContent?.includes('Transformed built-in footer'),
+  );
+  const unchangedBuiltInTitleRendered = document.body.textContent?.includes(
+    originalBuiltInTitle,
+  );
+  const unchangedBuiltInHeaderShape = nativeSettingsGroupHeaderShape(
+    'Transformed built-in description',
+  );
+  effectiveBuiltInTitle = 'Transformed built-in title';
+  builtInMetadataRegistration.invalidate();
+  await waitUntil(
+    () =>
+      document.body.textContent?.includes('Transformed built-in title') &&
+      document.body.textContent?.includes(
+        'Transformed built-in description',
+      ) &&
+      document.body.textContent?.includes('Transformed built-in footer'),
+  );
+  const transformedBuiltInGroup = settingsApi
+    .getGroups('codex.settings.general-settings')
+    .find((group) => group.id === builtInMetadataGroupId);
+  const transformedBuiltInHeaderShape = nativeSettingsGroupHeaderShape(
+    'Transformed built-in description',
+    'Transformed built-in title',
+  );
+  clearBuiltInMetadata = true;
+  builtInMetadataRegistration.invalidate();
+  await waitUntil(
+    () =>
+      !document.body.textContent?.includes('Transformed built-in title') &&
+      !document.body.textContent?.includes(
+        'Transformed built-in description',
+      ) &&
+      !document.body.textContent?.includes('Transformed built-in footer'),
+  );
+  const clearedBuiltInGroup = settingsApi
+    .getGroups('codex.settings.general-settings')
+    .find((group) => group.id === builtInMetadataGroupId);
+  const clearedBuiltInMetadataIsAbsent =
+    !document.body.textContent?.includes('Transformed built-in title') &&
+    !document.body.textContent?.includes('Transformed built-in description') &&
+    !document.body.textContent?.includes('Transformed built-in footer');
+  builtInMetadataPassThroughRegistration.dispose();
+  builtInMetadataRegistration.dispose();
+  await waitUntil(() => {
+    const restored = settingsApi
+      .getGroups('codex.settings.general-settings')
+      .find((group) => group.id === builtInMetadataGroupId);
+    return (
+      restored?.title === originalBuiltInTitle &&
+      document.body.textContent?.includes(originalBuiltInTitle)
+    );
+  });
+  const restoredBuiltInGroup = settingsApi
+    .getGroups('codex.settings.general-settings')
+    .find((group) => group.id === builtInMetadataGroupId);
+  check(
+    builtInMetadataCategory?.id !== undefined &&
+      unchangedBuiltInCategoryTitleShape?.titleIsElement === true &&
+      transformedBuiltInCategory?.label ===
+        transformedBuiltInCategoryLabel &&
+      transformedBuiltInCategoryTitleShape?.titleIsString === true &&
+      transformedBuiltInCategoryTitleShape.titleText ===
+        transformedBuiltInCategoryLabel &&
+      restoredBuiltInCategory?.label === originalBuiltInCategoryLabel &&
+      restoredBuiltInCategoryTitleShape?.titleIsElement === true &&
+      builtInMetadataGroup?.id !== undefined &&
+      unchangedBuiltInTitleRendered &&
+      unchangedBuiltInHeaderShape?.titleIsElement === true &&
+      transformedBuiltInGroup?.title === 'Transformed built-in title' &&
+      transformedBuiltInGroup.description ===
+        'Transformed built-in description' &&
+      transformedBuiltInGroup.footer === 'Transformed built-in footer' &&
+      transformedBuiltInGroup.keywords?.includes(
+        'transformed-built-in-keyword',
+      ) &&
+      transformedBuiltInHeaderShape?.titleText ===
+        'Transformed built-in title' &&
+      clearedBuiltInGroup !== undefined &&
+      clearedBuiltInGroup.title === undefined &&
+      clearedBuiltInGroup.description === undefined &&
+      clearedBuiltInGroup.footer === undefined &&
+      clearedBuiltInGroup.keywords === undefined &&
+      clearedBuiltInMetadataIsAbsent &&
+      restoredBuiltInGroup?.title === originalBuiltInTitle &&
+      restoredBuiltInGroup.description === originalBuiltInDescription &&
+      restoredBuiltInGroup.footer === originalBuiltInFooter &&
+      JSON.stringify(restoredBuiltInGroup.keywords) ===
+        JSON.stringify(originalBuiltInKeywords),
+    'transformed built-in settings metadata renders through native owners',
+    {
+      unchangedCategory: unchangedBuiltInCategoryTitleShape,
+      transformedCategory: transformedBuiltInCategoryTitleShape,
+      restoredCategory: restoredBuiltInCategoryTitleShape,
+      unchangedHeader: unchangedBuiltInHeaderShape,
+      transformedHeader: transformedBuiltInHeaderShape,
+      clearedGroup: clearedBuiltInGroup,
+      restoredGroup: restoredBuiltInGroup,
+    },
   );
 
   await settingsApi.open('codex.settings.appearance');

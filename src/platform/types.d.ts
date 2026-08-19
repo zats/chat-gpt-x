@@ -424,6 +424,9 @@ export interface HeaderAppearanceApi {
  * Settings search indexes the effective category, pane, group, and item text
  * and opens the owning pane for the best matching result.
  *
+ * Ownership isolation applies to each collection passed to a transformer.
+ * Removing a ChatGPT-owned ancestor removes its complete subtree.
+ *
  * @group Settings
  */
 export interface SettingsApi {
@@ -443,6 +446,21 @@ export interface SettingsApi {
    * platform drops and logs foreign or duplicate ids. A throwing transformer
    * is skipped and logged. Transformers run in extension load and
    * registration order, and each receives the previous transformer's output.
+   * The platform privately records which extension first contributed each
+   * category and pane. A later extension can pass or reorder that descriptor,
+   * but cannot modify or remove it. It also cannot move a foreign-owned pane
+   * to a different category. A copied override resolves to the original
+   * descriptor, and an omission restores it at its previous position. The
+   * public `origin` value cannot transfer ownership. All extensions can still
+   * modify or remove ChatGPT-owned categories and panes.
+   *
+   * For a category or pane that the transformer can change, an omitted
+   * property inherits its current value. An own mutable optional property
+   * whose value is `undefined` removes that property. The platform always
+   * ignores a returned `origin` value. A changed built-in category label
+   * renders as the returned public string. An unchanged label retains
+   * ChatGPT's native localized React content.
+   *
    * Disposing or invalidating the returned registration updates an open
    * Settings window.
    *
@@ -481,7 +499,22 @@ export interface SettingsApi {
    *
    * Group transformers run in extension load and registration order. A
    * throwing transformer is skipped and logged. Item transformers run after
-   * all group transformers have produced the final group list.
+   * all group transformers have produced the final group list. Changed
+   * built-in titles, descriptions, and footers render as the returned public
+   * strings. Unchanged built-in metadata retains ChatGPT's native localized
+   * React content.
+   *
+   * The platform privately owns each contributed group for its first
+   * contributor. Other extensions can pass or reorder the group, but cannot
+   * modify or remove it. A copied override resolves to the original group,
+   * and an omission restores it at its previous position. The public `origin`
+   * value cannot transfer ownership. All extensions can still modify or
+   * remove ChatGPT-owned groups.
+   *
+   * For a group that the transformer can change, an omitted property inherits
+   * its current value. An own mutable optional property whose value is
+   * `undefined` removes that property. The platform always ignores a returned
+   * `origin` value.
    *
    * @example
    * const groups = api.settings.transformGroups((current, pane) =>
@@ -514,6 +547,22 @@ export interface SettingsApi {
    * Transformers run in extension load and registration order for each
    * group. A throwing transformer is skipped and logged. Control callbacks
    * are also isolated and logged.
+   *
+   * The platform privately owns each contributed item for its first
+   * contributor. Other extensions can pass or reorder the item, but cannot
+   * modify or remove it. A copied override resolves to the original item, and
+   * an omission restores it at its previous position. The public `origin`
+   * value cannot transfer ownership. All extensions can still modify or
+   * remove ChatGPT-owned items.
+   *
+   * For an item that the transformer can change, an omitted property inherits
+   * its current value. An own mutable optional property whose value is
+   * `undefined` removes that property. The platform always ignores a returned
+   * `origin` value. An extension can assign one of its own controls to any
+   * item that it can change, including a ChatGPT-owned item. Passing or
+   * copying that effective item does not transfer its private callback
+   * authority. A control created by another extension cannot be assigned to a
+   * different item.
    *
    * @example
    * let enabled = true;
