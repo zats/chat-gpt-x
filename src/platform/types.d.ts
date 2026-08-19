@@ -826,7 +826,10 @@ export interface SettingsToggleOptions {
  * @group Settings
  */
 export interface SettingsSelectOptions {
-  /** Value of the selected option. */
+  /**
+   * Value of the selected option. It must match one declared option value.
+   * An empty string is valid when an option has that value.
+   */
   readonly value?: string;
 
   /** Placeholder shown when no option is selected. */
@@ -848,7 +851,10 @@ export interface SettingsSelectOptions {
  * @group Settings
  */
 export interface SettingsSelectOption {
-  /** Stable option value supplied to the change callback. */
+  /**
+   * Stable option value supplied to the change callback. Empty strings are
+   * valid.
+   */
   readonly value: string;
 
   /** Visible option label. */

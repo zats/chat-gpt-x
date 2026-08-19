@@ -4574,7 +4574,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
             !option ||
             typeof option !== "object" ||
             typeof option.value !== "string" ||
-            option.value.length === 0 ||
             typeof option.label !== "string"
           ) {
             throw new TypeError(

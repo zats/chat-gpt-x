@@ -26,9 +26,64 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+function nextTurn(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function installedExtension(enabled: boolean): InstalledExtension {
+  return {
+    id: "thread-colors",
+    name: "Thread Colors",
+    description: "Adds native thread colors.",
+    version: "1.2.3",
+    enabled,
+    required: false,
+  };
+}
+
+function installWindowFocusHarness(): {
+  readonly focus: () => void;
+  readonly listening: () => boolean;
+  readonly restore: () => void;
+} {
+  type FocusListener = () => void;
+  let focusListener: FocusListener | undefined;
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      addEventListener(type: string, listener: FocusListener) {
+        assert.equal(type, "focus");
+        focusListener = listener;
+      },
+      removeEventListener(type: string, listener: FocusListener) {
+        assert.equal(type, "focus");
+        if (focusListener === listener) focusListener = undefined;
+      },
+    },
+  });
+  return {
+    focus() {
+      focusListener?.();
+    },
+    listening() {
+      return focusListener !== undefined;
+    },
+    restore() {
+      if (originalWindow) {
+        Object.defineProperty(globalThis, "window", originalWindow);
+      } else {
+        Reflect.deleteProperty(globalThis, "window");
+      }
+    },
+  };
+}
+
 function createSettingsApiHarness() {
   const registrations: string[] = [];
   const itemTransforms: SettingsItemTransform[] = [];
+  const toggleStates: boolean[] = [];
+  const toggleChanges: Array<(enabled: boolean) => unknown> = [];
   let itemInvalidations = 0;
   const registration = (
     invalidate?: () => void,
@@ -39,7 +94,9 @@ function createSettingsApiHarness() {
   const api = {
     settings: {
       ui: {
-        toggle() {
+        toggle(options) {
+          toggleStates.push(options.checked);
+          toggleChanges.push(options.onChange);
           return {} as SettingsControl;
         },
       },
@@ -64,6 +121,8 @@ function createSettingsApiHarness() {
     api,
     registrations,
     itemTransforms,
+    toggleStates,
+    toggleChanges,
     get itemInvalidations() {
       return itemInvalidations;
     },
@@ -191,4 +250,161 @@ test("manager settings items refresh after the extension list resolves", async (
   assert.equal(items.length, 1);
   assert.equal(items[0]?.id, "extensions.item.thread-colors");
   assert.equal(items[0]?.label, "Thread Colors");
+});
+
+test("manager refreshes an open pane when its renderer regains focus", async (t) => {
+  const focusWindow = installWindowFocusHarness();
+  t.after(focusWindow.restore);
+  let current = Object.freeze([installedExtension(false)]);
+  let listCalls = 0;
+  const management = {
+    async list() {
+      listCalls += 1;
+      return current;
+    },
+    async setEnabled() {
+      return current;
+    },
+  } as ExtensionManagement;
+  const harness = createSettingsApiHarness();
+  const registrations = await activateExtensions(harness.api, management);
+  const transform = harness.itemTransforms[0];
+  assert.ok(transform);
+  const context = {
+    pane: { id: "extensions.installed", label: "Extensions" },
+    group: { id: "extensions.installed", items: [] },
+  };
+
+  assert.equal(listCalls, 1);
+  assert.equal(harness.itemInvalidations, 1);
+  assert.equal(transform([], context).length, 1);
+  assert.equal(harness.toggleStates.at(-1), false);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(listCalls, 2);
+  assert.equal(harness.itemInvalidations, 1);
+
+  current = Object.freeze([installedExtension(true)]);
+  focusWindow.focus();
+  await nextTurn();
+  assert.equal(listCalls, 3);
+  assert.equal(harness.itemInvalidations, 2);
+  assert.equal(transform([], context).length, 1);
+  assert.equal(harness.toggleStates.at(-1), true);
+  await nextTurn();
+  assert.equal(harness.itemInvalidations, 2);
+
+  registrations.at(-1)?.dispose();
+  assert.equal(focusWindow.listening(), false);
+});
+
+test("focus queues one trailing refresh behind an in-flight focus read", async (t) => {
+  const focusWindow = installWindowFocusHarness();
+  t.after(focusWindow.restore);
+  const staleRead = deferred<readonly InstalledExtension[]>();
+  const staleReadStarted = deferred<void>();
+  let listCalls = 0;
+  const management = {
+    list() {
+      listCalls += 1;
+      if (listCalls === 1) {
+        return Promise.resolve(Object.freeze([installedExtension(false)]));
+      }
+      if (listCalls === 2) {
+        staleReadStarted.resolve();
+        return staleRead.promise;
+      }
+      return Promise.resolve(Object.freeze([installedExtension(true)]));
+    },
+    async setEnabled() {
+      return Object.freeze([installedExtension(true)]);
+    },
+  } as ExtensionManagement;
+  const harness = createSettingsApiHarness();
+  const registrations = await activateExtensions(harness.api, management);
+  const transform = harness.itemTransforms[0];
+  assert.ok(transform);
+  const context = {
+    pane: { id: "extensions.installed", label: "Extensions" },
+    group: { id: "extensions.installed", items: [] },
+  };
+
+  focusWindow.focus();
+  await staleReadStarted.promise;
+  focusWindow.focus();
+  focusWindow.focus();
+  staleRead.resolve(Object.freeze([installedExtension(false)]));
+  await nextTurn();
+
+  assert.equal(listCalls, 3);
+  assert.equal(harness.itemInvalidations, 2);
+  assert.equal(transform([], context).length, 1);
+  assert.equal(harness.toggleStates.at(-1), true);
+  await nextTurn();
+  registrations.at(-1)?.dispose();
+});
+
+test("manager serializes a focus refresh behind an in-flight enablement", async (t) => {
+  const focusWindow = installWindowFocusHarness();
+  t.after(focusWindow.restore);
+  const enablementRelease = deferred<void>();
+  const enablementStarted = deferred<void>();
+  const refreshRelease = deferred<void>();
+  const refreshStarted = deferred<void>();
+  let current = Object.freeze([installedExtension(false)]);
+  let listCalls = 0;
+  let setCalls = 0;
+  const management = {
+    async list() {
+      listCalls += 1;
+      if (listCalls === 3) {
+        const captured = current;
+        refreshStarted.resolve();
+        await refreshRelease.promise;
+        return captured;
+      }
+      return current;
+    },
+    async setEnabled(id: string, enabled: boolean) {
+      setCalls += 1;
+      assert.equal(id, "thread-colors");
+      assert.equal(enabled, true);
+      enablementStarted.resolve();
+      await enablementRelease.promise;
+      current = Object.freeze([installedExtension(true)]);
+      return current;
+    },
+  } as ExtensionManagement;
+  const harness = createSettingsApiHarness();
+  const registrations = await activateExtensions(harness.api, management);
+  const transform = harness.itemTransforms[0];
+  assert.ok(transform);
+  const context = {
+    pane: { id: "extensions.installed", label: "Extensions" },
+    group: { id: "extensions.installed", items: [] },
+  };
+
+  assert.equal(transform([], context).length, 1);
+  await nextTurn();
+  assert.equal(listCalls, 2);
+  const toggle = harness.toggleChanges.at(-1);
+  assert.ok(toggle);
+  const enablement = Promise.resolve(toggle(true));
+  await enablementStarted.promise;
+  assert.equal(setCalls, 1);
+
+  focusWindow.focus();
+  await Promise.resolve();
+  assert.equal(listCalls, 2);
+  enablementRelease.resolve();
+  await refreshStarted.promise;
+  assert.equal(listCalls, 3);
+  refreshRelease.resolve();
+  await enablement;
+  await nextTurn();
+
+  assert.equal(harness.itemInvalidations, 2);
+  assert.equal(transform([], context).length, 1);
+  assert.equal(harness.toggleStates.at(-1), true);
+  await nextTurn();
+  registrations.at(-1)?.dispose();
 });

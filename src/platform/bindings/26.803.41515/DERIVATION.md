@@ -167,7 +167,9 @@ native controls, and native React content out of public descriptors. An
 unchanged app row renders its original localized label and description
 elements. A changed row renders its transformed public strings. A control
 renders only for its owning extension row, or for its original app row.
-Callback failures remain isolated.
+Select values remain exact strings, including the empty string used by native
+Default or None choices. Non-string values and malformed option records fail
+validation. Callback failures remain isolated.
 
 Native search input props are `searchQuery` and `onQueryChange`; result props
 are `searchResults`, `onSelect`, `intl`, and `listRef`. The binding adds one
@@ -199,14 +201,15 @@ The `Wa` page element is created inside the route after installation and is
 the stable content boundary for this build.
 
 The stable API suite covers new panes and groups, insertion into General,
-standard control descriptors, transformer ordering and isolation, namespace
-enforcement, invalidation, disposal, and deep-link failure behavior. The
-version-specific UI suite covers native rendering, callbacks, General-pane
-insertion, exact native-group snapshot replacement, child-only recapture,
-loading and stale-page rejection, deep links into an unvisited native pane and
-the titleless Profile pane, sidebar navigation from Appearance, all four search
-text levels, package title/description search for the Extensions manager, and
-search-result navigation.
+standard control descriptors, empty-string select values, malformed select
+input rejection, transformer ordering and isolation, namespace enforcement,
+invalidation, disposal, and deep-link failure behavior. The version-specific
+UI suite covers native rendering, exact empty-string select callbacks,
+General-pane insertion, exact native-group snapshot replacement, child-only
+recapture, loading and stale-page rejection, deep links into an unvisited
+native pane and the titleless Profile pane, sidebar navigation from Appearance,
+all four search text levels, package title/description search for the Extensions
+manager, and search-result navigation.
 
 Failure signatures include missing category captures, a missing
 `data-settings-panel-slug`, an empty `#settings-search` result for contributed
@@ -268,7 +271,7 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
 Results:
 
 - Launcher unit tests: `55/55`.
-- Extension and shared-utility unit tests: `32/32`.
+- Extension and shared-utility unit tests: `35/35`.
 - Stable public API assertions: `44/44`.
 - Current native UI suite: `84/84`.
 - The Multiple Accounts extension switched to another account and restored the

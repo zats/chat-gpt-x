@@ -10,6 +10,11 @@ const updateLockFileName = "update.lock";
 // component store uses for the same file.
 const darwinExclusiveOpenFlag = 0x00000020;
 
+function compareExtensionIds(left, right) {
+  if (left.id === right.id) return 0;
+  return left.id < right.id ? -1 : 1;
+}
+
 function readExtensionEntries({
   configurationFile,
   versions,
@@ -218,7 +223,7 @@ function selectedExtensions(versions) {
       ids.add(extension.id);
       return extension;
     })
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .sort(compareExtensionIds);
 }
 
 function extensionPackageDirectory(extensionsDirectory, relativePath) {

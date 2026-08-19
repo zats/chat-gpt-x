@@ -134,7 +134,10 @@ weak maps keep extension handlers, native controls, and native React content
 out of public descriptors. An unchanged app row renders its original localized
 label and description elements. A changed row renders its transformed public
 strings. A control renders only for its owning extension row, or for its
-original app row.
+original app row. Select values remain exact strings, including the empty
+string used by native Default or None choices. Non-string values and malformed
+option records fail validation. The version-specific suite selects the native
+empty-value row and verifies that the callback receives the empty string.
 
 Native search keeps the `searchQuery`, `onQueryChange`, `searchResults`, and
 `onSelect` contracts. The binding adds one result for each matching effective
@@ -212,7 +215,7 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
 Results:
 
 - Launcher unit tests: `55/55`.
-- Extension and shared-utility unit tests: `32/32`.
+- Extension and shared-utility unit tests: `35/35`.
 - Stable public API assertions: `44/44`.
 - Current native UI assertions: `84/84`.
 - The Multiple Accounts extension switched to another account and restored the

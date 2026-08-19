@@ -954,6 +954,50 @@ function settingPane(id: string) {
 }
 
 test("settings: adds a native pane, group, rows, and standard controls", async () => {
+  const emptyValueSelect = api.settings.ui.select({
+    value: "",
+    options: [
+      { value: "", label: "Default/None" },
+      { value: "one", label: "One" },
+      { value: "two", label: "Two", disabled: true },
+    ],
+    onChange() {},
+  });
+  let nonStringValueRejected = false;
+  try {
+    api.settings.ui.select({
+      value: 0 as never,
+      options: [{ value: "", label: "Default/None" }],
+      onChange() {},
+    });
+  } catch {
+    nonStringValueRejected = true;
+  }
+  let nonStringOptionValueRejected = false;
+  try {
+    api.settings.ui.select({
+      options: [{ value: 0 as never, label: "Invalid" }],
+      onChange() {},
+    });
+  } catch {
+    nonStringOptionValueRejected = true;
+  }
+  let invalidOptionRejected = false;
+  try {
+    api.settings.ui.select({
+      options: [null as never],
+      onChange() {},
+    });
+  } catch {
+    invalidOptionRejected = true;
+  }
+  assert(
+    nonStringValueRejected &&
+      nonStringOptionValueRejected &&
+      invalidOptionRejected,
+    "select controls reject non-string values and invalid option structures",
+  );
+
   const navigation = api.settings.transformCategories((categories) =>
     categories.map((category) =>
       category.id === "integrations"
@@ -1005,14 +1049,7 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
           {
             id: SETTINGS_SELECT_ID,
             label: "Fixture select",
-            control: api.settings.ui.select({
-              value: "one",
-              options: [
-                { value: "one", label: "One" },
-                { value: "two", label: "Two", disabled: true },
-              ],
-              onChange() {},
-            }),
+            control: emptyValueSelect,
           },
           {
             id: SETTINGS_BUTTON_ID,

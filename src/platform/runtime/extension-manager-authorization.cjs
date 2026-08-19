@@ -5,6 +5,11 @@ const path = require("node:path");
 
 const extensionManagerId = "extensions";
 
+function compareExtensionIds(left, right) {
+  if (left.id === right.id) return 0;
+  return left.id < right.id ? -1 : 1;
+}
+
 function createExtensionManagerAuthorization() {
   return crypto.randomBytes(32).toString("base64url");
 }
@@ -33,9 +38,7 @@ function isAuthorizedExtensionManagerEntry(entry, managerPath) {
 }
 
 function orderExtensionEntries(entries, managerPath) {
-  const ordered = [...entries].sort((left, right) =>
-    left.id.localeCompare(right.id),
-  );
+  const ordered = [...entries].sort(compareExtensionIds);
   const managerIndex = ordered.findIndex(
     (entry) => isAuthorizedExtensionManagerEntry(entry, managerPath),
   );

@@ -1882,6 +1882,7 @@ async function validateUi(
               control: settingsApi.ui.select({
                 value: settingsSelectedValue,
                 options: [
+                  { value: '', label: 'Default/None' },
                   { value: 'first', label: 'First choice' },
                   { value: 'second', label: 'Second choice' },
                 ],
@@ -2052,10 +2053,37 @@ async function validateUi(
   await waitUntil(
     () => settingsToggleRow?.querySelector('[role="switch"]')?.getAttribute('aria-checked') === 'true',
   );
+  activateButton(settingsSelect);
+  let settingsSelectMenu;
+  await waitUntil(() => {
+    settingsSelectMenu = Array.from(
+      document.querySelectorAll('[role="menu"]'),
+    ).find((menu) =>
+      menuRows(menu).some(
+        (row) => threadRowLabel(row) === 'Default/None',
+      ),
+    );
+    return Boolean(settingsSelectMenu);
+  });
+  const emptyValueOption = menuRows(settingsSelectMenu).find(
+    (row) => threadRowLabel(row) === 'Default/None',
+  );
+  activateButton(emptyValueOption);
+  await waitUntil(
+    () =>
+      settingsSelectedValue === '' &&
+      document
+        .getElementById(settingsSelectId)
+        ?.querySelector('button')
+        ?.textContent?.trim() === 'Default/None',
+  );
   invokeNativeButton(settingsButton);
   check(
-    settingsToggleChecked && settingsButtonClicks === 1,
-    'native settings controls call extension handlers and invalidate state',
+    settingsToggleChecked &&
+      settingsSelectedValue === '' &&
+      emptyValueOption != null &&
+      settingsButtonClicks === 1,
+    'native settings controls accept empty select values, call handlers, and invalidate state',
   );
 
   const secondCustomPaneOpened = await settingsApi.open(settingsSecondPaneId, {

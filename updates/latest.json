@@ -14,7 +14,7 @@
     },
     "1.1.1": {
       "release": "chatgpt-api-v1.1.1",
-      "sha256": "d4f05e40e5248df76f93c5704052258d6a23d27e758cf25ac046e21be1c80677"
+      "sha256": "f4c64e31d5bd19da3cb5b589125b5811dc7305abbc0f1b273de4ee9883a032e4"
     }
   },
   "bindings": {
@@ -44,14 +44,14 @@
       "chatgptApi": "1.1.1",
       "asarSha256": "5f6e773aafd542d3cf09e10b5dca6cabd301d0a155f4b8ce870e3915fc3da25e",
       "release": "binding-26.803.41515-v1.1.1",
-      "sha256": "da171ff5bc70f45fabac48783d4ac72e9e7d7e8336d5ff4fe7b676c0df9c7782"
+      "sha256": "66cf90240fa5e9b54559884e75a9c0d307fb6b99be8e67dedb8de240163c9210"
     },
     "26.803.61601": {
       "version": "1.1.1",
       "chatgptApi": "1.1.1",
       "asarSha256": "928129601e8b36eccba603114d6912352f2b13182f3a7d60b32166d0e81aafb5",
       "release": "binding-26.803.61601-v1.1.1",
-      "sha256": "e1fe76257d0ad114bdc2371794f69826389eab8be6dd3d03cb9e863b90792faa"
+      "sha256": "e2cfd909fc5c3bdb096fbb775c7cb666e2e3ff7e9c7802636426badefa19123e"
     },
     "26.803.81509": {
       "version": "1.0.0",
@@ -90,7 +90,7 @@
             "chatgptApi": "^1.1.0"
           },
           "release": "extension-extensions-v0.1.1",
-          "sha256": "7213240faf8c192384882f54be0fad0f135b2f1e33bedf6bbcfaf1967d367f5d"
+          "sha256": "05754d412ee01bd1e9140c861e9592852a24c5938694e6f538f5cb5e148a95a5"
         }
       }
     },

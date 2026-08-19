@@ -100,6 +100,25 @@ test("installed extensions use locked version paths and deterministic id order",
   );
 });
 
+test("installed extension ids use UTF-16 code-unit order", () => {
+  const inputIds = ["aa", "a_a", "a.a", "a-a"];
+  const { root, versions } = makeStore(
+    inputIds.map((id) => ({
+      id,
+      name: id,
+      description: id,
+      enabled: true,
+    })),
+  );
+
+  assert.deepEqual(
+    readExtensionEntries({ extensionsDirectory: root, versions }).map(
+      (entry) => entry.id,
+    ),
+    ["a-a", "a.a", "a_a", "aa"],
+  );
+});
+
 test("disabled extensions stay installed and are omitted at startup", () => {
   const { root, versions } = makeStore([
     {
@@ -416,7 +435,11 @@ test("explicit extensions follow the authorized manager in lexical id order", ()
   const ordered = orderExtensionEntries(
     [
       { id: "z", path: "/tmp/z/main.js" },
+      { id: "a_a", path: "/tmp/a_a/main.js" },
       { id: "extensions", path: managerPath },
+      { id: "aa", path: "/tmp/aa/main.js" },
+      { id: "a.a", path: "/tmp/a.a/main.js" },
+      { id: "a-a", path: "/tmp/a-a/main.js" },
       { id: "a", path: "/tmp/a/main.js" },
     ],
     managerPath,
@@ -424,13 +447,13 @@ test("explicit extensions follow the authorized manager in lexical id order", ()
 
   assert.deepEqual(
     ordered.map((entry) => entry.id),
-    ["extensions", "a", "z"],
+    ["extensions", "a", "a-a", "a.a", "a_a", "aa", "z"],
   );
   assert.deepEqual(
     ordered.map((entry) =>
       isAuthorizedExtensionManagerEntry(entry, managerPath),
     ),
-    [true, false, false],
+    [true, false, false, false, false, false, false],
   );
 });
 
