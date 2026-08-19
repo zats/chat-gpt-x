@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+state_root="${MOCK_GH_STATE_ROOT:?}"
+call_log="${MOCK_GH_CALL_LOG:?}"
+asset="$state_root/latest.json"
+
+{
+  printf '%s' "$1"
+  printf '\t%s' "${@:2}"
+  printf '\n'
+} >> "$call_log"
+
+command_name="$1"
+shift
+
+if [[ "$command_name" == "release" ]]; then
+  action="$1"
+  tag="$2"
+  shift 2
+  [[ "$tag" == "updates" ]] || exit 90
+
+  case "$action" in
+    view)
+      [[ -f "$state_root/release-exists" ]] || exit 1
+      published_generation="$(< "$state_root/published-generation")"
+      if [[ -f "$state_root/published-index-sha" ]]; then
+        published_index_sha="$(< "$state_root/published-index-sha")"
+        body="Selected generation $published_generation with index SHA-256 $published_index_sha from 1111111111111111111111111111111111111111 after all referenced component releases were verified."
+      else
+        body="Generation $published_generation published from 1111111111111111111111111111111111111111 after all referenced component releases were verified."
+      fi
+      if [[ -f "$asset" ]]; then
+        jq -cn --arg body "$body" '{assets: [{name: "latest.json"}], body: $body}'
+      else
+        jq -cn --arg body "$body" '{assets: [], body: $body}'
+      fi
+      ;;
+    download)
+      pattern=""
+      directory=""
+      while (($# > 0)); do
+        case "$1" in
+          --repo)
+            shift 2
+            ;;
+          --pattern)
+            pattern="$2"
+            shift 2
+            ;;
+          --dir)
+            directory="$2"
+            shift 2
+            ;;
+          *)
+            exit 91
+            ;;
+        esac
+      done
+      [[ "$pattern" == "latest.json" && -f "$asset" ]] || exit 1
+      cp "$asset" "$directory/latest.json"
+      ;;
+    upload)
+      source_file="$1"
+      shift
+      clobber=false
+      while (($# > 0)); do
+        case "$1" in
+          --repo)
+            shift 2
+            ;;
+          --clobber)
+            clobber=true
+            shift
+            ;;
+          *)
+            exit 92
+            ;;
+        esac
+      done
+      if [[ "$clobber" == true && -f "$state_root/fail-next-clobber" ]]; then
+        rm -f "$asset" "$state_root/fail-next-clobber"
+        exit 1
+      fi
+      [[ "$clobber" == true || ! -f "$asset" ]] || exit 1
+      cp "$source_file" "$asset"
+      ;;
+    edit)
+      if [[ -f "$state_root/fail-next-edit" ]]; then
+        rm "$state_root/fail-next-edit"
+        exit 1
+      fi
+      notes=""
+      while (($# > 0)); do
+        case "$1" in
+          --repo | --title)
+            shift 2
+            ;;
+          --notes)
+            notes="$2"
+            shift 2
+            ;;
+          *)
+            exit 93
+            ;;
+        esac
+      done
+      published_generation="$(
+        sed -nE \
+          's/^Selected generation ([0-9]+) with index SHA-256 ([0-9a-f]{64}) from [0-9a-f]{40} after all referenced component releases were verified\.$/\1/p' \
+          <<< "$notes"
+      )"
+      published_index_sha="$(
+        sed -nE \
+          's/^Selected generation ([0-9]+) with index SHA-256 ([0-9a-f]{64}) from [0-9a-f]{40} after all referenced component releases were verified\.$/\2/p' \
+          <<< "$notes"
+      )"
+      [[ "$published_generation" =~ ^[0-9]+$ &&
+        "$published_index_sha" =~ ^[0-9a-f]{64}$ ]] || exit 94
+      printf '%s\n' "$published_generation" > "$state_root/published-generation"
+      printf '%s\n' "$published_index_sha" > "$state_root/published-index-sha"
+      ;;
+    create)
+      exit 95
+      ;;
+    *)
+      exit 96
+      ;;
+  esac
+  exit 0
+fi
+
+if [[ "$command_name" == "api" ]]; then
+  target_sha=""
+  while (($# > 0)); do
+    if [[ "$1" == "-f" && "${2:-}" == sha=* ]]; then
+      target_sha="${2#sha=}"
+      shift 2
+    else
+      shift
+    fi
+  done
+  [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]] || exit 97
+  printf '%s\n' "$target_sha"
+  exit 0
+fi
+
+exit 98

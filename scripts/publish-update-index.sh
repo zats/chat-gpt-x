@@ -131,50 +131,146 @@ if [[ "$MODE" == "--verify-only" ]]; then
 fi
 
 generation="$(jq -er '.generation' "$INDEX_FILE")"
-notes="Generation $generation published from $MODE after all referenced component releases were verified."
+index_sha="$(hash_file "$INDEX_FILE")"
+notes="Selected generation $generation with index SHA-256 $index_sha from $MODE after all referenced component releases were verified."
 current_root="$verification_root/current"
 mkdir -p "$current_root"
 index_release_exists=false
-if gh release view "$INDEX_RELEASE" --repo "$REPOSITORY" >/dev/null 2>&1; then
+current_index_exists=false
+upload_required=false
+upload_with_clobber=false
+release_metadata=""
+if release_metadata="$(
+  gh release view "$INDEX_RELEASE" \
+    --repo "$REPOSITORY" \
+    --json assets,body \
+    2>/dev/null
+)"; then
   index_release_exists=true
-  download_release_asset \
-    "$INDEX_RELEASE" \
-    "$(basename "$INDEX_FILE")" \
-    "$current_root"
-  current_index="$current_root/$(basename "$INDEX_FILE")"
-  current_generation="$(
-    jq -er '
-      .generation |
-      select(type == "number" and floor == . and . >= 0)
-    ' "$current_index"
-  )" || {
-    echo "Published update index has an invalid generation" >&2
+  jq -e '(.assets | type) == "array"' <<< "$release_metadata" >/dev/null || {
+    echo "Published update index release has invalid asset metadata" >&2
     exit 1
   }
-  if ((current_generation > generation)); then
-    echo "Generation $generation is already superseded by $current_generation"
-    exit 0
-  fi
-  if ((current_generation == generation)); then
-    cmp "$INDEX_FILE" "$current_index" || {
-      echo "Generation $generation is already published with different content" >&2
+  release_body_state="$(
+    jq -er '
+      .body |
+      if test(
+        "^Selected generation [0-9]+ with index SHA-256 [0-9a-f]{64} from [0-9a-f]{40} after all referenced component releases were verified\\.$"
+      ) then
+        capture(
+          "^Selected generation (?<generation>[0-9]+) with index SHA-256 (?<indexSha>[0-9a-f]{64}) from [0-9a-f]{40} after all referenced component releases were verified\\.$"
+        ) + {format: "modern"}
+      elif test(
+        "^Generation [0-9]+ published from [0-9a-f]{40} after all referenced component releases were verified\\.$"
+      ) then
+        capture(
+          "^Generation (?<generation>[0-9]+) published from [0-9a-f]{40} after all referenced component releases were verified\\.$"
+        ) + {indexSha: "-", format: "legacy"}
+      else
+        error("invalid update index release body")
+      end |
+      (.generation | tonumber) as $generation |
+      select(($generation | floor) == $generation and $generation >= 0) |
+      [$generation, .indexSha, .format] |
+      @tsv
+    ' <<< "$release_metadata"
+  )" || {
+    echo "Published update index release does not record valid publication state" >&2
+    exit 1
+  }
+  IFS=$'\t' read -r body_generation body_index_sha body_format \
+    <<< "$release_body_state"
+
+  if jq -e \
+    --arg name "$(basename "$INDEX_FILE")" \
+    'any(.assets[]; .name == $name)' \
+    <<< "$release_metadata" >/dev/null
+  then
+    current_index_exists=true
+    download_release_asset \
+      "$INDEX_RELEASE" \
+      "$(basename "$INDEX_FILE")" \
+      "$current_root"
+    current_index="$current_root/$(basename "$INDEX_FILE")"
+    current_generation="$(
+      jq -er '
+        .generation |
+        select(type == "number" and floor == . and . >= 0)
+      ' "$current_index"
+    )" || {
+      echo "Published update index has an invalid generation" >&2
       exit 1
     }
-    echo "Generation $generation is already published; verifying its release metadata"
+    current_index_sha="$(hash_file "$current_index")"
+    if [[ "$body_format" == "modern" ]] &&
+      ((current_generation == body_generation)) &&
+      [[ "$current_index_sha" != "$body_index_sha" ]]
+    then
+      echo "Published generation $current_generation does not match its selected index hash" >&2
+      exit 1
+    fi
+  fi
+
+  if ((body_generation > generation)); then
+    if [[ "$current_index_exists" == true ]] &&
+      ((current_generation >= body_generation))
+    then
+      echo "Generation $generation is already superseded by $current_generation"
+      exit 0
+    else
+      echo "Generation $generation is older than recorded generation $body_generation" >&2
+      exit 1
+    fi
+  fi
+  if ((body_generation == generation)); then
+    if [[ "$body_format" == "modern" && "$body_index_sha" != "$index_sha" ]]; then
+      echo "Generation $generation is already selected with different content" >&2
+      exit 1
+    fi
+    if [[ "$body_format" == "legacy" ]] && {
+      [[ "$current_index_exists" == false ]] ||
+        ((current_generation < body_generation));
+    }; then
+      echo "Generation $generation cannot be recovered without its published index hash" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ "$current_index_exists" == true ]]; then
+    if ((current_generation > generation)); then
+      echo "Generation $generation is already superseded by $current_generation"
+      exit 0
+    fi
+    if ((current_generation == generation)); then
+      cmp "$INDEX_FILE" "$current_index" || {
+        echo "Generation $generation is already published with different content" >&2
+        exit 1
+      }
+      echo "Generation $generation is already published; verifying its release metadata"
+    else
+      upload_required=true
+      upload_with_clobber=true
+    fi
+  else
+    upload_required=true
   fi
 fi
 
 if [[ "$index_release_exists" == true ]]; then
-  if ((current_generation < generation)); then
-    gh release upload "$INDEX_RELEASE" \
-      "$INDEX_FILE" \
-      --repo "$REPOSITORY" \
-      --clobber
-  fi
   gh release edit "$INDEX_RELEASE" \
     --repo "$REPOSITORY" \
     --title "ChatGPTX update index" \
     --notes "$notes"
+  if [[ "$upload_required" == true && "$upload_with_clobber" == true ]]; then
+    gh release upload "$INDEX_RELEASE" \
+      "$INDEX_FILE" \
+      --repo "$REPOSITORY" \
+      --clobber
+  elif [[ "$upload_required" == true ]]; then
+    gh release upload "$INDEX_RELEASE" \
+      "$INDEX_FILE" \
+      --repo "$REPOSITORY"
+  fi
 else
   gh release create "$INDEX_RELEASE" \
     "$INDEX_FILE" \
