@@ -37,6 +37,13 @@ enum ChatGPTXApplication {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let automaticUpdateInterval: Duration = .seconds(10 * 60)
 
+    static func automaticRecoveryAllowed(
+        launchInProgress: Bool,
+        updateInProgress _: Bool
+    ) -> Bool {
+        !launchInProgress
+    }
+
     private let options: LaunchOptions
     private var componentStore: ComponentStore?
     private var componentUpdateService: ComponentUpdateService?
@@ -159,7 +166,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             recoveryAllowed: { [weak self] in
                 guard let self else { return false }
-                return launchTask == nil && updateTask == nil
+                return Self.automaticRecoveryAllowed(
+                    launchInProgress: launchTask != nil,
+                    updateInProgress: updateTask != nil
+                )
             },
             relaunch: { [weak self] applicationURL in
                 guard let self else {

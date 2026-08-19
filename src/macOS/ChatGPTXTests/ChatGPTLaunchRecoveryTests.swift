@@ -272,54 +272,117 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testApprovalRefreshReconsidersLaunchAfterUpdateFinishes() async {
-        let source = MockLifecycleSource()
-        let direct = MockApplication(pid: 15, url: applicationURL)
-        let injected = MockApplication(
+    func testApprovalRefreshAndUpdateGateRecoverInactiveLaunches() async {
+        XCTAssertTrue(AppDelegate.automaticRecoveryAllowed(
+            launchInProgress: false,
+            updateInProgress: false
+        ))
+        XCTAssertTrue(AppDelegate.automaticRecoveryAllowed(
+            launchInProgress: false,
+            updateInProgress: true
+        ))
+        XCTAssertFalse(AppDelegate.automaticRecoveryAllowed(
+            launchInProgress: true,
+            updateInProgress: false
+        ))
+        XCTAssertFalse(AppDelegate.automaticRecoveryAllowed(
+            launchInProgress: true,
+            updateInProgress: true
+        ))
+
+        let approvalSource = MockLifecycleSource()
+        let approvalDirect = MockApplication(pid: 15, url: applicationURL)
+        let approvalInjected = MockApplication(
             pid: 16,
             url: applicationURL,
             injected: true
         )
         var approvedURL: URL?
-        var updateInProgress = true
-        direct.onTerminate = {
-            direct.isTerminated = true
+        approvalDirect.onTerminate = {
+            approvalDirect.isTerminated = true
         }
-        var relaunchCount = 0
-        let monitor = makeMonitor(
-            source: source,
-            approvedApplicationURL: { approvedURL },
-            recoveryAllowed: { !updateInProgress }
+        var approvalRelaunchCount = 0
+        let approvalMonitor = makeMonitor(
+            source: approvalSource,
+            approvedApplicationURL: { approvedURL }
         ) { _ in
-            relaunchCount += 1
-            source.applications = [injected]
-            return injected
+            approvalRelaunchCount += 1
+            approvalSource.applications = [approvalInjected]
+            return approvalInjected
         }
 
-        monitor.start()
-        source.applications = [direct]
-        source.emitLaunch(direct)
-        await Task.yield()
+        approvalMonitor.start()
+        approvalSource.applications = [approvalDirect]
+        approvalSource.emitLaunch(approvalDirect)
 
-        XCTAssertEqual(direct.terminateCount, 0)
-        XCTAssertEqual(relaunchCount, 0)
+        XCTAssertEqual(approvalDirect.terminateCount, 0)
+        XCTAssertEqual(approvalRelaunchCount, 0)
 
         approvedURL = applicationURL
-        monitor.refreshApprovedApplication()
-        await Task.yield()
-
-        XCTAssertEqual(direct.terminateCount, 0)
-        XCTAssertEqual(relaunchCount, 0)
-
-        updateInProgress = false
-        monitor.refreshApprovedApplication()
-
+        approvalMonitor.refreshApprovedApplication()
         await waitUntil {
-            relaunchCount == 1 && monitor.recoveryPhase == .armed
+            approvalRelaunchCount == 1
+                && approvalMonitor.recoveryPhase == .armed
         }
 
-        XCTAssertEqual(direct.terminateCount, 1)
-        XCTAssertEqual(relaunchCount, 1)
+        XCTAssertEqual(approvalDirect.terminateCount, 1)
+        XCTAssertEqual(approvalRelaunchCount, 1)
+        approvalMonitor.stop()
+
+        let gatedSource = MockLifecycleSource()
+        let gatedDirect = MockApplication(pid: 17, url: applicationURL)
+        let gatedInjected = MockApplication(
+            pid: 18,
+            url: applicationURL,
+            injected: true
+        )
+        var terminationWasInactive = false
+        gatedDirect.onTerminate = {
+            terminationWasInactive = !gatedDirect.isActive
+                && !gatedDirect.isFinishedLaunching
+            gatedDirect.isTerminated = true
+        }
+        var updateWaitStarted = false
+        var finishUpdate: CheckedContinuation<Void, Never>?
+        var gatedRelaunchCount = 0
+        let gatedMonitor = makeMonitor(source: gatedSource) { _ in
+            updateWaitStarted = true
+            await withCheckedContinuation { continuation in
+                finishUpdate = continuation
+            }
+            gatedRelaunchCount += 1
+            gatedSource.applications = [gatedInjected]
+            return gatedInjected
+        }
+
+        gatedMonitor.start()
+        gatedSource.applications = [gatedDirect]
+        gatedSource.emitLaunch(gatedDirect)
+
+        XCTAssertEqual(gatedDirect.terminateCount, 1)
+        XCTAssertTrue(terminationWasInactive)
+        await waitUntil { updateWaitStarted }
+
+        XCTAssertEqual(gatedRelaunchCount, 0)
+        XCTAssertEqual(
+            gatedMonitor.recoveryPhase,
+            .expectingSelfLaunch(gatedDirect.identity)
+        )
+
+        guard let finishUpdate else {
+            XCTFail("Recovery did not wait for the update")
+            return
+        }
+        finishUpdate.resume()
+        gatedMonitor.refreshApprovedApplication()
+
+        await waitUntil {
+            gatedRelaunchCount == 1
+                && gatedMonitor.recoveryPhase == .armed
+        }
+
+        XCTAssertEqual(gatedDirect.terminateCount, 1)
+        XCTAssertEqual(gatedRelaunchCount, 1)
     }
 
     @MainActor
