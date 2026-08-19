@@ -1725,6 +1725,7 @@ async function validateUi(
   const settingsFixtureId = 'settings-ui-fixture';
   const settingsPaneId = `${settingsFixtureId}.pane`;
   const settingsGroupId = `${settingsFixtureId}.group`;
+  const settingsDuplicateGroupId = `${settingsFixtureId}.duplicate-group`;
   const settingsSnapshotPaneId = `${settingsFixtureId}.snapshot-pane`;
   const settingsSecondPaneId = `${settingsFixtureId}.second-pane`;
   const settingsSecondGroupId = `${settingsFixtureId}.second-group`;
@@ -1797,6 +1798,16 @@ async function validateUi(
               footer: 'Settings fixture footer',
               items: [],
             },
+            {
+              id: settingsDuplicateGroupId,
+              title: 'Duplicate item fixture group',
+              items: [
+                {
+                  id: settingsToggleId,
+                  label: 'Duplicate settings fixture toggle',
+                },
+              ],
+            },
           ];
         }
         if (pane.id === settingsSecondPaneId) {
@@ -1867,6 +1878,10 @@ async function validateUi(
           if (context.group.id === settingsSecondGroupId) {
             return [
               ...items,
+              {
+                id: settingsToggleId,
+                label: 'Second custom pane shared item',
+              },
               {
                 id: settingsSecondItemId,
                 label: 'Second custom pane item',
@@ -2656,6 +2671,13 @@ async function validateUi(
   check(
     customPaneOpened &&
       document.getElementById(settingsToggleId) != null &&
+      settingsApi
+        .getGroups(settingsPaneId)
+        .flatMap((group) => group.items)
+        .filter((item) => item.id === settingsToggleId).length === 1 &&
+      Array.from(document.querySelectorAll('[id]')).filter(
+        (element) => element.id === settingsToggleId,
+      ).length === 1 &&
       document.body.textContent?.includes('Settings UI Fixture'),
     'custom settings pane uses the native host page and item deep link',
   );
@@ -2725,6 +2747,63 @@ async function validateUi(
       secondCustomSidebarRow?.getAttribute('aria-current') === 'page' &&
       firstCustomSidebarRow?.getAttribute('aria-current') !== 'page',
     'a custom pane deep link updates content and sidebar selection',
+  );
+  const sharedPaneScrolls = [];
+  const sharedPaneScrollIntoView = Element.prototype.scrollIntoView;
+  let staleFirstPaneTarget;
+  let firstSharedPaneOpened = false;
+  let secondSharedPaneOpened = false;
+  Element.prototype.scrollIntoView = function scrollSharedPaneItemIntoView(
+    options,
+  ) {
+    if (this.id === settingsToggleId && options?.block === 'center') {
+      sharedPaneScrolls.push({
+        paneId:
+          globalThis.__CGPTX_HOST__._debug.settingsState().currentPaneId,
+        text: this.textContent?.trim(),
+      });
+    }
+    return sharedPaneScrollIntoView?.call(this, options);
+  };
+  try {
+    firstSharedPaneOpened = await settingsApi.open(settingsPaneId, {
+      itemId: settingsToggleId,
+    });
+    const firstPaneTarget = document.getElementById(settingsToggleId);
+    staleFirstPaneTarget = firstPaneTarget?.cloneNode(true);
+    if (staleFirstPaneTarget) {
+      staleFirstPaneTarget.hidden = true;
+      document.body.prepend(staleFirstPaneTarget);
+    }
+    secondSharedPaneOpened = await settingsApi.open(settingsSecondPaneId, {
+      itemId: settingsToggleId,
+    });
+  } finally {
+    staleFirstPaneTarget?.remove();
+    Element.prototype.scrollIntoView = sharedPaneScrollIntoView;
+  }
+  const firstSharedPaneScroll = sharedPaneScrolls.at(-2);
+  const secondSharedPaneScroll = sharedPaneScrolls.at(-1);
+  check(
+    Boolean(staleFirstPaneTarget) &&
+      firstSharedPaneOpened &&
+      secondSharedPaneOpened &&
+      settingsApi
+        .getGroups(settingsPaneId)
+        .some((group) =>
+          group.items.some((item) => item.id === settingsToggleId),
+        ) &&
+      settingsApi
+        .getGroups(settingsSecondPaneId)
+        .some((group) =>
+          group.items.some((item) => item.id === settingsToggleId),
+        ) &&
+      firstSharedPaneScroll?.paneId === settingsPaneId &&
+      firstSharedPaneScroll.text?.includes('Settings fixture toggle') &&
+      secondSharedPaneScroll?.paneId === settingsSecondPaneId &&
+      secondSharedPaneScroll.text?.includes('Second custom pane shared item'),
+    'item deep links scope a shared item id to the requested settings pane',
+    { scrolls: sharedPaneScrolls },
   );
   const appearanceOpenedFromCustom = await settingsApi.open(
     'codex.settings.appearance',
@@ -3131,6 +3210,150 @@ async function validateUi(
   check(
     !exposesPrivateSettingsValue(builtInSettingsGroups),
     'the public settings model excludes React elements and callbacks',
+  );
+
+  const nativeCollisionGroup = builtInSettingsGroups.find((group) =>
+    typeof group.id === 'string' &&
+    group.items.includes(settingsBuiltInOverrideItem),
+  );
+  const nativeCollisionItem = nativeCollisionGroup?.items.find(
+    (item) => item === settingsBuiltInOverrideItem,
+  );
+  const nativeCollisionNamespaceEnd =
+    nativeCollisionItem?.id?.lastIndexOf('.');
+  const nativeCollisionOwnerId =
+    typeof nativeCollisionNamespaceEnd === 'number' &&
+    nativeCollisionNamespaceEnd > 0
+      ? nativeCollisionItem.id.slice(0, nativeCollisionNamespaceEnd)
+      : undefined;
+  const nativeCollisionGroupId = `${nativeCollisionOwnerId}.native-id-collision-group`;
+  const nativeCollisionLabel = 'Extension row with native item ID';
+  let nativeCollisionRegistration;
+  if (
+    nativeCollisionItem &&
+    typeof nativeCollisionItem.id === 'string' &&
+    typeof nativeCollisionGroup?.id === 'string' &&
+    nativeCollisionOwnerId
+  ) {
+    globalThis.__CGPTX_HOST__.registerExtension(nativeCollisionOwnerId, {
+      activate(api) {
+        nativeCollisionRegistration = api.settings.transformGroups(
+          (groups, pane) =>
+            pane.id === 'codex.settings.general-settings'
+              ? [
+                  {
+                    id: nativeCollisionGroupId,
+                    title: 'Native item ID collision',
+                    items: [
+                      {
+                        id: nativeCollisionItem.id,
+                        label: nativeCollisionLabel,
+                      },
+                    ],
+                  },
+                  ...groups,
+                ]
+              : groups,
+        );
+      },
+    });
+  }
+  const nativeCollisionOpened = nativeCollisionRegistration
+    ? await settingsApi.open('codex.settings.general-settings', {
+        itemId: nativeCollisionItem.id,
+      })
+    : false;
+  if (nativeCollisionRegistration) {
+    await waitUntil(
+      () =>
+        document
+          .getElementById(nativeCollisionItem.id)
+          ?.textContent?.includes(nativeCollisionLabel) === true &&
+        document.querySelectorAll(
+          `#${CSS.escape(nativeCollisionItem.id)}`,
+        ).length === 1 &&
+        settingsApi
+          .getGroups('codex.settings.general-settings')
+          .some(
+            (group) =>
+              group.id === nativeCollisionGroup?.id &&
+              group.items.some(
+                (item) =>
+                  item.id === undefined &&
+                  item.origin === 'app' &&
+                  item.label === nativeCollisionItem.label,
+              ),
+          ),
+    );
+  }
+  const nativeCollisionGroups = settingsApi.getGroups(
+    'codex.settings.general-settings',
+  );
+  const nativeCollisionIds = nativeCollisionGroups
+    .flatMap((group) => group.items)
+    .filter((item) => item.id === nativeCollisionItem?.id);
+  const anonymizedNativeCollisionGroup = nativeCollisionGroups.find(
+    (group) => group.id === nativeCollisionGroup?.id,
+  );
+  const anonymizedNativeCollisionItem =
+    anonymizedNativeCollisionGroup?.items.find(
+      (item) =>
+        item.id === undefined &&
+        item.origin === 'app' &&
+        item.label === nativeCollisionItem?.label &&
+        item.control?.kind === nativeCollisionItem?.control?.kind,
+    );
+  const nativeCollisionDomCount = nativeCollisionItem
+    ? document.querySelectorAll(`#${CSS.escape(nativeCollisionItem.id)}`).length
+    : 0;
+  const nativeCollisionTargetText = nativeCollisionItem
+    ? document.getElementById(nativeCollisionItem.id)?.textContent
+    : undefined;
+  const preservedNativeCollisionButton = Array.from(
+    document.querySelectorAll('button'),
+  ).find((button) => button.textContent?.trim() === 'Run built-in override');
+  if (preservedNativeCollisionButton) {
+    activateButton(preservedNativeCollisionButton);
+    await waitUntil(() => settingsBuiltInOverrideClicks === 2);
+  }
+  nativeCollisionRegistration?.dispose();
+  if (nativeCollisionItem) {
+    await waitUntil(
+      () =>
+        document
+          .getElementById(nativeCollisionItem.id)
+          ?.textContent?.includes(nativeCollisionItem.label) === true,
+    );
+  }
+  const restoredNativeCollisionItem = settingsApi
+    .getGroups('codex.settings.general-settings')
+    .find((group) => group.id === nativeCollisionGroup?.id)
+    ?.items.find((item) => item.id === nativeCollisionItem?.id);
+  check(
+    nativeCollisionOpened &&
+      nativeCollisionIds.length === 1 &&
+      nativeCollisionIds[0]?.label === nativeCollisionLabel &&
+      nativeCollisionDomCount === 1 &&
+      nativeCollisionTargetText?.includes(nativeCollisionLabel) &&
+      anonymizedNativeCollisionGroup?.items.length ===
+        nativeCollisionGroup?.items.length &&
+      anonymizedNativeCollisionItem?.description ===
+        nativeCollisionItem?.description &&
+      Boolean(preservedNativeCollisionButton) &&
+      settingsBuiltInOverrideClicks === 2 &&
+      restoredNativeCollisionItem?.origin === 'app' &&
+      restoredNativeCollisionItem?.label === nativeCollisionItem?.label &&
+      restoredNativeCollisionItem?.control?.kind ===
+        nativeCollisionItem?.control?.kind,
+    'a later native item with a duplicate pane ID stays visible without the ambiguous ID',
+    {
+      nativeItemId: nativeCollisionItem?.id,
+      nativeGroupId: nativeCollisionGroup?.id,
+      idCount: nativeCollisionIds.length,
+      domCount: nativeCollisionDomCount,
+      anonymized: Boolean(anonymizedNativeCollisionItem),
+      preservedControlClicks: settingsBuiltInOverrideClicks,
+    },
   );
 
   const settingsNavigationTitleShape = (expectedString) => {

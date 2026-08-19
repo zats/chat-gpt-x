@@ -183,6 +183,15 @@ invokes only the assigning extension. A separate exact-ID `app` fixture proves
 that another extension cannot change its descriptors or replace its rendered
 native button. Each item transformer receives a newly frozen context whose
 `group.items` is the same current array supplied as its first argument.
+After every transformer runs, the binding applies one pane-wide item-ID pass
+in final group and item order. The first identified row keeps its ID. A later
+extension row with that ID is dropped, while a later ChatGPT row stays visible
+without the ambiguous ID. This keeps `settings.open(paneId, { itemId })` and
+the rendered DOM target deterministic. The stable suite changes group order,
+removal, and pane to verify the winner and per-pane scope. The native suite
+verifies one public row and one rendered DOM target for an extension collision.
+It also places an extension row before a ChatGPT row with the same ID and
+verifies that the native row remains visible and becomes unidentified.
 
 Native search keeps the `searchQuery`, `onQueryChange`, `searchResults`, and
 `onSelect` contracts. The binding adds one result for each matching effective
@@ -204,9 +213,11 @@ page props with the contributed title and group tree. Search and sidebar
 descriptors use the private ChatGPT owner sentinel plus a captured navigation
 row. ID-only host routing uses the captured navigation-row set directly. An
 extension-owned ID such as `codex.settings.custom` remains a custom pane.
-`open()` waits for the initial Settings snapshot and the requested pane commit
-before it tests an optional target row, then scrolls that row into view. Custom
-panes that share
+Each generated Settings row carries a private class for its effective pane.
+The stock Settings row forwards `className` and `id`, but it drops unknown
+properties. `open()` waits for the initial Settings snapshot and the requested
+pane commit. It then finds the requested row by its exact ID and private pane
+class and scrolls it into view. Custom panes that share
 an active Appearance host switch without a redundant native navigation. When
 Settings is closed, the binding uses the main-process `navigate-to-route`
 message to open General before it selects the requested pane.
@@ -263,10 +274,10 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
 
 Results:
 
-- Launcher unit tests: `66/66`.
+- Launcher unit tests: `67/67`.
 - Extension and shared-utility unit tests: `35/35`.
 - Stable public API assertions: `44/44`.
-- Current native UI assertions: `94/94`.
+- Current native UI assertions: `96/96`.
 - The Multiple Accounts extension switched to another account and restored the
   original account.
 - Shipped-extension composition with the API suite enabled: passed.

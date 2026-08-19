@@ -39,9 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     static func automaticRecoveryAllowed(
         launchInProgress: Bool,
-        updateInProgress _: Bool
+        updateInProgress: Bool,
+        hasPreparedComponents: Bool
     ) -> Bool {
-        !launchInProgress
+        !launchInProgress && (hasPreparedComponents || updateInProgress)
     }
 
     private let options: LaunchOptions
@@ -168,7 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return false }
                 return Self.automaticRecoveryAllowed(
                     launchInProgress: launchTask != nil,
-                    updateInProgress: updateTask != nil
+                    updateInProgress: updateTask != nil,
+                    hasPreparedComponents: preparedComponents != nil
                 )
             },
             relaunch: { [weak self] applicationURL in

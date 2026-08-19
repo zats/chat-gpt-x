@@ -272,24 +272,36 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testApprovalRefreshAndUpdateGateRecoverInactiveLaunches() async {
+    func testAutomaticRecoveryRequiresPreparedComponentsOrActiveUpdate() {
         XCTAssertTrue(AppDelegate.automaticRecoveryAllowed(
             launchInProgress: false,
-            updateInProgress: false
+            updateInProgress: false,
+            hasPreparedComponents: true
         ))
         XCTAssertTrue(AppDelegate.automaticRecoveryAllowed(
             launchInProgress: false,
-            updateInProgress: true
+            updateInProgress: true,
+            hasPreparedComponents: false
+        ))
+        XCTAssertFalse(AppDelegate.automaticRecoveryAllowed(
+            launchInProgress: false,
+            updateInProgress: false,
+            hasPreparedComponents: false
         ))
         XCTAssertFalse(AppDelegate.automaticRecoveryAllowed(
             launchInProgress: true,
-            updateInProgress: false
+            updateInProgress: false,
+            hasPreparedComponents: true
         ))
         XCTAssertFalse(AppDelegate.automaticRecoveryAllowed(
             launchInProgress: true,
-            updateInProgress: true
+            updateInProgress: true,
+            hasPreparedComponents: true
         ))
+    }
 
+    @MainActor
+    func testApprovalRefreshAndUpdateWaitRecoverInactiveLaunches() async {
         let approvalSource = MockLifecycleSource()
         let approvalDirect = MockApplication(pid: 15, url: applicationURL)
         let approvalInjected = MockApplication(

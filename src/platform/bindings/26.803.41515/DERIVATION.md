@@ -171,6 +171,16 @@ through item normalization, so it cannot bypass item ownership. A foreign pane
 can move only inside its existing category; a cross-category copy is dropped
 before an omitted source category is restored.
 
+After every transformer runs, the binding applies one pane-wide item-ID pass
+in final group and item order. The first identified row keeps its ID. A later
+extension row with that ID is dropped, while a later ChatGPT row stays visible
+without the ambiguous ID. This keeps `settings.open(paneId, { itemId })` and
+the rendered DOM target deterministic. The stable suite changes group order,
+removal, and pane to verify the winner and per-pane scope. The native suite
+verifies one public row and one rendered DOM target for an extension collision.
+It also places an extension row before a ChatGPT row with the same ID and
+verifies that the native row remains visible and becomes unidentified.
+
 The public control factories render the stock `QS` controlled toggle, the
 `GU`/`Ia`/`qU.Item` dropdown composition, and `Mbt`. Source inspection of the
 stock General and Voice settings implementations confirmed the `QS`
@@ -222,10 +232,13 @@ prevents the previous active row from winning during the app's asynchronous
 selection render. A page commit uses the exact native section-title slug, or
 the exact Profile back-slot message, and must match the raw active native row.
 The binding rejects the app's native loading page and an old-page commit during
-navigation. `open()` waits for the initial Settings snapshot and the requested
-pane commit before it tests a requested row, then scrolls that row into view.
-Custom panes that share an active Appearance host switch without a redundant
-native navigation. When Settings is closed, `open()` uses the main-process
+navigation. Each generated Settings row carries a private class for its
+effective pane. The stock Settings row forwards `className` and `id`, but it
+drops unknown properties. `open()` waits for the initial Settings snapshot and
+the requested pane commit. It then finds the requested row by its exact ID and
+private pane class and scrolls it into view. Custom panes that share an active
+Appearance host switch without a redundant native navigation. When Settings is
+closed, `open()` uses the main-process
 `navigate-to-route` host message to open General, waits for the native model,
 and then selects the requested pane. Entering or leaving a custom pane also
 invalidates the native host page when Appearance is already selected.
@@ -316,10 +329,10 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
 
 Results:
 
-- Launcher unit tests: `66/66`.
+- Launcher unit tests: `67/67`.
 - Extension and shared-utility unit tests: `35/35`.
 - Stable public API assertions: `44/44`.
-- Current native UI suite: `94/94`.
+- Current native UI suite: `96/96`.
 - The Multiple Accounts extension switched to another account and restored the
   original account.
 - Shipped-extension composition with the API suite enabled: passed.

@@ -1216,7 +1216,14 @@ test("settings: transformers chain, isolate failures, and validate ids", async (
   const contextGroupId = `${EXT_ID}.context-group`;
   const contextFirstItemId = `${EXT_ID}.context-first`;
   const contextSecondItemId = `${EXT_ID}.context-second`;
+  const duplicateFirstGroupId = `${EXT_ID}.duplicate-first-group`;
+  const duplicateSecondGroupId = `${EXT_ID}.duplicate-second-group`;
+  const duplicateOtherPaneId = `${EXT_ID}.duplicate-other-pane`;
+  const duplicateOtherGroupId = `${EXT_ID}.duplicate-other-group`;
+  const duplicateItemId = `${EXT_ID}.pane-duplicate-item`;
   let laterContextMatchesCurrentItems = false;
+  let duplicateSecondGroupFirst = false;
+  let includeDuplicateSecondGroup = true;
   const first = api.settings.transformCategories((categories) => [
     ...categories,
     {
@@ -1235,6 +1242,10 @@ test("settings: transformers chain, isolate failures, and validate ids", async (
         {
           id: "foreign.settings",
           label: "Foreign pane",
+        },
+        {
+          id: duplicateOtherPaneId,
+          label: "Other duplicate pane",
         },
       ],
     },
@@ -1296,6 +1307,53 @@ test("settings: transformers chain, isolate failures, and validate ids", async (
     }
     return current;
   });
+  const duplicateGroups = api.settings.transformGroups((groups, pane) => {
+    if (pane.id === duplicateOtherPaneId) {
+      return [
+        ...groups,
+        {
+          id: duplicateOtherGroupId,
+          items: [
+            {
+              id: duplicateItemId,
+              label: "Other pane duplicate row",
+            },
+          ],
+        },
+      ];
+    }
+    if (pane.id !== SETTINGS_PANE_ID) return groups;
+    const firstGroup = {
+      id: duplicateFirstGroupId,
+      items: [
+        {
+          id: duplicateItemId,
+          label: "First duplicate row",
+        },
+      ],
+    };
+    const secondGroup = {
+      id: duplicateSecondGroupId,
+      items: [],
+    };
+    const orderedDuplicateGroups = includeDuplicateSecondGroup
+      ? duplicateSecondGroupFirst
+        ? [secondGroup, firstGroup]
+        : [firstGroup, secondGroup]
+      : [firstGroup];
+    return [...groups, ...orderedDuplicateGroups];
+  });
+  const duplicateItems = api.settings.transformItems((current, context) =>
+    context.group.id === duplicateSecondGroupId
+      ? [
+          ...current,
+          {
+            id: duplicateItemId,
+            label: "Second duplicate row",
+          },
+        ]
+      : current,
+  );
   activeTestDisposables?.push(
     first,
     throwing,
@@ -1303,6 +1361,8 @@ test("settings: transformers chain, isolate failures, and validate ids", async (
     contextGroup,
     contextFirst,
     contextSecond,
+    duplicateGroups,
+    duplicateItems,
   );
 
   assert(
@@ -1341,6 +1401,49 @@ test("settings: transformers chain, isolate failures, and validate ids", async (
     laterContextMatchesCurrentItems &&
       effectiveContextGroup?.items.length === 2,
     "later item transformers receive a fresh context for the current item list",
+  );
+  const duplicateLabels = () =>
+    api.settings
+      .getGroups(SETTINGS_PANE_ID)
+      .flatMap((group) => group.items)
+      .filter((item) => item.id === duplicateItemId)
+      .map((item) => item.label);
+  assert(
+    duplicateLabels().join(",") === "First duplicate row",
+    "the first duplicate item in final pane order wins",
+  );
+  duplicateSecondGroupFirst = true;
+  duplicateGroups.invalidate();
+  assert(
+    await waitFor(
+      () => duplicateLabels().join(",") === "Second duplicate row",
+      5000,
+    ),
+    "reordering groups changes which duplicate item wins",
+  );
+  includeDuplicateSecondGroup = false;
+  duplicateGroups.invalidate();
+  assert(
+    await waitFor(
+      () => duplicateLabels().join(",") === "First duplicate row",
+      5000,
+    ),
+    "removing the winning group exposes the remaining duplicate item",
+  );
+  assert(
+    await api.settings.open(SETTINGS_PANE_ID, { itemId: duplicateItemId }),
+    "a pane-wide unique item id remains a deterministic deep link",
+  );
+  assert(
+    (await api.settings.open(duplicateOtherPaneId, {
+      itemId: duplicateItemId,
+    })) &&
+      api.settings
+        .getGroups(duplicateOtherPaneId)
+        .flatMap((group) => group.items)
+        .find((item) => item.id === duplicateItemId)?.label ===
+        "Other pane duplicate row",
+    "the same item id remains valid in a different pane",
   );
 });
 

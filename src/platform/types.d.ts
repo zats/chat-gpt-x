@@ -494,8 +494,13 @@ export interface SettingsApi {
    * The callback runs when a pane's content is rendered. It receives the
    * groups produced by ChatGPT and earlier transformers, plus the effective
    * pane descriptor. A new pane starts with an empty group list. Return the
-   * final groups. Extension-created ids must be namespaced; duplicate or
-   * foreign ids are dropped and logged.
+   * final groups. Extension-created group and inline item ids must be
+   * namespaced. Duplicate group ids and foreign ids are dropped and logged.
+   * After all group and item transforms, an identified item id is unique
+   * across the effective pane. The first row in final group and item order
+   * keeps the id. A later extension row with the same id is dropped. A later
+   * ChatGPT row remains visible without the ambiguous id. The same item id can
+   * be used in a different pane.
    *
    * Group transformers run in extension load and registration order. A
    * throwing transformer is skipped and logged. Item transformers run after
@@ -545,7 +550,9 @@ export interface SettingsApi {
    * reorder, modify, or add rows. Built-in rows have stable semantic ids when
    * ChatGPT supplies a semantic identity; otherwise their `id` is undefined
    * and the same object must be returned to preserve them. Every new item
-   * requires an extension-namespaced id.
+   * requires an extension-namespaced id. An identified item id must be unique
+   * across all final groups in its effective pane. The first row in final
+   * group and item order wins; the same id can be used in another pane.
    *
    * Transformers run in extension load and registration order for each
    * group. A throwing transformer is skipped and logged. Control callbacks
@@ -754,7 +761,7 @@ export interface SettingsGroup {
   /** Extra native settings-search terms for rows in this group. */
   readonly keywords?: readonly string[];
 
-  /** Ordered rows in the group. */
+  /** Ordered rows; identified row ids are unique across the effective pane. */
   readonly items: readonly SettingsItem[];
 
   /**
@@ -804,7 +811,7 @@ export type SettingsItemTransform = (
  * @group Settings
  */
 export interface SettingsItem {
-  /** Stable semantic id, when available. */
+  /** Stable semantic id, unique within its effective pane, when available. */
   readonly id?: string;
 
   /** Visible row label. */
@@ -828,7 +835,7 @@ export interface SettingsItem {
 
 /** Options for {@link SettingsApi.open}. @group Settings */
 export interface SettingsOpenOptions {
-  /** Optional row id to scroll into view after its pane renders. */
+  /** Optional pane-unique row id to scroll into view after rendering. */
   readonly itemId?: string;
 }
 

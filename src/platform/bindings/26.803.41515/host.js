@@ -248,6 +248,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const settingsNavigationGroupTemplates = new Map();
   const settingsGroupModels = new Map();
   const settingsPaneRenderCounts = new Map();
+  const settingsPaneRowClasses = new Map();
   const APP_SETTINGS_OWNER = Symbol("app-settings-owner");
   const settingsCategoryOwners = new WeakMap();
   const settingsPaneOwners = new WeakMap();
@@ -308,6 +309,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let settingsSetSearchQuery = null;
   let settingsRefreshScheduled = false;
   let settingsOpenOperations = Promise.resolve();
+  let nextSettingsPaneRowClass = 1;
   let lastPointerX = innerWidth / 2;
 
   addEventListener(
@@ -1262,6 +1264,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         );
       }
     }
+    const seenItemIds = new Set();
     return Object.freeze(
       groups.map((group) => {
         let items = group.items;
@@ -1288,8 +1291,45 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
             );
           }
         }
+        const uniqueItems = [];
+        for (const item of items) {
+          if (typeof item.id !== "string") {
+            uniqueItems.push(item);
+            continue;
+          }
+          if (!seenItemIds.has(item.id)) {
+            seenItemIds.add(item.id);
+            uniqueItems.push(item);
+            continue;
+          }
+          if (settingsItemOwners.get(item) === APP_SETTINGS_OWNER) {
+            const unidentifiedItem = { ...item };
+            delete unidentifiedItem.id;
+            uniqueItems.push(
+              freezeSettingsItem(
+                unidentifiedItem,
+                APP_SETTINGS_OWNER,
+                item,
+                settingsItemControlOwners.get(item),
+              ),
+            );
+            warn(
+              "removing duplicate native settings item id in pane " +
+                paneId +
+                ": " +
+                item.id,
+            );
+            continue;
+          }
+          warn(
+            "dropping duplicate settings item id in pane " +
+              paneId +
+              ": " +
+              item.id,
+          );
+        }
         return freezeSettingsGroup(
-          { ...group, items },
+          { ...group, items: uniqueItems },
           settingsGroupOwners.get(group),
           group,
         );
@@ -2996,7 +3036,16 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return undefined;
   }
 
-  function renderSettingsItem(model, group, item) {
+  function settingsPaneRowClass(paneId) {
+    let className = settingsPaneRowClasses.get(paneId);
+    if (className === undefined) {
+      className = `cgptx-settings-pane-${nextSettingsPaneRowClass++}`;
+      settingsPaneRowClasses.set(paneId, className);
+    }
+    return className;
+  }
+
+  function renderSettingsItem(paneId, model, group, item) {
     const view =
       typeof item.id === "string"
         ? settingsGroupView(model, group)?.rowElements.find(
@@ -3015,6 +3064,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ...(view?.props ?? {}),
         id: item.id,
         "data-settings-target-id": item.id,
+        className: [view?.props?.className, settingsPaneRowClass(paneId)]
+          .filter((value) => typeof value === "string" && value.length > 0)
+          .join(" "),
         label:
           nativeContent && item.label === nativeContent.labelText
             ? nativeContent.label
@@ -3153,7 +3205,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
   function renderSettingsGroup(paneId, model, group) {
     const items = group.items.map((item) =>
-      renderSettingsItem(model, group, item),
+      renderSettingsItem(paneId, model, group, item),
     );
     const view = settingsGroupView(model, group);
     if (view) return renderCapturedSettingsGroup(view, group, items);
@@ -3355,6 +3407,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     });
   }
 
+  function settingsPaneItemTarget(paneId, itemId) {
+    for (const element of document.getElementsByClassName(
+      settingsPaneRowClass(paneId),
+    )) {
+      if (element.id === itemId) return element;
+    }
+    return null;
+  }
+
   async function openSettingsPane(paneId, itemId) {
     if (
       settingsContentMountCount === 0 ||
@@ -3410,10 +3471,14 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     if (!itemExists) return false;
     if (itemId !== undefined) {
       const rendered = await waitForSettings(
-        () => document.getElementById(itemId) !== null,
+        () =>
+          currentSettingsPaneId() === paneId &&
+          settingsPaneItemTarget(paneId, itemId) !== null,
       );
-      if (!rendered) return false;
-      document.getElementById(itemId)?.scrollIntoView({ block: "center" });
+      if (!rendered || currentSettingsPaneId() !== paneId) return false;
+      const target = settingsPaneItemTarget(paneId, itemId);
+      if (target === null) return false;
+      target.scrollIntoView({ block: "center" });
     }
     return true;
   }
