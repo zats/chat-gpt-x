@@ -406,7 +406,31 @@ test("only the locked extension manager receives management authorization", () =
       ],
       managerPath,
     ).map((entry) => entry.id),
-    ["thread-colors", "extensions"],
+    ["extensions", "thread-colors"],
+  );
+});
+
+test("explicit extensions follow the authorized manager in lexical id order", () => {
+  const managerPath =
+    "/component-store/extensions/extensions/0.1.1/contents/main.js";
+  const ordered = orderExtensionEntries(
+    [
+      { id: "z", path: "/tmp/z/main.js" },
+      { id: "extensions", path: managerPath },
+      { id: "a", path: "/tmp/a/main.js" },
+    ],
+    managerPath,
+  );
+
+  assert.deepEqual(
+    ordered.map((entry) => entry.id),
+    ["extensions", "a", "z"],
+  );
+  assert.deepEqual(
+    ordered.map((entry) =>
+      isAuthorizedExtensionManagerEntry(entry, managerPath),
+    ),
+    [true, false, false],
   );
 });
 

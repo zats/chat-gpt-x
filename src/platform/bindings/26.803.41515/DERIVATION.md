@@ -268,7 +268,7 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
 Results:
 
 - Launcher unit tests: `55/55`.
-- Extension and shared-utility unit tests: `30/30`.
+- Extension and shared-utility unit tests: `32/32`.
 - Stable public API assertions: `44/44`.
 - Current native UI suite: `84/84`.
 - The Multiple Accounts extension switched to another account and restored the

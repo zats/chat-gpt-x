@@ -33,14 +33,17 @@ function isAuthorizedExtensionManagerEntry(entry, managerPath) {
 }
 
 function orderExtensionEntries(entries, managerPath) {
-  const managerIndex = entries.findIndex(
+  const ordered = [...entries].sort((left, right) =>
+    left.id.localeCompare(right.id),
+  );
+  const managerIndex = ordered.findIndex(
     (entry) => isAuthorizedExtensionManagerEntry(entry, managerPath),
   );
-  if (managerIndex <= 0) return entries;
+  if (managerIndex <= 0) return ordered;
   return [
-    entries[managerIndex],
-    ...entries.slice(0, managerIndex),
-    ...entries.slice(managerIndex + 1),
+    ordered[managerIndex],
+    ...ordered.slice(0, managerIndex),
+    ...ordered.slice(managerIndex + 1),
   ];
 }
 

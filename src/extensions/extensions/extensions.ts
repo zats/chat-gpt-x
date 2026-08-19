@@ -36,7 +36,7 @@ export async function activateExtensions(
   api: PlatformApi,
   management: ExtensionManagement,
 ): Promise<readonly Disposable[]> {
-  let installed = await management.list();
+  let installed: readonly InstalledExtension[] = [];
   const navigation = api.settings.transformCategories((categories) =>
     categories.map((category) =>
       category.id === "integrations"
@@ -84,6 +84,8 @@ export async function activateExtensions(
         ]
       : current,
   );
+  installed = await management.list();
+  items.invalidate();
   return Object.freeze([navigation, groups, items]);
 }
 
