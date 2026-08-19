@@ -64,7 +64,7 @@ final class ComponentStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testValidVersionedStoreReturnsEffectiveExtensions() throws {
+    func testValidStoreReturnsExtensionsInDeterministicLaunchOrder() throws {
         let store = try makeStore()
         let extensionComponent = makeExtension(id: "alpha")
         let lock = makeLock(extensions: [extensionComponent])
@@ -91,6 +91,30 @@ final class ComponentStoreTests: XCTestCase {
                     "components/extensions/alpha/1.0.0/package.json"
                 ).path
             )
+        )
+        XCTAssertEqual(
+            ChatGPTLauncher.merge(
+                installedExtensions: [
+                    LaunchExtension(id: "z", path: "/installed/z"),
+                    LaunchExtension(
+                        id: "extensions",
+                        path: "/installed/manager"
+                    ),
+                    LaunchExtension(id: "a", path: "/installed/a"),
+                ],
+                localExtensions: [
+                    LaunchExtension(id: "b", path: "/local/b"),
+                    LaunchExtension(id: "extensions", path: "/local/manager"),
+                    LaunchExtension(id: "a", path: "/local/a1"),
+                    LaunchExtension(id: "a", path: "/local/a2"),
+                ]
+            ),
+            [
+                LaunchExtension(id: "extensions", path: "/local/manager"),
+                LaunchExtension(id: "a", path: "/local/a2"),
+                LaunchExtension(id: "b", path: "/local/b"),
+                LaunchExtension(id: "z", path: "/installed/z"),
+            ]
         )
 
         let settings = try jsonObject(

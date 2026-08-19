@@ -481,7 +481,7 @@ struct ChatGPTLauncher {
             }
             selectedExtensions = [apiTestExtension]
         } else {
-            selectedExtensions = merge(
+            selectedExtensions = Self.merge(
                 installedExtensions: componentStore.extensions
                     .filter(\.enabled)
                     .map {
@@ -561,7 +561,7 @@ struct ChatGPTLauncher {
         return snapshotURL
     }
 
-    private func merge(
+    static func merge(
         installedExtensions: [LaunchExtension],
         localExtensions: [LaunchExtension]
     ) -> [LaunchExtension] {
@@ -575,7 +575,21 @@ struct ChatGPTLauncher {
                 merged.append(extensionComponent)
             }
         }
-        return merged
+        return Self.orderExtensions(merged)
+    }
+
+    private static func orderExtensions(
+        _ extensions: [LaunchExtension]
+    ) -> [LaunchExtension] {
+        extensions.sorted { left, right in
+            if left.id == "extensions" {
+                return right.id != "extensions"
+            }
+            if right.id == "extensions" {
+                return false
+            }
+            return left.id < right.id
+        }
     }
 
     private static func environment(
