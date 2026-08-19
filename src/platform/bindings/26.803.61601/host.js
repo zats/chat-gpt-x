@@ -165,6 +165,19 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return null;
   }
 
+  function containsMessageId(value, id, depth = 0) {
+    if (depth > 30) return false;
+    if (Array.isArray(value)) {
+      return value.some((child) => containsMessageId(child, id, depth + 1));
+    }
+    if (!isElement(value)) return false;
+    const props = value.props ?? {};
+    if (props.id === id) return true;
+    return childrenOf(props.children).some((child) =>
+      containsMessageId(child, id, depth + 1),
+    );
+  }
+
   function containsProfileMessage(value, depth = 0) {
     if (depth > 30 || !isElement(value)) return false;
     const props = value.props ?? {};
@@ -234,8 +247,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const settingsNavigationRows = new Map();
   const settingsNavigationGroupTemplates = new Map();
   const settingsGroupModels = new Map();
+  const settingsPaneRenderCounts = new Map();
   const settingsControlHandlers = new WeakMap();
   const settingsNativeControlElements = new WeakMap();
+  const settingsNativeItemContent = new WeakMap();
+  const debugSettingsSnapshotRequests = new Map();
   let renderVersion = 0;
   let builtInCache = Object.freeze([]);
   let builtInViews = new Map();
@@ -271,7 +287,13 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let settingsNavigationRowTemplate = null;
   let activeSettingsPaneId = null;
   let activeCustomSettingsPaneId = null;
+  let confirmedNativeSettingsPaneId = null;
   let pendingNativeSettingsPaneId = null;
+  let settingsPageCaptureContext = null;
+  let activeSettingsPageCaptureRegistry = null;
+  let holdNextSettingsNavigation = false;
+  let heldSettingsNavigation = null;
+  let debugSettingsSnapshotCommitCount = 0;
   let settingsContentBoundaryRenderCount = 0;
   let settingsContentMountCount = 0;
   let settingsSearchQuery = "";
@@ -730,12 +752,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   function freezeSettingsItem(item) {
-    return Object.freeze({
+    const descriptor = Object.freeze({
       ...item,
       ...(item.keywords === undefined
         ? {}
         : { keywords: freezeStrings(item.keywords) }),
     });
+    const nativeContent = settingsNativeItemContent.get(item);
+    if (nativeContent) settingsNativeItemContent.set(descriptor, nativeContent);
+    return descriptor;
   }
 
   function freezeSettingsGroup(group) {
@@ -943,6 +968,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       const existing = previousById.get(raw.id);
       if (!existing && !raw.id.startsWith(extId + ".")) {
         warn("dropping settings item with foreign-namespace id: " + raw.id);
+        continue;
+      }
+      if (raw === existing) {
+        items.push(existing);
+        seen.add(raw.id);
         continue;
       }
       if (typeof raw.label !== "string") continue;
@@ -2052,6 +2082,73 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       : null;
   }
 
+  function settingsHostPaneId(paneId) {
+    if (typeof paneId !== "string") return null;
+    return settingsSlug(paneId) === null
+      ? "codex.settings.appearance"
+      : paneId;
+  }
+
+  function settingsPagePaneId(child) {
+    const title = child?.props?.title;
+    if (
+      isElement(title) &&
+      title.type === native.SettingsSectionTitle &&
+      typeof title.props?.slug === "string" &&
+      title.props.slug.length > 0
+    ) {
+      return "codex.settings." + title.props.slug;
+    }
+    return child?.props?.fullWidth === true &&
+      containsMessageId(child.props.backSlot, "profile.header")
+      ? "codex.settings.profile"
+      : null;
+  }
+
+  function settingsPageIsLoading(child) {
+    return child?.props?.children?.type === native.SettingsLoading;
+  }
+
+  function settingsPageCommitIsEligible({
+    pageId,
+    loading,
+    confirmedNativePaneId,
+    activePaneId,
+    captureReady,
+  }) {
+    return (
+      !loading &&
+      captureReady &&
+      typeof pageId === "string" &&
+      pageId === confirmedNativePaneId &&
+      pageId === settingsHostPaneId(activePaneId)
+    );
+  }
+
+  function createSettingsCapturePass(pageId) {
+    const pass = {
+      pageId,
+      entries: new Map(),
+      firstToken: null,
+      nextOrder: 0,
+      collect(token, view) {
+        const existing = pass.entries.get(token);
+        if (existing) {
+          existing.view = view;
+          return;
+        }
+        if (pass.firstToken === null) pass.firstToken = token;
+        pass.entries.set(token, {
+          token,
+          view,
+          order: pass.nextOrder,
+        });
+        pass.nextOrder += 1;
+      },
+    };
+    return pass;
+  }
+
   function scheduleSettingsRefresh() {
     if (settingsRefreshScheduled) return;
     settingsRefreshScheduled = true;
@@ -2120,15 +2217,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       }
     }
     if (activeBuiltInPaneId) {
-      if (pendingNativeSettingsPaneId !== null) {
-        if (activeBuiltInPaneId === pendingNativeSettingsPaneId) {
-          pendingNativeSettingsPaneId = null;
-        } else {
-          activeBuiltInPaneId = null;
-        }
-      }
+      const confirmedChanged =
+        confirmedNativeSettingsPaneId !== activeBuiltInPaneId;
+      confirmedNativeSettingsPaneId = activeBuiltInPaneId;
       if (
-        activeBuiltInPaneId &&
+        pendingNativeSettingsPaneId === null &&
         (activeCustomSettingsPaneId === null ||
           activeBuiltInPaneId !== "codex.settings.appearance")
       ) {
@@ -2139,6 +2232,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         activeCustomSettingsPaneId = null;
         if (changed) scheduleSettingsRefresh();
       }
+      if (confirmedChanged) scheduleSettingsRefresh();
     }
     const title = messageOf(source.props?.title);
     const category = freezeSettingsCategory({
@@ -2181,10 +2275,14 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ...(isBuiltIn
           ? {
               onClick: (...args) => {
+                const nativePaneIsActive =
+                  sourceButton.props.isActive === true;
                 activeSettingsPaneId = pane.id;
                 activeCustomSettingsPaneId = null;
-                pendingNativeSettingsPaneId = pane.id;
-                sourceOnClick?.(...args);
+                pendingNativeSettingsPaneId = nativePaneIsActive
+                  ? null
+                  : pane.id;
+                if (!nativePaneIsActive) sourceOnClick?.(...args);
                 emitChange();
               },
             }
@@ -2237,9 +2335,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     );
   }
 
-  function renderSettingsNavigationGroup(source, categoryId) {
-    captureSettingsNavigationGroup(source, categoryId);
-    if (categoryId !== "personal") return null;
+  function SettingsNavigationBoundary() {
+    native.React.useSyncExternalStore(
+      subscribe,
+      () => renderVersion,
+      () => renderVersion,
+    );
     return native.jsx(
       native.React.Fragment,
       {
@@ -2249,6 +2350,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       },
       "cgptx-settings-navigation",
     );
+  }
+
+  function renderSettingsNavigationGroup(source, categoryId) {
+    captureSettingsNavigationGroup(source, categoryId);
+    if (categoryId !== "personal") return null;
+    return native.jsx(SettingsNavigationBoundary, {});
   }
 
   function settingsValueText(value) {
@@ -2276,7 +2383,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     if (control) {
       settingsNativeControlElements.set(control, row.props.control);
     }
-    return freezeSettingsItem({
+    const item = freezeSettingsItem({
       ...(typeof id === "string" ? { id } : {}),
       label: settingsValueText(row.props?.label),
       ...(row.props?.description === undefined
@@ -2285,20 +2392,31 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       ...(control ? { control } : {}),
       origin: "app",
     });
+    settingsNativeItemContent.set(
+      item,
+      Object.freeze({
+        label: row.props?.label,
+        description: row.props?.description,
+      }),
+    );
+    return item;
   }
 
-  function captureNativeSettingsGroup(source, paneId) {
+  function settingsGroupModel(paneId) {
     let model = settingsGroupModels.get(paneId);
     if (!model) {
       model = {
         groups: Object.freeze([]),
+        views: Object.freeze([]),
         viewsById: new Map(),
-        viewsByKey: new Map(),
         viewsByDescriptor: new WeakMap(),
-        anchorKey: null,
       };
       settingsGroupModels.set(paneId, model);
     }
+    return model;
+  }
+
+  function captureNativeSettingsGroup(source) {
     const header = flattenedChildren(source.props?.children).find(
       (child) => isElement(child) && child.type === native.SettingsGroup.Header,
     );
@@ -2329,23 +2447,151 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       items,
       origin: "app",
     });
-    const existingIndex = model.groups.findIndex((group) =>
-      id === undefined
-        ? model.viewsByDescriptor.get(group)?.key === key
-        : group.id === id,
+    return { source, rows, rowElements, descriptor, key };
+  }
+
+  function finalizeNativeSettingsGroups(paneId, captures, confirmsPage) {
+    const model = settingsGroupModel(paneId);
+    const snapshot = settingsGroupSnapshot(captures);
+    model.groups = snapshot.groups;
+    model.views = snapshot.views;
+    model.viewsById = snapshot.viewsById;
+    model.viewsByDescriptor = snapshot.viewsByDescriptor;
+    if (confirmsPage) {
+      if (pendingNativeSettingsPaneId === paneId) {
+        pendingNativeSettingsPaneId = null;
+      }
+      settingsPaneRenderCounts.set(
+        paneId,
+        (settingsPaneRenderCounts.get(paneId) ?? 0) + 1,
+      );
+    }
+    scheduleSettingsRefresh();
+  }
+
+  function settingsGroupSnapshot(captures) {
+    const groups = [];
+    const views = [];
+    for (const view of captures) {
+      const id = view.descriptor.id;
+      const existingIndex = views.findIndex((candidate) =>
+        id === undefined
+          ? candidate.key === view.key
+          : candidate.descriptor.id === id,
+      );
+      if (existingIndex >= 0) {
+        groups[existingIndex] = view.descriptor;
+        views[existingIndex] = view;
+      } else {
+        groups.push(view.descriptor);
+        views.push(view);
+      }
+    }
+
+    const viewsById = new Map();
+    const viewsByDescriptor = new WeakMap();
+    for (const view of views) {
+      if (typeof view.descriptor.id === "string") {
+        viewsById.set(view.descriptor.id, view);
+      } else {
+        viewsByDescriptor.set(view.descriptor, view);
+      }
+    }
+    return Object.freeze({
+      groups: Object.freeze(groups),
+      views: Object.freeze(views),
+      viewsById,
+      viewsByDescriptor,
+    });
+  }
+
+  function debugSettingsCapture(id) {
+    const rows = native.jsx(native.SettingsRows, { children: [] });
+    return {
+      key: id,
+      rowElements: [],
+      rows,
+      source: native.jsx(native.SettingsGroup, {
+        children: native.jsx(native.SettingsGroup.Content, {
+          children: rows,
+        }),
+      }),
+      descriptor: freezeSettingsGroup({
+        id,
+        items: Object.freeze([
+          freezeSettingsItem({
+            id: `${id}.item`,
+            label: id,
+            origin: "app",
+          }),
+        ]),
+        origin: "app",
+      }),
+    };
+  }
+
+  function replaceDebugSettingsGroupSnapshot(paneId, ids) {
+    const request = Object.freeze({
+      captures: Object.freeze(ids.map(debugSettingsCapture)),
+    });
+    debugSettingsSnapshotRequests.set(paneId, request);
+    scheduleSettingsRefresh();
+    return [...ids];
+  }
+
+  function updateDebugSettingsGroupCapture(paneId, groupId, replacementId) {
+    const registry = activeSettingsPageCaptureRegistry;
+    if (
+      !registry?.mounted ||
+      registry.pageId !== paneId ||
+      typeof replacementId !== "string"
+    ) {
+      return false;
+    }
+    const entry = [...(registry.committedPass?.entries.values() ?? [])].find(
+      ({ view }) =>
+        (view.descriptor.id ?? view.descriptor.title ?? view.key) === groupId,
     );
-    const groups = [...model.groups];
-    if (existingIndex >= 0) groups[existingIndex] = descriptor;
-    else groups.push(descriptor);
-    model.groups = Object.freeze(groups);
-    model.anchorKey ??= key;
-    const view = { source, rows, rowElements, descriptor, key };
-    if (id === undefined) {
-      model.viewsByKey.set(key, view);
-      model.viewsByDescriptor.set(descriptor, view);
-    } else model.viewsById.set(id, view);
-    if (existingIndex < 0) scheduleSettingsRefresh();
-    return { model, key };
+    const refresh = entry
+      ? registry.debugSlotRefreshers.get(entry.token)
+      : undefined;
+    if (!entry || typeof refresh !== "function") return false;
+    registry.debugViews.set(entry.token, {
+      source: entry.view,
+      replacement: debugSettingsCapture(replacementId),
+    });
+    refresh();
+    return true;
+  }
+
+  function debugSettingsPageCommitIsEligible(
+    paneId,
+    { loading = false, captureReady = true } = {},
+  ) {
+    const slug = typeof paneId === "string" ? settingsSlug(paneId) : null;
+    if (slug === null) return false;
+    const child = native.jsx(native.SettingsPage, {
+      title: native.jsx(native.SettingsSectionTitle, { slug }),
+      children: loading
+        ? native.jsx(native.SettingsLoading, {})
+        : native.jsx(native.React.Fragment, {}),
+    });
+    return settingsPageCommitIsEligible({
+      pageId: settingsPagePaneId(child),
+      loading: settingsPageIsLoading(child),
+      confirmedNativePaneId: paneId,
+      activePaneId: paneId,
+      captureReady,
+    });
+  }
+
+  function runSettingsNavigation(action) {
+    if (!holdNextSettingsNavigation) {
+      action();
+      return;
+    }
+    holdNextSettingsNavigation = false;
+    heldSettingsNavigation = action;
   }
 
   function settingsGroupView(model, group) {
@@ -2439,14 +2685,18 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
             (row) => messageOf(row.props?.label)?.id === item.id,
           )
         : null;
+    const nativeContent =
+      item.origin === "app" ? settingsNativeItemContent.get(item) : undefined;
     return native.jsx(
       native.SettingsRow,
       {
         ...(view?.props ?? {}),
         id: item.id,
         "data-settings-target-id": item.id,
-        label: item.label,
-        description: item.description,
+        label: nativeContent ? nativeContent.label : item.label,
+        description: nativeContent
+          ? nativeContent.description
+          : item.description,
         control: renderSettingsControl(
           item.control,
           item.id ?? item.label,
@@ -2514,28 +2764,92 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   function renderNativeSettingsGroup(source) {
-    const paneId = currentSettingsPaneId();
-    if (!paneId) return source;
-    const { model, key } = captureNativeSettingsGroup(source, paneId);
-    if (key !== model.anchorKey) return null;
+    const view = captureNativeSettingsGroup(source);
+    return native.jsx(
+      NativeSettingsGroupCapture,
+      { view },
+      source.key ?? view.key,
+    );
+  }
+
+  function NativeSettingsGroupCapture({ view }) {
+    const React = native.React;
+    const context = React.useContext(settingsPageCaptureContext);
+    const token = React.useRef(null);
+    if (token.current === null) token.current = {};
+    const [, refreshDebugView] = React.useReducer(
+      (revision) => revision + 1,
+      0,
+    );
+    React.useSyncExternalStore(
+      subscribe,
+      () => renderVersion,
+      () => renderVersion,
+    );
+    const previousView = React.useRef(view);
+    const pageId = context?.pageId ?? null;
+    const pass = context?.pass ?? null;
+    const registry = context?.registry ?? null;
+    const debugView = registry?.debugViews.get(token.current);
+    const effectiveView =
+      debugView?.source === view ? debugView.replacement : view;
+    const wasRegistered = pass?.entries.has(token.current) === true;
+    if (pass && registry?.committedPass !== pass) {
+      pass.collect(token.current, effectiveView);
+    }
+    React.useLayoutEffect(() => {
+      const changed = previousView.current !== effectiveView;
+      previousView.current = effectiveView;
+      if (
+        pass &&
+        registry &&
+        (!wasRegistered || changed) &&
+        registry.mounted &&
+        registry.committedPass === pass
+      ) {
+        registry.requestRecapture();
+      }
+    }, [effectiveView, pass, registry, wasRegistered]);
+    React.useLayoutEffect(() => {
+      if (!registry) return undefined;
+      registry.debugSlotRefreshers.set(token.current, refreshDebugView);
+      return () => {
+        registry.debugSlotRefreshers.delete(token.current);
+        registry.debugViews.delete(token.current);
+      };
+    }, [refreshDebugView, registry]);
+    React.useLayoutEffect(
+      () => () => {
+        if (registry && registry.mounted) {
+          registry.requestRecapture();
+        }
+      },
+      [registry],
+    );
+    if (!context) return effectiveView.source;
+    if (!wasRegistered && registry.committedPass === pass) {
+      return effectiveView.source;
+    }
+    const isAnchor =
+      registry.committedPass === pass && registry.pageId === pageId
+        ? registry.anchorToken === token.current
+        : pass.firstToken === token.current;
+    if (registry.committedPass !== pass) return effectiveView.source;
+    if (!isAnchor || !pageId) return null;
+    const model = settingsGroupModel(pageId);
     return native.jsx(
       native.React.Fragment,
       {
-        children: computeEffectiveSettingsGroups(paneId).map((group) =>
-          renderSettingsGroup(paneId, model, group),
+        children: computeEffectiveSettingsGroups(pageId).map((group) =>
+          renderSettingsGroup(pageId, model, group),
         ),
       },
-      "cgptx-settings-groups-" + paneId,
+      "cgptx-settings-groups-" + pageId,
     );
   }
 
   function renderCustomSettingsChildren(pane) {
-    const model =
-      settingsGroupModels.get(pane.id) ?? {
-        groups: Object.freeze([]),
-        viewsById: new Map(),
-        viewsByDescriptor: new WeakMap(),
-      };
+    const model = settingsGroupModel(pane.id);
     return computeEffectiveSettingsGroups(pane.id).map((group) =>
       renderSettingsGroup(pane.id, model, group),
     );
@@ -2576,25 +2890,31 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function navigateSettingsPane(paneId) {
     const slug = settingsSlug(paneId);
     if (slug !== null) {
-      const action = settingsNavigationRows.get(paneId)?.button.props.onClick;
+      const nativeRow = settingsNavigationRows.get(paneId);
+      const action = nativeRow?.button.props.onClick;
       if (typeof action !== "function") return false;
+      const nativePaneIsActive = nativeRow.button.props.isActive === true;
       activeSettingsPaneId = paneId;
       activeCustomSettingsPaneId = null;
-      pendingNativeSettingsPaneId = paneId;
-      action();
+      pendingNativeSettingsPaneId = nativePaneIsActive ? null : paneId;
+      if (!nativePaneIsActive) runSettingsNavigation(action);
       emitChange();
-      return true;
+      return nativePaneIsActive ? "local" : "native";
     }
-    const action = settingsNavigationRows.get(
+    const appearanceRow = settingsNavigationRows.get(
       "codex.settings.appearance",
-    )?.button.props.onClick;
+    );
+    const action = appearanceRow?.button.props.onClick;
     if (typeof action !== "function") return false;
+    const appearanceIsActive = appearanceRow.button.props.isActive === true;
     activeSettingsPaneId = paneId;
     activeCustomSettingsPaneId = paneId;
-    pendingNativeSettingsPaneId = "codex.settings.appearance";
-    action();
+    pendingNativeSettingsPaneId = appearanceIsActive
+      ? null
+      : "codex.settings.appearance";
+    if (!appearanceIsActive) runSettingsNavigation(action);
     emitChange();
-    return true;
+    return appearanceIsActive ? "local" : "native";
   }
 
   function waitForSettings(condition, timeoutMs = 5_000) {
@@ -2620,9 +2940,18 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       if (!canOpen) return false;
       openNativeSettings();
       const opened = await waitForSettings(
-        () =>
-          settingsContentMountCount > 0 &&
-          builtInSettingsCategories.size > 0,
+        () => {
+          const currentPaneId = currentSettingsPaneId();
+          return (
+            settingsContentMountCount > 0 &&
+            builtInSettingsCategories.size > 0 &&
+            currentPaneId !== null &&
+            pendingNativeSettingsPaneId === null &&
+            confirmedNativeSettingsPaneId ===
+              settingsHostPaneId(currentPaneId) &&
+            settingsPaneRenderCounts.has(currentPaneId)
+          );
+        },
       );
       if (!opened) return false;
     }
@@ -2630,13 +2959,29 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       paneId,
     );
     if (!pane || pane.disabled === true) return false;
+    const alreadyRendered =
+      currentSettingsPaneId() === paneId &&
+      pendingNativeSettingsPaneId === null &&
+      confirmedNativeSettingsPaneId === settingsHostPaneId(paneId) &&
+      settingsPaneRenderCounts.has(paneId);
+    if (!alreadyRendered) {
+      const renderCount = settingsPaneRenderCounts.get(paneId) ?? 0;
+      const navigation = navigateSettingsPane(paneId);
+      if (!navigation) return false;
+      const rendered = await waitForSettings(
+        () =>
+          currentSettingsPaneId() === paneId &&
+          pendingNativeSettingsPaneId === null &&
+          confirmedNativeSettingsPaneId === settingsHostPaneId(paneId) &&
+          (settingsPaneRenderCounts.get(paneId) ?? 0) > renderCount,
+      );
+      if (!rendered) return false;
+    }
     const groups = computeEffectiveSettingsGroups(paneId);
     const itemExists =
       itemId === undefined ||
       groups.some((group) => group.items.some((item) => item.id === itemId));
-    if (!navigateSettingsPane(paneId)) return false;
     if (!itemExists) return false;
-    await waitForSettings(() => currentSettingsPaneId() === paneId);
     if (itemId !== undefined) {
       const rendered = await waitForSettings(
         () => document.getElementById(itemId) !== null,
@@ -3412,28 +3757,176 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
     function SettingsContentBoundary({ child }) {
       settingsContentBoundaryRenderCount += 1;
+      React.useSyncExternalStore(
+        subscribe,
+        () => renderVersion,
+        () => renderVersion,
+      );
+      const renderedActivePaneId = activeSettingsPaneId;
+      const renderedConfirmedNativePaneId = confirmedNativeSettingsPaneId;
+      const renderedCustomPaneId = activeCustomSettingsPaneId;
+      const explicitPageId = settingsPagePaneId(child);
+      const loading = settingsPageIsLoading(child);
+      const [captureRevision, requestCaptureRevision] = React.useReducer(
+        (revision) => revision + 1,
+        0,
+      );
+      const registryRef = React.useRef(null);
+      if (registryRef.current === null) {
+        registryRef.current = {
+          mounted: false,
+          pageId: null,
+          committedPass: null,
+          anchorToken: null,
+          debugViews: new Map(),
+          debugSlotRefreshers: new Map(),
+          requestRecapture: requestCaptureRevision,
+        };
+      }
+      const registry = registryRef.current;
+      const pageId = explicitPageId;
+      const debugSnapshotPaneId = renderedCustomPaneId ?? pageId;
+      const debugSnapshotRequest = debugSnapshotPaneId
+        ? debugSettingsSnapshotRequests.get(debugSnapshotPaneId)
+        : undefined;
+      registry.requestRecapture = () => {
+        if (registry.mounted) requestCaptureRevision();
+      };
+      const pass = React.useMemo(
+        () => createSettingsCapturePass(pageId),
+        [child, pageId, renderedCustomPaneId, captureRevision],
+      );
       React.useEffect(() => {
         settingsContentMountCount += 1;
         return () => {
           settingsContentMountCount -= 1;
         };
       }, []);
-      React.useSyncExternalStore(
-        subscribe,
-        () => renderVersion,
-        () => renderVersion,
-      );
-      const paneId = activeCustomSettingsPaneId;
-      if (!paneId) return child;
-      const pane = settingsPanesById(
-        computeEffectiveSettingsCategories(),
-      ).get(paneId);
-      return pane
-        ? React.cloneElement(child, {
+      React.useLayoutEffect(() => {
+        registry.mounted = true;
+        activeSettingsPageCaptureRegistry = registry;
+        return () => {
+          registry.mounted = false;
+          if (activeSettingsPageCaptureRegistry === registry) {
+            activeSettingsPageCaptureRegistry = null;
+          }
+        };
+      }, [registry]);
+      React.useLayoutEffect(() => {
+        const entries = [...pass.entries.values()].sort(
+          (left, right) => left.order - right.order,
+        );
+        registry.pageId = pageId;
+        registry.committedPass = pass;
+        registry.anchorToken = entries[0]?.token ?? null;
+        if (!pageId || loading) return;
+        const captureReady =
+          renderedCustomPaneId !== null ||
+          entries.length > 0 ||
+          pageId === "codex.settings.environments" ||
+          pageId === "codex.settings.profile";
+        const confirmsPage = settingsPageCommitIsEligible({
+          pageId,
+          loading,
+          confirmedNativePaneId: renderedConfirmedNativePaneId,
+          activePaneId: renderedActivePaneId,
+          captureReady,
+        });
+        if (
+          debugSnapshotPaneId &&
+          debugSnapshotRequest &&
+          debugSettingsSnapshotRequests.get(debugSnapshotPaneId) ===
+            debugSnapshotRequest
+        ) {
+          debugSettingsSnapshotRequests.delete(debugSnapshotPaneId);
+          debugSettingsSnapshotCommitCount += 1;
+        }
+        if (!renderedCustomPaneId) {
+          finalizeNativeSettingsGroups(
+            pageId,
+            debugSnapshotRequest?.captures ??
+              entries.map((entry) => entry.view),
+            confirmsPage,
+          );
+          return;
+        }
+        if (debugSnapshotRequest) {
+          finalizeNativeSettingsGroups(
+            renderedCustomPaneId,
+            debugSnapshotRequest.captures,
+            false,
+          );
+        }
+        if (!confirmsPage) return;
+        if (pendingNativeSettingsPaneId === pageId) {
+          pendingNativeSettingsPaneId = null;
+        }
+        settingsPaneRenderCounts.set(
+          renderedCustomPaneId,
+          (settingsPaneRenderCounts.get(renderedCustomPaneId) ?? 0) + 1,
+        );
+        scheduleSettingsRefresh();
+      }, [
+        debugSnapshotPaneId,
+        debugSnapshotRequest,
+        captureRevision,
+        loading,
+        pageId,
+        pass,
+        registry,
+        renderedActivePaneId,
+        renderedConfirmedNativePaneId,
+        renderedCustomPaneId,
+      ]);
+      const paneId = renderedCustomPaneId;
+      let content = child;
+      if (paneId) {
+        const pane = settingsPanesById(
+          computeEffectiveSettingsCategories(),
+        ).get(paneId);
+        if (pane) {
+          content = React.cloneElement(child, {
             title: pane.title ?? pane.label,
             children: renderCustomSettingsChildren(pane),
-          })
-        : child;
+          });
+        }
+      } else if (
+        !loading &&
+        (pageId === "codex.settings.profile" ||
+          pageId === "codex.settings.environments")
+      ) {
+        const groups =
+          registry.committedPass === pass && registry.anchorToken === null
+            ? computeEffectiveSettingsGroups(pageId).map((group) =>
+                renderSettingsGroup(
+                  pageId,
+                  settingsGroupModel(pageId),
+                  group,
+                ),
+              )
+            : [];
+        content = React.cloneElement(child, {
+          children: [
+            React.createElement(React.Fragment, {
+              key: "cgptx-native-settings-content",
+              children: child.props.children,
+            }),
+            React.createElement(React.Fragment, {
+              key: "cgptx-extension-settings-groups",
+              children: groups,
+            }),
+          ],
+        });
+      }
+      const context = React.useMemo(
+        () => ({ pageId, pass, registry }),
+        [pageId, pass, registry],
+      );
+      return React.createElement(
+        settingsPageCaptureContext.Provider,
+        { value: context },
+        content,
+      );
     }
 
     function wrap(original) {
@@ -3612,6 +4105,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     appInitialModule.$S();
     appInitialModule.za();
     appInitialModule.Ka();
+    appInitialModule.Ua();
     appInitialModule.Fbt();
     settingsVisibilityModule.i();
     plusIconModule.t();
@@ -3646,6 +4140,8 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       openInBrowser: appInitialModule.adt,
       useNavigate: appInitialModule.iut,
       SettingsPage: appInitialModule.Wa,
+      SettingsSectionTitle: appInitialModule.Ra,
+      SettingsLoading: appInitialModule.Ha,
       SettingsGroup: appInitialModule.gr,
       SettingsRows: appInitialModule.HO,
       SettingsRow: appInitialModule.JO,
@@ -3661,6 +4157,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ["settings", appInitialModule.sG],
       ]),
     };
+    settingsPageCaptureContext = native.React.createContext(null);
     installJsxHook();
     await reconcileApplicationTree();
     mountColorPickerHost();
@@ -4294,11 +4791,42 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       settingsState: () => ({
         activePaneId: activeSettingsPaneId,
         activeCustomPaneId: activeCustomSettingsPaneId,
+        confirmedNativePaneId: confirmedNativeSettingsPaneId,
         pendingNativePaneId: pendingNativeSettingsPaneId,
         currentPaneId: currentSettingsPaneId(),
         contentBoundaryRenderCount: settingsContentBoundaryRenderCount,
         contentMountCount: settingsContentMountCount,
       }),
+      replaceSettingsGroupSnapshot: replaceDebugSettingsGroupSnapshot,
+      settingsSnapshotCommitCount: () =>
+        debugSettingsSnapshotCommitCount,
+      settingsPaneRenderCount: (paneId) =>
+        settingsPaneRenderCounts.get(paneId) ?? 0,
+      updateSettingsGroupCapture: updateDebugSettingsGroupCapture,
+      settingsPageCommitIsEligible: debugSettingsPageCommitIsEligible,
+      holdNextSettingsNavigation: () => {
+        if (heldSettingsNavigation !== null) return false;
+        holdNextSettingsNavigation = true;
+        return true;
+      },
+      confirmNativeSettingsPane: (paneId) => {
+        if (
+          typeof paneId !== "string" ||
+          settingsSlug(paneId) === null
+        ) {
+          return false;
+        }
+        confirmedNativeSettingsPaneId = paneId;
+        scheduleSettingsRefresh();
+        return true;
+      },
+      releaseSettingsNavigation: () => {
+        const action = heldSettingsNavigation;
+        heldSettingsNavigation = null;
+        if (typeof action !== "function") return false;
+        action();
+        return true;
+      },
       nativeAccount: () => nativeAppServerRegistry?.getDefault().getAccount(),
       nativeSignInStartCount: () => nativeSignInStartCount,
       inspectAuthentication,

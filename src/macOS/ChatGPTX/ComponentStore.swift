@@ -467,12 +467,21 @@ struct ComponentStore {
     func validateInstalledComponents(
         _ versions: ComponentVersionsLock
     ) throws {
-        let requiredPaths = [
+        var requiredAPIPaths = [
             "\(versions.chatgptApi.path)/manifest.json",
             "\(versions.chatgptApi.path)/bridge/main.cjs",
             "\(versions.chatgptApi.path)/bridge/preload.cjs",
             "\(versions.chatgptApi.path)/runtime/codex-paths.cjs",
             "\(versions.chatgptApi.path)/runtime/extension-launch-config.cjs",
+        ]
+        if chatgptAPIRequiresExtensionManagerAuthorization(
+            versions.chatgptApi.version
+        ) {
+            requiredAPIPaths.append(
+                "\(versions.chatgptApi.path)/runtime/extension-manager-authorization.cjs"
+            )
+        }
+        let requiredPaths = requiredAPIPaths + [
             "\(versions.binding.path)/manifest.json",
             "\(versions.binding.path)/host.js",
         ] + versions.extensions.flatMap {

@@ -256,6 +256,52 @@ final class ComponentUpdatesTests: XCTestCase {
     }
 
     @MainActor
+    func testLegacyAPIArchiveDoesNotRequireManagerAuthorizationModule()
+        async throws
+    {
+        let apiVersion = "1.0.4"
+        let api = try makeAPIArchive(
+            version: apiVersion,
+            includeManagerAuthorization: false
+        )
+        let binding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: apiVersion,
+            asarHash: Self.asarHash
+        )
+        let index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(binding),
+            apiVersion: apiVersion
+        )
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v\(apiVersion)": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding,
+            ]
+        )
+
+        let outcome = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        guard case .installed(let prepared) = outcome.result else {
+            return XCTFail("The legacy API package must install.")
+        }
+        XCTAssertEqual(prepared.versions.chatgptApi.version, apiVersion)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: prepared.rootURL.appendingPathComponent(
+                    "components/chatgpt-api/\(apiVersion)/runtime/extension-manager-authorization.cjs"
+                ).path
+            )
+        )
+    }
+
+    @MainActor
     func testSameGenerationCanInstallASecondExactChatGPTBuild() async throws {
         let api = try makeAPIArchive(version: "1.1.0")
         let firstBinding = try makeBindingArchive(
@@ -411,22 +457,26 @@ final class ComponentUpdatesTests: XCTestCase {
     }
 
     @MainActor
-    func testUpdateRepairsCorruptComponentsAndInvalidSettings() async throws {
-        let api = try makeAPIArchive(version: "1.1.0")
+    func testUpdateRepairsMissingAuthorizationAndInvalidSettings()
+        async throws
+    {
+        let apiVersion = "1.1.1"
+        let api = try makeAPIArchive(version: apiVersion)
         let binding = try makeBindingArchive(
             chatgpt: Self.chatgptVersion,
             version: "1.0.0",
-            api: "1.1.0",
+            api: apiVersion,
             asarHash: Self.asarHash
         )
         let index = makeIndex(
             apiHash: digest(api),
-            bindingHash: digest(binding)
+            bindingHash: digest(binding),
+            apiVersion: apiVersion
         )
         installResponses(
             index: index,
             archives: [
-                "chatgpt-api-v1.1.0": api,
+                "chatgpt-api-v\(apiVersion)": api,
                 "binding-\(Self.chatgptVersion)-v1.0.0": binding,
             ]
         )
@@ -439,16 +489,16 @@ final class ComponentUpdatesTests: XCTestCase {
             "extensions",
             isDirectory: true
         )
-        let bridgeURL = extensionsRoot.appendingPathComponent(
-            "components/chatgpt-api/1.1.0/bridge/main.cjs"
+        let authorizationURL = extensionsRoot.appendingPathComponent(
+            "components/chatgpt-api/\(apiVersion)/runtime/extension-manager-authorization.cjs"
         )
-        try FileManager.default.removeItem(at: bridgeURL)
+        try FileManager.default.removeItem(at: authorizationURL)
         try Data("not-json".utf8).write(
             to: extensionsRoot.appendingPathComponent("settings.json")
         )
         installResponses(
             index: index,
-            archives: ["chatgpt-api-v1.1.0": api]
+            archives: ["chatgpt-api-v\(apiVersion)": api]
         )
 
         let outcome = try await makeService().update(
@@ -459,12 +509,14 @@ final class ComponentUpdatesTests: XCTestCase {
         guard case .installed(let prepared) = outcome.result else {
             return XCTFail("A damaged selected component must be repaired.")
         }
-        XCTAssertTrue(FileManager.default.fileExists(atPath: bridgeURL.path))
-        XCTAssertEqual(prepared.versions.chatgptApi.version, "1.1.0")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: authorizationURL.path)
+        )
+        XCTAssertEqual(prepared.versions.chatgptApi.version, apiVersion)
         XCTAssertEqual(try settingsRecords().count, 0)
         XCTAssertEqual(
             ComponentUpdateURLProtocol.requestedURLs,
-            [Self.indexURL, releaseURL("chatgpt-api-v1.1.0")]
+            [Self.indexURL, releaseURL("chatgpt-api-v\(apiVersion)")]
         )
     }
 
@@ -675,6 +727,7 @@ final class ComponentUpdatesTests: XCTestCase {
     private func makeIndex(
         apiHash: String,
         bindingHash: String,
+        apiVersion: String = "1.1.0",
         extensionVersions: [String: [String: [String: Any]]] = [:]
     ) -> [String: Any] {
         [
@@ -683,8 +736,8 @@ final class ComponentUpdatesTests: XCTestCase {
             "minimumLauncherVersion": "1.1.0",
             "releaseBaseURL": Self.releaseBaseURL,
             "chatgptApis": [
-                "1.1.0": [
-                    "release": "chatgpt-api-v1.1.0",
+                apiVersion: [
+                    "release": "chatgpt-api-v\(apiVersion)",
                     "sha256": apiHash,
                 ]
             ],
@@ -692,7 +745,7 @@ final class ComponentUpdatesTests: XCTestCase {
                 Self.chatgptVersion: bindingEntry(
                     chatgpt: Self.chatgptVersion,
                     version: "1.0.0",
-                    api: "1.1.0",
+                    api: apiVersion,
                     asarHash: Self.asarHash,
                     hash: bindingHash
                 )
@@ -755,8 +808,11 @@ final class ComponentUpdatesTests: XCTestCase {
         })
     }
 
-    private func makeAPIArchive(version: String) throws -> Data {
-        try makeArchive(files: [
+    private func makeAPIArchive(
+        version: String,
+        includeManagerAuthorization: Bool = true
+    ) throws -> Data {
+        var files = [
             "manifest.json": json(["version": version]),
             "types.d.ts": Data("export {};".utf8),
             "bridge/main.cjs": Data("module.exports = {};".utf8),
@@ -765,7 +821,13 @@ final class ComponentUpdatesTests: XCTestCase {
             "runtime/extension-launch-config.cjs": Data(
                 "module.exports = {};".utf8
             ),
-        ])
+        ]
+        if includeManagerAuthorization {
+            files["runtime/extension-manager-authorization.cjs"] = Data(
+                "module.exports = {};".utf8
+            )
+        }
+        return try makeArchive(files: files)
     }
 
     private func makeBindingArchive(

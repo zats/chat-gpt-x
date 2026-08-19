@@ -1725,11 +1725,19 @@ async function validateUi(
   const settingsFixtureId = 'settings-ui-fixture';
   const settingsPaneId = `${settingsFixtureId}.pane`;
   const settingsGroupId = `${settingsFixtureId}.group`;
+  const settingsSnapshotPaneId = `${settingsFixtureId}.snapshot-pane`;
+  const settingsSecondPaneId = `${settingsFixtureId}.second-pane`;
+  const settingsSecondGroupId = `${settingsFixtureId}.second-group`;
+  const settingsSecondItemId = `${settingsFixtureId}.second-item`;
+  const settingsAppearanceGroupId = `${settingsFixtureId}.appearance-group`;
+  const settingsAppearanceItemId = `${settingsFixtureId}.appearance-item`;
   const settingsToggleId = `${settingsFixtureId}.toggle`;
   const settingsSelectId = `${settingsFixtureId}.select`;
   const settingsButtonId = `${settingsFixtureId}.button`;
   const settingsBuiltInGroupId = `${settingsFixtureId}.built-in-group`;
   const settingsBuiltInItemId = `${settingsFixtureId}.built-in-item`;
+  const settingsProfileGroupId = `${settingsFixtureId}.profile-group`;
+  const settingsProfileItemId = `${settingsFixtureId}.profile-item`;
   const settingsObserverId = 'settings-observer-fixture';
   const settingsObserverReplayId = `${settingsObserverId}.replay`;
   let settingsApi;
@@ -1757,6 +1765,14 @@ async function validateUi(
                     title: 'Settings UI Fixture',
                     description: 'settings-pane-marker',
                   },
+                  {
+                    id: settingsSecondPaneId,
+                    label: 'Second Settings UI Fixture',
+                  },
+                  {
+                    id: settingsSnapshotPaneId,
+                    label: 'Settings Snapshot Fixture',
+                  },
                 ],
               }
             : category,
@@ -1775,6 +1791,29 @@ async function validateUi(
             },
           ];
         }
+        if (pane.id === settingsSecondPaneId) {
+          return [
+            ...groups,
+            {
+              id: settingsSecondGroupId,
+              items: [],
+            },
+          ];
+        }
+        if (pane.id === 'codex.settings.appearance') {
+          return [
+            ...groups,
+            {
+              id: settingsAppearanceGroupId,
+              items: [
+                {
+                  id: settingsAppearanceItemId,
+                  label: 'Appearance host fixture',
+                },
+              ],
+            },
+          ];
+        }
         if (pane.id === 'codex.settings.general-settings') {
           return [
             ...groups,
@@ -1785,10 +1824,34 @@ async function validateUi(
             },
           ];
         }
+        if (pane.id === 'codex.settings.profile') {
+          return [
+            ...groups,
+            {
+              id: settingsProfileGroupId,
+              title: 'Profile pane fixture',
+              items: [
+                {
+                  id: settingsProfileItemId,
+                  label: 'Profile pane item',
+                },
+              ],
+            },
+          ];
+        }
         return groups;
       });
       settingsItemRegistration = settingsApi.transformItems(
         (items, context) => {
+          if (context.group.id === settingsSecondGroupId) {
+            return [
+              ...items,
+              {
+                id: settingsSecondItemId,
+                label: 'Second custom pane item',
+              },
+            ];
+          }
           if (context.group.id === settingsBuiltInGroupId) {
             return [
               ...items,
@@ -1890,6 +1953,68 @@ async function validateUi(
     },
   );
 
+  const snapshotFirstGroupId = `${settingsFixtureId}.snapshot-first`;
+  const snapshotRemovedGroupId = `${settingsFixtureId}.snapshot-removed`;
+  const snapshotLastGroupId = `${settingsFixtureId}.snapshot-last`;
+  const snapshotPaneOpened = await settingsApi.open(settingsSnapshotPaneId);
+  const initialSnapshotCommitCount =
+    globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount();
+  const initialSettingsGroupSnapshot =
+    globalThis.__CGPTX_HOST__._debug.replaceSettingsGroupSnapshot(
+      settingsSnapshotPaneId,
+      [snapshotFirstGroupId, snapshotRemovedGroupId, snapshotLastGroupId],
+    );
+  await waitUntil(
+    () =>
+      globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount() >
+        initialSnapshotCommitCount &&
+      document.getElementById(`${snapshotRemovedGroupId}.item`) != null &&
+      document.getElementById(`${snapshotLastGroupId}.item`) != null,
+  );
+  const replacementSnapshotCommitCount =
+    globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount();
+  const replacementSettingsGroupSnapshot =
+    globalThis.__CGPTX_HOST__._debug.replaceSettingsGroupSnapshot(
+      settingsSnapshotPaneId,
+      [snapshotLastGroupId, snapshotFirstGroupId],
+    );
+  await waitUntil(
+    () =>
+      globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount() >
+        replacementSnapshotCommitCount &&
+      document.getElementById(`${snapshotRemovedGroupId}.item`) == null &&
+      document.getElementById(`${snapshotFirstGroupId}.item`) != null,
+  );
+  const snapshotLastItem = document.getElementById(
+    `${snapshotLastGroupId}.item`,
+  );
+  const snapshotFirstItem = document.getElementById(
+    `${snapshotFirstGroupId}.item`,
+  );
+  const effectiveSnapshotGroupIds = settingsApi
+    .getGroups(settingsSnapshotPaneId)
+    .map((group) => group.id);
+  check(
+    snapshotPaneOpened &&
+      initialSettingsGroupSnapshot.join(',') ===
+        [
+          snapshotFirstGroupId,
+          snapshotRemovedGroupId,
+          snapshotLastGroupId,
+        ].join(',') &&
+      replacementSettingsGroupSnapshot.join(',') ===
+        [snapshotLastGroupId, snapshotFirstGroupId].join(',') &&
+      effectiveSnapshotGroupIds.join(',') ===
+        [snapshotLastGroupId, snapshotFirstGroupId].join(',') &&
+      snapshotLastItem != null &&
+      snapshotFirstItem != null &&
+      Boolean(
+        snapshotLastItem.compareDocumentPosition(snapshotFirstItem) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    'the settings page boundary commits a full snapshot and updates model and DOM order',
+  );
+
   const customPaneOpened = await settingsApi.open(settingsPaneId, {
     itemId: settingsToggleId,
   });
@@ -1933,6 +2058,319 @@ async function validateUi(
     'native settings controls call extension handlers and invalidate state',
   );
 
+  const secondCustomPaneOpened = await settingsApi.open(settingsSecondPaneId, {
+    itemId: settingsSecondItemId,
+  });
+  const firstCustomSidebarRow = document.querySelector(
+    `button[data-settings-panel-slug="${settingsPaneId}"]`,
+  );
+  const secondCustomSidebarRow = document.querySelector(
+    `button[data-settings-panel-slug="${settingsSecondPaneId}"]`,
+  );
+  check(
+    secondCustomPaneOpened &&
+      document.getElementById(settingsSecondItemId)?.textContent?.includes(
+        'Second custom pane item',
+      ) &&
+      secondCustomSidebarRow?.getAttribute('aria-current') === 'page' &&
+      firstCustomSidebarRow?.getAttribute('aria-current') !== 'page',
+    'a custom pane deep link updates content and sidebar selection',
+  );
+  const appearanceOpenedFromCustom = await settingsApi.open(
+    'codex.settings.appearance',
+    { itemId: settingsAppearanceItemId },
+  );
+  await waitUntil(() => document.body.textContent?.includes('Light theme'));
+  const appearanceSidebarRow = document.querySelector(
+    'button[data-settings-panel-slug="appearance"]',
+  );
+  check(
+    appearanceOpenedFromCustom &&
+      document.getElementById(settingsAppearanceItemId) != null &&
+      settingsApi
+        .getGroups('codex.settings.appearance')
+        .some((group) => group.origin === 'app') &&
+      appearanceSidebarRow?.getAttribute('aria-current') === 'page' &&
+      secondCustomSidebarRow?.getAttribute('aria-current') !== 'page',
+    'the native Appearance pane restores groups and sidebar selection after a custom pane',
+  );
+  const appearanceGroupsBeforeRecapture = settingsApi.getGroups(
+    'codex.settings.appearance',
+  );
+  const removableAppearanceGroup = appearanceGroupsBeforeRecapture.find(
+    (group) =>
+      group.origin === 'app' &&
+      typeof (group.id ?? group.title) === 'string',
+  );
+  const removableAppearanceGroupId =
+    removableAppearanceGroup?.id ?? removableAppearanceGroup?.title;
+  const replacementAppearanceGroupId =
+    `${settingsFixtureId}.updated-native-group`;
+  const appearanceGroupKeysBeforeRecapture = appearanceGroupsBeforeRecapture.map(
+    (group, index) => group.id ?? group.title ?? String(index),
+  );
+  const survivingAppearanceItemIds = appearanceGroupsBeforeRecapture
+    .filter((group) => group !== removableAppearanceGroup)
+    .flatMap((group) => group.items)
+    .map((item) => item.id)
+    .filter((id) => typeof id === 'string' && document.getElementById(id));
+  const removedAppearanceItemIds = (removableAppearanceGroup?.items ?? [])
+    .map((item) => item.id)
+    .filter((id) => typeof id === 'string');
+  const appearanceRenderCountBeforeRecapture =
+    globalThis.__CGPTX_HOST__._debug.settingsPaneRenderCount(
+      'codex.settings.appearance',
+    );
+  const appearanceCaptureUpdated =
+    globalThis.__CGPTX_HOST__._debug.updateSettingsGroupCapture(
+      'codex.settings.appearance',
+      removableAppearanceGroupId,
+      replacementAppearanceGroupId,
+    );
+  await waitUntil(
+    () =>
+      globalThis.__CGPTX_HOST__._debug.settingsPaneRenderCount(
+        'codex.settings.appearance',
+      ) > appearanceRenderCountBeforeRecapture &&
+      document.getElementById(`${replacementAppearanceGroupId}.item`) != null &&
+      survivingAppearanceItemIds.every(
+        (id) => document.querySelectorAll(`#${CSS.escape(id)}`).length === 1,
+      ),
+  );
+  const appearanceGroupKeysAfterRecapture = settingsApi
+    .getGroups('codex.settings.appearance')
+    .map((group, index) => group.id ?? group.title ?? String(index));
+  const expectedAppearanceGroupKeys = appearanceGroupKeysBeforeRecapture.map(
+    (key) =>
+      key === removableAppearanceGroupId ? replacementAppearanceGroupId : key,
+  );
+  check(
+    appearanceGroupsBeforeRecapture.length > 1 &&
+      appearanceCaptureUpdated &&
+      appearanceGroupKeysAfterRecapture.join(',') ===
+        expectedAppearanceGroupKeys.join(',') &&
+      survivingAppearanceItemIds.length > 0 &&
+      survivingAppearanceItemIds.every(
+        (id) => document.querySelectorAll(`#${CSS.escape(id)}`).length === 1,
+      ) &&
+      removedAppearanceItemIds.every(
+        (id) => document.getElementById(id) === null,
+      ) &&
+      document.getElementById(`${replacementAppearanceGroupId}.item`) != null,
+    'updating one capture causes a full page recapture that preserves sibling order and DOM uniqueness',
+    {
+      removed: removableAppearanceGroupId,
+      before: appearanceGroupKeysBeforeRecapture,
+      after: appearanceGroupKeysAfterRecapture,
+    },
+  );
+  invokeNativeButton(appearanceSidebarRow);
+  await sleep(100);
+  const repeatedAppearanceState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  check(
+    repeatedAppearanceState.activePaneId === 'codex.settings.appearance' &&
+      repeatedAppearanceState.activeCustomPaneId === null &&
+      repeatedAppearanceState.pendingNativePaneId === null &&
+      appearanceSidebarRow?.getAttribute('aria-current') === 'page',
+    'clicking the active native settings row does not leave a pending navigation',
+    repeatedAppearanceState,
+  );
+
+  const staleTargetPaneId = 'codex.settings.general-settings';
+  const loadingTargetCommitEligible =
+    globalThis.__CGPTX_HOST__._debug.settingsPageCommitIsEligible(
+      staleTargetPaneId,
+      {
+        loading: true,
+      },
+    );
+  const realTargetCommitEligible =
+    globalThis.__CGPTX_HOST__._debug.settingsPageCommitIsEligible(
+      staleTargetPaneId,
+    );
+  check(
+    !loadingTargetCommitEligible && realTargetCommitEligible,
+    'the exact native loading fallback cannot confirm a matching pane',
+  );
+  const staleTargetRenderCount =
+    globalThis.__CGPTX_HOST__._debug.settingsPaneRenderCount(
+      staleTargetPaneId,
+    );
+  const staleSnapshotCommitCount =
+    globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount();
+  const navigationHeld =
+    globalThis.__CGPTX_HOST__._debug.holdNextSettingsNavigation();
+  const heldTargetOpen = settingsApi.open(staleTargetPaneId, {
+    itemId: settingsBuiltInItemId,
+  });
+  await waitUntil(() => {
+    const state = globalThis.__CGPTX_HOST__._debug.settingsState();
+    return (
+      state.activePaneId === staleTargetPaneId &&
+      state.pendingNativePaneId === staleTargetPaneId &&
+      state.confirmedNativePaneId === 'codex.settings.appearance'
+    );
+  });
+  const targetRowConfirmed =
+    globalThis.__CGPTX_HOST__._debug.confirmNativeSettingsPane(
+      staleTargetPaneId,
+    );
+  globalThis.__CGPTX_HOST__._debug.replaceSettingsGroupSnapshot(
+    'codex.settings.appearance',
+    [`${settingsFixtureId}.stale-appearance-group`],
+  );
+  await waitUntil(
+    () =>
+      globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount() >
+      staleSnapshotCommitCount,
+  );
+  const staleCommitState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  const staleCommitKeptPending =
+    staleCommitState.pendingNativePaneId === staleTargetPaneId &&
+    staleCommitState.confirmedNativePaneId === staleTargetPaneId &&
+    globalThis.__CGPTX_HOST__._debug.settingsPaneRenderCount(
+      staleTargetPaneId,
+    ) === staleTargetRenderCount;
+  const targetConfirmationReset =
+    globalThis.__CGPTX_HOST__._debug.confirmNativeSettingsPane(
+      'codex.settings.appearance',
+    );
+  const heldNavigationReleased =
+    globalThis.__CGPTX_HOST__._debug.releaseSettingsNavigation();
+  const heldTargetOpened = await heldTargetOpen;
+  check(
+    navigationHeld &&
+      targetRowConfirmed &&
+      staleCommitKeptPending &&
+      targetConfirmationReset &&
+      heldNavigationReleased &&
+      heldTargetOpened,
+    'an old page commit cannot confirm a target after its native row becomes active',
+    staleCommitState,
+  );
+
+  const resolvedEmptyOrNonstandardPane = settingsApi
+    .getCategories()
+    .flatMap((category) => category.panes)
+    .filter((pane) => pane.origin === 'app' && pane.disabled !== true)
+    .find((pane) => pane.id === 'codex.settings.profile');
+  let profileItemScrolled = false;
+  const profileScrollIntoView = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function scrollProfileItemIntoView(
+    options,
+  ) {
+    if (this.id === settingsProfileItemId && options?.block === 'center') {
+      profileItemScrolled = true;
+    }
+    return profileScrollIntoView?.call(this, options);
+  };
+  let resolvedEmptyOrNonstandardPaneOpened = false;
+  try {
+    if (resolvedEmptyOrNonstandardPane) {
+      resolvedEmptyOrNonstandardPaneOpened = await settingsApi.open(
+        resolvedEmptyOrNonstandardPane.id,
+        { itemId: settingsProfileItemId },
+      );
+    }
+  } finally {
+    Element.prototype.scrollIntoView = profileScrollIntoView;
+  }
+  const resolvedEmptyOrNonstandardState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  const profileGroups = settingsApi.getGroups('codex.settings.profile');
+  check(
+    Boolean(resolvedEmptyOrNonstandardPane) &&
+      resolvedEmptyOrNonstandardPaneOpened &&
+      profileItemScrolled &&
+      profileGroups.some(
+        (group) =>
+          group.id === settingsProfileGroupId &&
+          group.items.some((item) => item.id === settingsProfileItemId),
+      ) &&
+      document.querySelectorAll(`#${CSS.escape(settingsProfileItemId)}`)
+        .length === 1 &&
+      resolvedEmptyOrNonstandardState.activePaneId ===
+        resolvedEmptyOrNonstandardPane.id &&
+      resolvedEmptyOrNonstandardState.pendingNativePaneId === null,
+    'the titleless Profile page renders and scrolls one extension row without a native group anchor',
+    {
+      paneId: resolvedEmptyOrNonstandardPane?.id,
+      scrolled: profileItemScrolled,
+      state: resolvedEmptyOrNonstandardState,
+    },
+  );
+
+  const unvisitedNativePanes = settingsApi
+    .getCategories()
+    .flatMap((category) => category.panes)
+    .filter(
+      (pane) =>
+        pane.origin === 'app' &&
+        pane.disabled !== true &&
+        pane.id !== 'codex.settings.general-settings' &&
+        pane.id !== 'codex.settings.appearance' &&
+        pane.id !== resolvedEmptyOrNonstandardPane?.id &&
+        settingsApi.getGroups(pane.id).length === 0,
+    );
+  const unvisitedNativePane =
+    unvisitedNativePanes.find(
+      (pane) => pane.id === 'codex.settings.notifications',
+    ) ?? unvisitedNativePanes[0];
+  const unvisitedGroupId = `${settingsFixtureId}.unvisited-group`;
+  const unvisitedItemId = `${settingsFixtureId}.unvisited-item`;
+  const unvisitedRegistration = settingsApi.transformGroups((groups, pane) =>
+    pane.id === unvisitedNativePane?.id && groups.length > 0
+      ? [
+          ...groups,
+          {
+            id: unvisitedGroupId,
+            title: 'Unvisited pane fixture',
+            items: [
+              {
+                id: unvisitedItemId,
+                label: 'Unvisited pane item',
+              },
+            ],
+          },
+        ]
+      : groups,
+  );
+  let unvisitedItemScrolled = false;
+  const nativeScrollIntoView = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function scrollIntoView(options) {
+    if (this.id === unvisitedItemId && options?.block === 'center') {
+      unvisitedItemScrolled = true;
+    }
+    return nativeScrollIntoView?.call(this, options);
+  };
+  let unvisitedPaneOpened = false;
+  try {
+    if (unvisitedNativePane) {
+      unvisitedPaneOpened = await settingsApi.open(unvisitedNativePane.id, {
+        itemId: unvisitedItemId,
+      });
+    }
+  } finally {
+    Element.prototype.scrollIntoView = nativeScrollIntoView;
+  }
+  check(
+    Boolean(unvisitedNativePane) &&
+      unvisitedPaneOpened &&
+      unvisitedItemScrolled &&
+      document.getElementById(unvisitedItemId)?.textContent?.includes(
+        'Unvisited pane item',
+      ),
+    'a deep link waits for a previously unvisited native pane and scrolls its extension row',
+    {
+      paneId: unvisitedNativePane?.id,
+      opened: unvisitedPaneOpened,
+      scrolled: unvisitedItemScrolled,
+    },
+  );
+  unvisitedRegistration.dispose();
+
   const builtInPaneOpened = await settingsApi.open(
     'codex.settings.general-settings',
     { itemId: settingsBuiltInItemId },
@@ -1945,9 +2383,13 @@ async function validateUi(
       ),
     'an extension row renders inside the stable General settings pane',
   );
-  const builtInSettingsControl = settingsApi
-    .getGroups('codex.settings.general-settings')
-    .flatMap((group) => group.items)
+  const builtInSettingsGroups = settingsApi.getGroups(
+    'codex.settings.general-settings',
+  );
+  const builtInSettingsItems = builtInSettingsGroups.flatMap(
+    (group) => group.items,
+  );
+  const builtInSettingsControl = builtInSettingsItems
     .find((item) => item.origin === 'app' && item.control)?.control;
   const builtInControlDetails = Reflect.ownKeys(builtInSettingsControl ?? {})
     .filter((key) => key !== 'kind');
@@ -1956,6 +2398,57 @@ async function validateUi(
       builtInControlDetails.length === 0,
     "built-in settings controls do not expose React elements or callbacks",
     { exposedKeys: builtInControlDetails.map(String) },
+  );
+  const exposesPrivateSettingsValue = (value, seen = new Set()) => {
+    if (typeof value === 'function') return true;
+    if (value == null || typeof value !== 'object') return false;
+    if (typeof value.$$typeof === 'symbol') return true;
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return Reflect.ownKeys(value).some((key) =>
+      exposesPrivateSettingsValue(value[key], seen),
+    );
+  };
+  const nativeSettingsTextShape = (item) => {
+    const row = document.getElementById(item.id);
+    const fiberKey = row
+      ? Object.keys(row).find((key) => key.startsWith('__reactFiber$'))
+      : undefined;
+    let fiber = fiberKey ? row[fiberKey] : null;
+    for (let hops = 0; fiber && hops < 40; hops += 1) {
+      const props = fiber.memoizedProps;
+      if (
+        props?.['data-settings-target-id'] === item.id &&
+        Object.hasOwn(props, 'label')
+      ) {
+        return {
+          labelIsElement: typeof props.label?.$$typeof === 'symbol',
+          descriptionIsElement:
+            typeof props.description?.$$typeof === 'symbol',
+        };
+      }
+      fiber = fiber.return;
+    }
+    return null;
+  };
+  const semanticNativeSettingsItems = builtInSettingsItems.filter(
+    (item) =>
+      item.origin === 'app' &&
+      typeof item.id === 'string' &&
+      document.getElementById(item.id),
+  );
+  const nativeSettingsTextShapes = semanticNativeSettingsItems.map(
+    nativeSettingsTextShape,
+  );
+  check(
+    semanticNativeSettingsItems.length > 0 &&
+      nativeSettingsTextShapes.every((shape) => shape?.labelIsElement),
+    'unchanged native settings rows retain localized React content',
+    { shapes: nativeSettingsTextShapes },
+  );
+  check(
+    !exposesPrivateSettingsValue(builtInSettingsGroups),
+    'the public settings model excludes React elements and callbacks',
   );
 
   await settingsApi.open('codex.settings.appearance');

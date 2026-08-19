@@ -152,15 +152,22 @@ row messages. Category, group, and item transformers compose in extension load
 and registration order. Normalization preserves native descriptors, enforces
 extension namespaces and unique IDs, stamps origins, isolates failures, and
 re-renders an open settings window after invalidation or disposal. New panes
-reuse `Wa`; new groups and rows reuse `gr`, `HO`, and `JO`.
+reuse `Wa`; new groups and rows reuse `gr`, `HO`, and `JO`. Each mounted `Wa`
+owns a sealed group-capture registry. A complete post-commit capture replaces
+the native group model in source order. A child-only update or unmount requests
+a new complete capture, so it cannot drop sibling groups or keep removed
+groups. Pages without a native group anchor retain their original content and
+render contributed groups in a separate stable slot.
 
 The public control factories render the stock `QS` controlled toggle, the
 `GU`/`Ia`/`qU.Item` dropdown composition, and `Mbt`. Source inspection of the
 stock General and Voice settings implementations confirmed the `QS`
-`checked`/`onChange` contract. Binding-owned weak maps keep extension handlers
-and native React elements out of public control descriptors. A control renders
-only for its owning extension row, or for its original app row. Callback
-failures remain isolated.
+`checked`/`onChange` contract. Binding-owned weak maps keep extension handlers,
+native controls, and native React content out of public descriptors. An
+unchanged app row renders its original localized label and description
+elements. A changed row renders its transformed public strings. A control
+renders only for its owning extension row, or for its original app row.
+Callback failures remain isolated.
 
 Native search input props are `searchQuery` and `onQueryChange`; result props
 are `searchResults`, `onSelect`, `intl`, and `listRef`. The binding adds one
@@ -175,8 +182,13 @@ native host selection. `SettingsContentBoundary` wraps each rendered `Wa`
 page, subscribes to binding invalidation, and replaces the Appearance page
 props with the custom title and native group tree. A pending native pane ID
 prevents the previous active row from winning during the app's asynchronous
-selection render. `open()` waits for a requested row and scrolls it into view.
-When Settings is closed, `open()` uses the main-process
+selection render. A page commit uses the exact native section-title slug, or
+the exact Profile back-slot message, and must match the raw active native row.
+The binding rejects the app's native loading page and an old-page commit during
+navigation. `open()` waits for the initial Settings snapshot and the requested
+pane commit before it tests a requested row, then scrolls that row into view.
+Custom panes that share an active Appearance host switch without a redundant
+native navigation. When Settings is closed, `open()` uses the main-process
 `navigate-to-route` host message to open General, waits for the native model,
 and then selects the requested pane. Entering or leaving a custom pane also
 invalidates the native host page when Appearance is already selected.
@@ -190,15 +202,18 @@ The stable API suite covers new panes and groups, insertion into General,
 standard control descriptors, transformer ordering and isolation, namespace
 enforcement, invalidation, disposal, and deep-link failure behavior. The
 version-specific UI suite covers native rendering, callbacks, General-pane
-insertion, deep links, sidebar navigation from Appearance, all four search
+insertion, exact native-group snapshot replacement, child-only recapture,
+loading and stale-page rejection, deep links into an unvisited native pane and
+the titleless Profile pane, sidebar navigation from Appearance, all four search
 text levels, package title/description search for the Extensions manager, and
 search-result navigation.
 
 Failure signatures include missing category captures, a missing
 `data-settings-panel-slug`, an empty `#settings-search` result for contributed
 text, a custom pane that stays on the previous native content after selection,
-a row whose native `id` does not match its public item ID, or a control that
-does not use the stock component exports above.
+a row whose native `id` does not match its public item ID, an unchanged app row
+whose label is no longer a React element, or a control that does not use the
+stock component exports above.
 
 ## authentication
 
@@ -252,15 +267,21 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
 
 Results:
 
-- Extension and shared-utility unit tests: `28/28`.
+- Launcher unit tests: `55/55`.
+- Extension and shared-utility unit tests: `30/30`.
 - Stable public API assertions: `44/44`.
-- Current native UI suite: `70/70`.
+- Current native UI suite: `84/84`.
 - The Multiple Accounts extension switched to another account and restored the
   original account.
 - Shipped-extension composition with the API suite enabled: passed.
 - Normal shipped-extension flow: passed.
 - Release build and strict signature verification: passed.
+- The packaged launcher contained no component seed, runtime, or binding.
 - Packaged binding and bridge files matched source.
+
+The deterministic native UI rerun used the isolated primary account without
+the optional alternate-account adoption step. The separate Multiple Accounts
+flow verified the account switch and restoration.
 
 The native run specifically covered Profile artwork reuse, native Profile
 navigation, thread navigation/restoration, thread-list composition, effective

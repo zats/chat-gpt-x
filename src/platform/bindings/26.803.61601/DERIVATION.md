@@ -130,9 +130,11 @@ load and registration order. Normalization preserves native descriptors,
 enforces extension namespaces and unique IDs, isolates failures, and refreshes
 an open Settings window after invalidation or disposal. Contributed panes and
 items use only the current app's native Settings components. Binding-owned
-weak maps keep extension handlers and native React elements out of public
-control descriptors. A control renders only for its owning extension row, or
-for its original app row.
+weak maps keep extension handlers, native controls, and native React content
+out of public descriptors. An unchanged app row renders its original localized
+label and description elements. A changed row renders its transformed public
+strings. A control renders only for its owning extension row, or for its
+original app row.
 
 Native search keeps the `searchQuery`, `onQueryChange`, `searchResults`, and
 `onSelect` contracts. The binding adds one result for each matching effective
@@ -140,12 +142,22 @@ pane and indexes category, pane, group, item, package-title, and package-
 description text. Selection clears the native query and uses the same native
 pane-selection callback as the sidebar.
 
-Custom pane selection remains local Settings state. The binding selects the
-native Appearance pane as the content host, then replaces its native `Wa`
-page props with the contributed title and group tree. `open()` waits for an
-optional target row and scrolls it into view. When Settings is closed, it uses
-the main-process `navigate-to-route` message to open General before it selects
-the requested pane.
+Each mounted native Settings page owns a sealed group-capture registry. A
+complete post-commit capture replaces the group model in source order. A
+child-only update or unmount requests a new complete capture, so it cannot drop
+sibling groups or keep removed groups. A page commit uses the exact native
+section-title slug, or the exact Profile back-slot message, and must match the
+raw active native row. The binding rejects the native loading page and a stale
+page commit during navigation. Pages without a native group anchor retain
+their original content and render contributed groups in a separate stable
+slot. Custom pane selection remains local Settings state. The binding selects
+the native Appearance pane as the content host, then replaces its native `Wa`
+page props with the contributed title and group tree. `open()` waits for the
+initial Settings snapshot and the requested pane commit before it tests an
+optional target row, then scrolls that row into view. Custom panes that share
+an active Appearance host switch without a redundant native navigation. When
+Settings is closed, the binding uses the main-process `navigate-to-route`
+message to open General before it selects the requested pane.
 
 ## authentication
 
@@ -189,28 +201,30 @@ The exact stock app reported version `26.803.61601`, Electron
 `151.0.7922.76`, and the pinned SHA-256 above. The hash was rechecked after the
 live run.
 
-The deterministic completion command passed one opaque API-key authentication
-path directly to the harness:
+The current completion command passed isolated primary and alternate ChatGPT
+authentication files directly to the harness:
 
 ```bash
 CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
-  scripts/run-local-ci.sh "$PRIMARY_AUTH"
+  scripts/run-local-ci.sh "$PRIMARY_AUTH" "$ALTERNATE_AUTH"
 ```
 
-Results in API-key mode:
+Results:
 
-- Extension and shared-utility unit tests: `23/23`.
-- Unchanged stable public API assertions applicable to this mode: `20/20`.
-- Current native UI assertions applicable to this mode: `35/35`.
+- Launcher unit tests: `55/55`.
+- Extension and shared-utility unit tests: `30/30`.
+- Stable public API assertions: `44/44`.
+- Current native UI assertions: `84/84`.
+- The Multiple Accounts extension switched to another account and restored the
+  original account.
 - Shipped-extension composition with the API suite enabled: passed.
 - Release build and strict signature verification: passed.
+- The packaged launcher contained no component seed, runtime, or binding.
 - Packaged binding and bridge files matched source.
-- Profile menu, ChatGPT-account switching, and profile-dependent
-  authentication assertions were disabled by the harness and are not claimed.
 
-Only the private suite's version and compatibility manifest changed so the
-launcher could admit it on the new app version; its deterministic test source
-is unchanged.
+The deterministic native UI rerun used the isolated primary account without
+the optional alternate-account adoption step. The separate Multiple Accounts
+flow verified the account switch and restoration.
 
 ## Failure signatures
 
@@ -228,6 +242,12 @@ is unchanged.
 - Native UI navigation timeout: sidebar-row kind/id attributes or current
   thread synchronization changed.
 - Missing thread-list marker: sidebar-row or title-trigger attributes changed.
+- Native Settings text rendered as a string: the private app-row content map or
+  unchanged-descriptor retention failed.
+- A removed or reordered Settings group stays in place: the per-render group
+  snapshot was not replaced.
+- A deep link into an unvisited native pane returns false: `open()` tested its
+  groups before native selection and content rendering completed.
 - Authentication startup failure: sign-in initializer, URL decoration, browser
   dispatch, query key, message bus, or provider boundary changed.
 - Missing or unpainted header: the `app-shell-header` locator, its five-region

@@ -90,4 +90,4 @@ Rules: CDP is for development-time inspection and hot-probing only — productio
 
 ## Current state
 
-The pinned API-development binding is `src/platform/bindings/26.803.61601/` at ChatGPTX API `1.1.1`. Its recorded API-key run passes the applicable public API suite (20/20) and native UI suite (35/35). The release catalog also contains later exact bindings, including `26.814.41407` on API `1.0.4`. Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + remotely installed main-process bridge, binding, and extensions.
+The pinned API-development binding is `src/platform/bindings/26.803.61601/` at ChatGPTX API `1.1.1`. Its current exact-build run passes the public API suite (44/44) and native UI suite (84/84). The release catalog also contains later exact bindings, including `26.814.41407` on API `1.0.4`. Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + remotely installed main-process bridge, binding, and extensions.

@@ -301,6 +301,15 @@ private struct SemanticVersion: Comparable {
     }
 }
 
+func chatgptAPIRequiresExtensionManagerAuthorization(
+    _ version: String
+) -> Bool {
+    guard let version = SemanticVersion(version) else {
+        return true
+    }
+    return version >= SemanticVersion("1.1.1")!
+}
+
 enum ComponentLocalVersion: Equatable {
     case current
     case different(String)
@@ -1036,16 +1045,19 @@ private extension ComponentStore {
             guard manifest.version == version else {
                 throw ComponentUpdateError.archiveLayoutInvalid
             }
-            try requireFiles(
-                [
-                    "types.d.ts",
-                    "bridge/main.cjs",
-                    "bridge/preload.cjs",
-                    "runtime/codex-paths.cjs",
-                    "runtime/extension-launch-config.cjs",
-                ],
-                beneath: root
-            )
+            var requiredFiles = [
+                "types.d.ts",
+                "bridge/main.cjs",
+                "bridge/preload.cjs",
+                "runtime/codex-paths.cjs",
+                "runtime/extension-launch-config.cjs",
+            ]
+            if chatgptAPIRequiresExtensionManagerAuthorization(version) {
+                requiredFiles.append(
+                    "runtime/extension-manager-authorization.cjs"
+                )
+            }
+            try requireFiles(requiredFiles, beneath: root)
         case .binding(let chatgpt, let version, let api, let asarSha256):
             let manifest = try decode(
                 BindingPackageManifest.self,

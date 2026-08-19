@@ -349,6 +349,43 @@ final class ComponentStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testAuthorizationModuleRequirementFollowsAPIVersion() throws {
+        let store = try makeStore()
+        let legacyLock = makeLock(
+            extensions: [],
+            apiVersion: "1.0.4"
+        )
+        try installFixture(legacyLock, in: store)
+        let legacyAuthorizationURL = try store.resolveStorePath(
+            "\(legacyLock.chatgptApi.path)/runtime/extension-manager-authorization.cjs"
+        )
+        try FileManager.default.removeItem(at: legacyAuthorizationURL)
+
+        XCTAssertNotNil(try store.prepareInstalled())
+        XCTAssertFalse(
+            chatgptAPIRequiresExtensionManagerAuthorization("1.1.0")
+        )
+
+        let currentLock = makeLock(
+            extensions: [],
+            apiVersion: "1.1.1"
+        )
+        try installFixture(currentLock, in: store)
+        let currentAuthorizationURL = try store.resolveStorePath(
+            "\(currentLock.chatgptApi.path)/runtime/extension-manager-authorization.cjs"
+        )
+        try FileManager.default.removeItem(at: currentAuthorizationURL)
+
+        XCTAssertThrowsError(try store.prepareInstalled()) { error in
+            XCTAssertTrue(
+                error.localizedDescription.contains(
+                    "components/chatgpt-api/1.1.1/runtime/extension-manager-authorization.cjs"
+                )
+            )
+        }
+    }
+
+    @MainActor
     private func makeStore() throws -> ComponentStore {
         try ComponentStore(
             environment: ["CODEX_HOME": codexHomeURL.path]
@@ -357,21 +394,22 @@ final class ComponentStoreTests: XCTestCase {
 
     @MainActor
     private func makeLock(
-        extensions: [StoredExtension]
+        extensions: [StoredExtension],
+        apiVersion: String = "1.2.3"
     ) -> ComponentVersionsLock {
         ComponentVersionsLock(
             schemaVersion: 1,
             generation: 7,
             chatgptApi: StoredChatGPTAPI(
-                version: "1.2.3",
-                release: "chatgpt-api-v1.2.3",
+                version: apiVersion,
+                release: "chatgpt-api-v\(apiVersion)",
                 sha256: hashA,
-                path: "components/chatgpt-api/1.2.3"
+                path: "components/chatgpt-api/\(apiVersion)"
             ),
             binding: StoredBinding(
                 chatgpt: "26.900.1",
                 version: "2.0.0",
-                chatgptApi: "1.2.3",
+                chatgptApi: apiVersion,
                 asarSha256: hashB,
                 release: "binding-26.900.1-v2.0.0",
                 sha256: hashC,
@@ -446,6 +484,7 @@ final class ComponentStoreTests: XCTestCase {
             "bridge/preload.cjs",
             "runtime/codex-paths.cjs",
             "runtime/extension-launch-config.cjs",
+            "runtime/extension-manager-authorization.cjs",
         ] {
             try writeText(
                 "module.exports = {};\n",
