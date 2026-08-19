@@ -496,14 +496,20 @@ final class ComponentUpdateService {
     private let session: URLSession
     private let indexURL: URL
     private let launcherVersion: String
-    private let beforeActivation: () throws -> Void
+    private let beforeActivation: (
+        _ chatgptVersion: String,
+        _ chatgptAsarSHA256: String
+    ) throws -> Void
 
     init(
         componentStore: ComponentStore,
         session: URLSession = .shared,
         indexURL: URL? = nil,
         launcherVersion: String? = nil,
-        beforeActivation: @escaping () throws -> Void = {},
+        beforeActivation: @escaping (
+            _ chatgptVersion: String,
+            _ chatgptAsarSHA256: String
+        ) throws -> Void,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.componentStore = componentStore
@@ -538,7 +544,12 @@ final class ComponentUpdateService {
         let result = try await componentStore.install(
             plan,
             session: session,
-            beforeActivation: beforeActivation,
+            beforeActivation: {
+                try beforeActivation(
+                    chatgptVersion,
+                    chatgptAsarSHA256
+                )
+            },
             progress: progress
         )
         return ComponentUpdateOutcome(
@@ -678,7 +689,7 @@ private extension ComponentStore {
     func install(
         _ plan: ComponentUpdatePlan,
         session: URLSession = .shared,
-        beforeActivation: () throws -> Void = {},
+        beforeActivation: () throws -> Void,
         progress: @escaping ComponentUpdateProgressHandler = { _ in }
     ) async throws -> ComponentUpdateResult {
         let index = plan.index
@@ -760,20 +771,8 @@ private extension ComponentStore {
             )
         }
 
-        try beforeActivation()
         return try withExclusiveMutationLock {
             () throws -> ComponentUpdateResult in
-            let activeMetadata = try? activeVersionsMetadata()
-            if let activeMetadata,
-                index.generation < activeMetadata.generation
-            {
-                throw ComponentUpdateError.olderGeneration(
-                    index.generation,
-                    activeMetadata.generation
-                )
-            }
-
-            let currentVersions = try? activeVersions()
             let preparedSettings = try prepareExtensionSettings(
                 for: storedExtensions,
                 recoverInvalidSettings: true
@@ -812,7 +811,20 @@ private extension ComponentStore {
                     || versions.binding != $0.versions.binding
                     || versions.extensions != $0.versions.extensions
             } ?? true
+
+            let activeMetadata = try? activeVersionsMetadata()
+            if let activeMetadata,
+                index.generation < activeMetadata.generation
+            {
+                throw ComponentUpdateError.olderGeneration(
+                    index.generation,
+                    activeMetadata.generation
+                )
+            }
+
+            let currentVersions = try? activeVersions()
             if versions == currentVersions {
+                try beforeActivation()
                 try commitExtensionSettings(preparedSettings)
                 return componentsChanged
                     ? .installed(prepared)
@@ -823,6 +835,7 @@ private extension ComponentStore {
             let versionsLockURL = rootURL.appendingPathComponent(
                 "versions-lock.json"
             )
+            try beforeActivation()
             do {
                 try atomicWrite(try encode(versions), to: versionsLockURL)
                 try commitExtensionSettings(preparedSettings)

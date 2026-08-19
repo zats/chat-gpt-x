@@ -64,23 +64,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let componentStore = try ComponentStore()
             self.componentStore = componentStore
             componentUpdateService = ComponentUpdateService(
-                componentStore: componentStore
+                componentStore: componentStore,
+                beforeActivation: {
+                    [weak self] expectedVersion, expectedAsarSHA256 in
+                    guard let self else {
+                        throw ComponentStoreUnavailable()
+                    }
+                    try validateChatGPTBuild(
+                        expectedVersion: expectedVersion,
+                        expectedAsarSHA256: expectedAsarSHA256
+                    )
+                }
             )
             let applicationURL = options.applicationURL
                 ?? ChatGPTLauncher.installedApplicationURL(
                     workspace: .shared
                 )
             let installed = try? componentStore.prepareInstalled()
-            if let applicationURL,
-                let installed,
-                ChatGPTLauncher.bindingMatches(
-                    applicationURL: applicationURL,
-                    binding: installed.versions.binding
-                )
-            {
-                preparedComponents = installed
-            } else {
-                preparedComponents = nil
+            preparedComponents = nil
+            if !options.isAPITest, let applicationURL, let installed {
+                Task { [weak self] in
+                    guard await ChatGPTLauncher.bindingMatches(
+                        applicationURL: applicationURL,
+                        binding: installed.versions.binding
+                    ), let self,
+                        let current = try? componentStore.prepareInstalled(),
+                        current.versions == installed.versions,
+                        ChatGPTLauncher.cachedBuildMatches(
+                            applicationURL: applicationURL,
+                            expectedVersion: current.versions.binding.chatgpt,
+                            expectedAsarSHA256:
+                                current.versions.binding.asarSha256
+                        )
+                    else {
+                        return
+                    }
+                    preparedComponents = current
+                    launchRecoveryMonitor?.refreshApprovedApplication()
+                }
             }
         } catch {
             failStartup(error)
@@ -151,7 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let componentStore,
                     let preparedComponents = try componentStore
                         .prepareInstalled(),
-                    ChatGPTLauncher.bindingMatches(
+                    await ChatGPTLauncher.bindingMatches(
                         applicationURL: applicationURL,
                         binding: preparedComponents.versions.binding
                     )
@@ -315,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     try? $0.prepareInstalled()
                 }
                 if let installed,
-                    ChatGPTLauncher.bindingMatches(
+                    await ChatGPTLauncher.bindingMatches(
                         applicationURL: applicationURL,
                         binding: installed.versions.binding
                     )
@@ -360,20 +381,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             throw ComponentStoreUnavailable()
         }
         let cached = try? componentStore.prepareInstalled()
-        let exactCached = cached.flatMap { installed in
-            ChatGPTLauncher.bindingMatches(
+        let exactCached: PreparedComponentStore?
+        if let cached,
+            await ChatGPTLauncher.bindingMatches(
                 applicationURL: applicationURL,
-                binding: installed.versions.binding
+                binding: cached.versions.binding
             )
-                ? installed
-                : nil
+        {
+            exactCached = cached
+        } else {
+            exactCached = nil
         }
 
         let outcome: ComponentUpdateOutcome
         do {
             outcome = try await componentUpdateService.update(
                 for: try chatGPTVersion(at: applicationURL),
-                chatgptAsarSHA256: try chatGPTAsarSHA256(at: applicationURL)
+                chatgptAsarSHA256: try await chatGPTAsarSHA256(
+                    at: applicationURL
+                )
             )
         } catch {
             guard let exactCached,
@@ -385,7 +411,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return exactCached
         }
         let installed = outcome.result.preparedStore
-        guard ChatGPTLauncher.bindingMatches(
+        guard await ChatGPTLauncher.bindingMatches(
             applicationURL: applicationURL,
             binding: installed.versions.binding
         ) else {
@@ -431,13 +457,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return version
     }
 
-    private func chatGPTAsarSHA256(at applicationURL: URL) throws -> String {
-        guard let sha256 = ChatGPTLauncher.applicationAsarSHA256(
+    private func chatGPTAsarSHA256(
+        at applicationURL: URL
+    ) async throws -> String {
+        guard let sha256 = await ChatGPTLauncher.applicationAsarSHA256(
             at: applicationURL
         ) else {
             throw UpdateUIError.chatGPTBuildUnavailable
         }
         return sha256
+    }
+
+    private func validateChatGPTBuild(
+        expectedVersion: String,
+        expectedAsarSHA256: String
+    ) throws {
+        guard let applicationURL = try? selectedChatGPTApplicationURL(),
+            ChatGPTLauncher.cachedBuildMatches(
+                applicationURL: applicationURL,
+                expectedVersion: expectedVersion,
+                expectedAsarSHA256: expectedAsarSHA256
+            )
+        else {
+            throw UpdateUIError.chatGPTChangedDuringUpdate
+        }
     }
 
     private func approvedChatGPTApplicationURL() -> URL? {
@@ -447,9 +490,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let workspace = NSWorkspace.shared
         guard let applicationURL = options.applicationURL
             ?? ChatGPTLauncher.installedApplicationURL(workspace: workspace),
-            ChatGPTLauncher.bindingMatches(
+            ChatGPTLauncher.cachedBuildMatches(
                 applicationURL: applicationURL,
-                binding: binding
+                expectedVersion: binding.chatgpt,
+                expectedAsarSHA256: binding.asarSha256
             )
         else {
             return nil
@@ -487,7 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let chatgptVersion = try chatGPTVersion(
                     at: applicationURL
                 )
-                let chatgptAsarSHA256 = try chatGPTAsarSHA256(
+                let chatgptAsarSHA256 = try await chatGPTAsarSHA256(
                     at: applicationURL
                 )
                 let outcome = try await componentUpdateService.update(
@@ -501,7 +545,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 )
                 let result = outcome.result
-                guard ChatGPTLauncher.bindingMatches(
+                guard await ChatGPTLauncher.bindingMatches(
                     applicationURL: applicationURL,
                     binding: result.preparedStore.versions.binding
                 ) else {

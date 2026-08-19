@@ -21,6 +21,7 @@ struct ChatGPTLauncher {
         "CHATGPTX_VERSIONS_LOCK"
     private static let restartCountdown = 10
     private static let quitTimeout: TimeInterval = 10
+    private static let asarHashCache = ChatGPTAsarHashCache()
 
     let componentStore: PreparedComponentStore
     private let launchReservationStore = ChatGPTLaunchReservationStore()
@@ -54,7 +55,7 @@ struct ChatGPTLauncher {
             throw LaunchError.chatGPTExecutableMissing(executableURL)
         }
 
-        try Self.validateBinding(
+        try await Self.validateBinding(
             applicationURL: resolvedApplicationURL,
             binding: componentStore.versions.binding
         )
@@ -152,7 +153,7 @@ struct ChatGPTLauncher {
         }
 
         do {
-            try Self.validateBinding(
+            try await Self.validateBinding(
                 applicationURL: resolvedApplicationURL,
                 binding: componentStore.versions.binding
             )
@@ -368,39 +369,68 @@ struct ChatGPTLauncher {
     }
 
     static func applicationVersion(at url: URL) -> String? {
-        Bundle(url: url)?.object(
-            forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String
-    }
-
-    static func applicationAsarSHA256(at applicationURL: URL) -> String? {
-        let asarURL = applicationURL
+        let infoURL = url
             .appendingPathComponent("Contents", isDirectory: true)
-            .appendingPathComponent("Resources", isDirectory: true)
-            .appendingPathComponent("app.asar")
-        guard let data = try? Data(contentsOf: asarURL) else {
+            .appendingPathComponent("Info.plist")
+        guard let data = try? Data(contentsOf: infoURL),
+            let propertyList = try? PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            ),
+            let information = propertyList as? [String: Any]
+        else {
             return nil
         }
-        return SHA256.hash(data: data)
-            .map { String(format: "%02x", $0) }
-            .joined()
+        return information["CFBundleShortVersionString"] as? String
+    }
+
+    static func applicationAsarSHA256(
+        at applicationURL: URL
+    ) async -> String? {
+        try? await asarHashCache.sha256(at: applicationURL)
+    }
+
+    static func cachedBuildMatches(
+        applicationURL: URL,
+        expectedVersion: String,
+        expectedAsarSHA256: String
+    ) -> Bool {
+        guard applicationVersion(at: applicationURL) == expectedVersion,
+            asarHashCache.cachedSHA256(at: applicationURL)
+                == expectedAsarSHA256,
+            applicationVersion(at: applicationURL) == expectedVersion,
+            asarHashCache.cachedSHA256(at: applicationURL)
+                == expectedAsarSHA256
+        else {
+            return false
+        }
+        return true
     }
 
     static func bindingMatches(
         applicationURL: URL,
         binding: StoredBinding
-    ) -> Bool {
+    ) async -> Bool {
         guard applicationVersion(at: applicationURL) == binding.chatgpt else {
             return false
         }
-        return applicationAsarSHA256(at: applicationURL)
+        guard await applicationAsarSHA256(at: applicationURL)
             == binding.asarSha256
+        else {
+            return false
+        }
+        return cachedBuildMatches(
+            applicationURL: applicationURL,
+            expectedVersion: binding.chatgpt,
+            expectedAsarSHA256: binding.asarSha256
+        )
     }
 
     private static func validateBinding(
         applicationURL: URL,
         binding: StoredBinding
-    ) throws {
+    ) async throws {
         guard let installedVersion = applicationVersion(at: applicationURL),
             !installedVersion.isEmpty
         else {
@@ -412,7 +442,7 @@ struct ChatGPTLauncher {
                 available: binding.chatgpt
             )
         }
-        guard bindingMatches(
+        guard await bindingMatches(
             applicationURL: applicationURL,
             binding: binding
         ) else {
@@ -576,6 +606,173 @@ struct ChatGPTLauncher {
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
     }
+}
+
+actor ChatGPTAsarHashCache {
+    typealias HashFile = @Sendable (FileHandle) throws -> String
+
+    private static let readChunkSize = 1024 * 1024
+    private static let maximumReadAttempts = 2
+
+    private let entries = ChatGPTAsarHashEntries()
+    private let hashFile: HashFile
+
+    init(hashFile: @escaping HashFile = ChatGPTAsarHashCache.streamSHA256) {
+        self.hashFile = hashFile
+    }
+
+    func sha256(at applicationURL: URL) throws -> String {
+        let asarURL = Self.asarURL(for: applicationURL)
+        let canonicalURL = asarURL.standardizedFileURL.resolvingSymlinksInPath()
+        let path = canonicalURL.path
+
+        for _ in 0..<Self.maximumReadAttempts {
+            let pathIdentity = try Self.fileIdentity(atPath: path)
+            if let cached = entries.sha256(
+                atPath: path,
+                identity: pathIdentity
+            ) {
+                return cached
+            }
+
+            let handle = try FileHandle(forReadingFrom: canonicalURL)
+            defer { try? handle.close() }
+            let openedIdentity = try Self.fileIdentity(
+                fileDescriptor: handle.fileDescriptor
+            )
+            guard openedIdentity == pathIdentity else { continue }
+
+            let sha256 = try hashFile(handle)
+            let completedIdentity = try Self.fileIdentity(
+                fileDescriptor: handle.fileDescriptor
+            )
+            guard completedIdentity == openedIdentity,
+                try Self.fileIdentity(atPath: path) == openedIdentity
+            else {
+                continue
+            }
+
+            entries.store(
+                sha256: sha256,
+                atPath: path,
+                identity: openedIdentity
+            )
+            return sha256
+        }
+
+        throw ChatGPTAsarHashError.changedDuringRead
+    }
+
+    nonisolated func cachedSHA256(at applicationURL: URL) -> String? {
+        let path = Self.asarURL(for: applicationURL)
+            .standardizedFileURL.resolvingSymlinksInPath().path
+        guard let identity = try? Self.fileIdentity(atPath: path) else {
+            return nil
+        }
+        return entries.sha256(atPath: path, identity: identity)
+    }
+
+    private nonisolated static func asarURL(for applicationURL: URL) -> URL {
+        applicationURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("app.asar")
+    }
+
+    private nonisolated static func fileIdentity(
+        atPath path: String
+    ) throws -> ChatGPTAsarFileIdentity {
+        var status = stat()
+        let result = path.withCString { Darwin.lstat($0, &status) }
+        guard result == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return try ChatGPTAsarFileIdentity(status)
+    }
+
+    private nonisolated static func fileIdentity(
+        fileDescriptor: Int32
+    ) throws -> ChatGPTAsarFileIdentity {
+        var status = stat()
+        guard Darwin.fstat(fileDescriptor, &status) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return try ChatGPTAsarFileIdentity(status)
+    }
+
+    private nonisolated static func streamSHA256(
+        _ handle: FileHandle
+    ) throws -> String {
+        var hasher = SHA256()
+        while let data = try handle.read(upToCount: readChunkSize),
+            !data.isEmpty
+        {
+            hasher.update(data: data)
+        }
+        return hasher.finalize()
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+}
+
+nonisolated private struct ChatGPTAsarFileIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    let size: Int64
+    let modificationSeconds: Int64
+    let modificationNanoseconds: Int64
+    let changeSeconds: Int64
+    let changeNanoseconds: Int64
+
+    init(_ status: stat) throws {
+        guard status.st_mode & S_IFMT == S_IFREG else {
+            throw ChatGPTAsarHashError.notRegularFile
+        }
+        device = UInt64(status.st_dev)
+        inode = UInt64(status.st_ino)
+        size = status.st_size
+        modificationSeconds = Int64(status.st_mtimespec.tv_sec)
+        modificationNanoseconds = Int64(status.st_mtimespec.tv_nsec)
+        changeSeconds = Int64(status.st_ctimespec.tv_sec)
+        changeNanoseconds = Int64(status.st_ctimespec.tv_nsec)
+    }
+}
+
+nonisolated private final class ChatGPTAsarHashEntries: @unchecked Sendable {
+    private struct Entry {
+        let identity: ChatGPTAsarFileIdentity
+        let sha256: String
+    }
+
+    private let lock = NSLock()
+    private var entries = [String: Entry]()
+
+    func sha256(
+        atPath path: String,
+        identity: ChatGPTAsarFileIdentity
+    ) -> String? {
+        lock.withLock {
+            guard let entry = entries[path], entry.identity == identity else {
+                return nil
+            }
+            return entry.sha256
+        }
+    }
+
+    func store(
+        sha256: String,
+        atPath path: String,
+        identity: ChatGPTAsarFileIdentity
+    ) {
+        lock.withLock {
+            entries[path] = Entry(identity: identity, sha256: sha256)
+        }
+    }
+}
+
+nonisolated private enum ChatGPTAsarHashError: Error {
+    case changedDuringRead
+    case notRegularFile
 }
 
 private struct LaunchConfiguration: Encodable {

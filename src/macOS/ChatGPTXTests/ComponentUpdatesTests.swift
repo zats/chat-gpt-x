@@ -4,6 +4,10 @@ import XCTest
 @testable import ChatGPTX
 
 final class ComponentUpdatesTests: XCTestCase {
+    private enum SimulatedUpdateError: Error {
+        case chatGPTChanged
+    }
+
     private static let releaseBaseURL =
         "https://github.com/zats/chat-gpt-x/releases/download"
     private static let indexURL = URL(
@@ -351,7 +355,11 @@ final class ComponentUpdatesTests: XCTestCase {
             ]
         )
 
-        let outcome = try await makeService().update(
+        let outcome = try await makeService {
+            version, asarSHA256 in
+            XCTAssertEqual(version, Self.nextChatgptVersion)
+            XCTAssertEqual(asarSHA256, Self.nextAsarHash)
+        }.update(
             for: Self.nextChatgptVersion,
             chatgptAsarSHA256: Self.nextAsarHash
         )
@@ -367,6 +375,120 @@ final class ComponentUpdatesTests: XCTestCase {
         XCTAssertEqual(
             prepared.versions.binding.asarSha256,
             Self.nextAsarHash
+        )
+    }
+
+    @MainActor
+    func testChangedChatGPTBuildCannotReplaceActiveSameGenerationLock()
+        async throws
+    {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let activeBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let activeIndex = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(activeBinding)
+        )
+        installResponses(
+            index: activeIndex,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": activeBinding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let lockURL = codexHomeURL.appendingPathComponent(
+            "extensions/versions-lock.json"
+        )
+        let activeLock = try Data(contentsOf: lockURL)
+        let settingsURL = codexHomeURL.appendingPathComponent(
+            "extensions/settings.json"
+        )
+        let activeSettings = try Data(contentsOf: settingsURL)
+        let downloadedBinding = try makeBindingArchive(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash
+        )
+        var downloadedIndex = activeIndex
+        var bindings = try XCTUnwrap(
+            downloadedIndex["bindings"] as? [String: Any]
+        )
+        bindings[Self.nextChatgptVersion] = bindingEntry(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash,
+            hash: digest(downloadedBinding)
+        )
+        downloadedIndex["bindings"] = bindings
+        installResponses(
+            index: downloadedIndex,
+            archives: [
+                "binding-\(Self.nextChatgptVersion)-v1.0.0":
+                    downloadedBinding
+            ]
+        )
+
+        let service = try makeService { expectedVersion, expectedHash in
+            XCTAssertEqual(expectedVersion, Self.nextChatgptVersion)
+            XCTAssertEqual(expectedHash, Self.nextAsarHash)
+
+            // Sparkle replaced the app after the download completed.
+            let currentVersion = Self.chatgptVersion
+            let currentHash = Self.asarHash
+            guard currentVersion == expectedVersion,
+                currentHash == expectedHash
+            else {
+                throw SimulatedUpdateError.chatGPTChanged
+            }
+        }
+
+        do {
+            _ = try await service.update(
+                for: Self.nextChatgptVersion,
+                chatgptAsarSHA256: Self.nextAsarHash
+            )
+            XCTFail("A changed ChatGPT build must stop activation.")
+        } catch SimulatedUpdateError.chatGPTChanged {
+            // Expected.
+        }
+
+        XCTAssertEqual(try Data(contentsOf: lockURL), activeLock)
+        XCTAssertEqual(try Data(contentsOf: settingsURL), activeSettings)
+        let active = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: lockURL)
+            ) as? [String: Any]
+        )
+        let activeBindingRecord = try XCTUnwrap(
+            active["binding"] as? [String: Any]
+        )
+        XCTAssertEqual(
+            activeBindingRecord["chatgpt"] as? String,
+            Self.chatgptVersion
+        )
+        XCTAssertEqual(
+            activeBindingRecord["asarSha256"] as? String,
+            Self.asarHash
+        )
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [
+                Self.indexURL,
+                releaseURL(
+                    "binding-\(Self.nextChatgptVersion)-v1.0.0"
+                ),
+            ]
         )
     }
 
@@ -424,20 +546,36 @@ final class ComponentUpdatesTests: XCTestCase {
         let lockURL = codexHomeURL.appendingPathComponent(
             "extensions/versions-lock.json"
         )
-        let service = try makeService {
-            var lock = try XCTUnwrap(
-                JSONSerialization.jsonObject(
-                    with: Data(contentsOf: lockURL)
-                ) as? [String: Any]
-            )
-            lock["generation"] = 9
-            try self.json(lock).write(to: lockURL, options: .atomic)
-        }
+        let service = try makeService()
 
         do {
             _ = try await service.update(
                 for: Self.chatgptVersion,
-                chatgptAsarSHA256: Self.asarHash
+                chatgptAsarSHA256: Self.asarHash,
+                progress: { progress in
+                    guard case .installing(
+                        componentID: "binding",
+                        name: _
+                    ) = progress else {
+                        return
+                    }
+                    do {
+                        var lock = try XCTUnwrap(
+                            JSONSerialization.jsonObject(
+                                with: Data(contentsOf: lockURL)
+                            ) as? [String: Any]
+                        )
+                        lock["generation"] = 9
+                        try self.json(lock).write(
+                            to: lockURL,
+                            options: .atomic
+                        )
+                    } catch {
+                        XCTFail(
+                            "Could not simulate the newer updater: \(error)"
+                        )
+                    }
+                }
             )
             XCTFail("A stale updater must not replace a newer active store.")
         } catch ComponentUpdateError.olderGeneration(
@@ -708,7 +846,10 @@ final class ComponentUpdatesTests: XCTestCase {
     @MainActor
     private func makeService(
         launcherVersion: String = "1.1.0",
-        beforeActivation: @escaping () throws -> Void = {}
+        beforeActivation: @escaping (
+            _ chatgptVersion: String,
+            _ chatgptAsarSHA256: String
+        ) throws -> Void = { _, _ in }
     ) throws -> ComponentUpdateService {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ComponentUpdateURLProtocol.self]

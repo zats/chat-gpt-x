@@ -200,9 +200,10 @@ final class ChatGPTInjectionMonitor {
             )
             let bindingMatches = application.bundleURL.flatMap { url in
                 expectedBinding().map {
-                    ChatGPTLauncher.bindingMatches(
+                    ChatGPTLauncher.cachedBuildMatches(
                         applicationURL: url,
-                        binding: $0
+                        expectedVersion: $0.chatgpt,
+                        expectedAsarSHA256: $0.asarSha256
                     )
                 }
             } ?? false

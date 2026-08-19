@@ -214,7 +214,7 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
 
 Results:
 
-- Launcher unit tests: `55/55`.
+- Launcher unit tests: `60/60`.
 - Extension and shared-utility unit tests: `35/35`.
 - Stable public API assertions: `44/44`.
 - Current native UI assertions: `84/84`.
