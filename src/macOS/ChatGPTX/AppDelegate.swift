@@ -108,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         return
                     }
                     preparedComponents = current
-                    launchRecoveryMonitor?.refreshApprovedApplication()
+                    self.launchRecoveryMonitor?.refreshApprovedApplication()
                 }
             }
         } catch {
