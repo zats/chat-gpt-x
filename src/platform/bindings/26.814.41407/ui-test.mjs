@@ -1271,8 +1271,17 @@ async function validateUi(
     'native post-authentication refresh callback is captured',
   );
   check(
+    globalThis.__CGPTX_HOST__?._debug.authenticationScopeReady() === true,
+    'native application scope is captured from the profile boundary',
+  );
+  check(
     globalThis.__CGPTX_HOST__?._debug.nativeSignInStartCount() >= 1,
     'public startSignIn used ChatGPT native login',
+  );
+  check(
+    globalThis.__CGPTX_HOST__?._debug.nativeSignInUsedApplicationScope() ===
+      true,
+    'public startSignIn passed the captured application scope to ChatGPT native login',
   );
   check(
     globalThis.__CGPTX_HOST__?._debug.authenticationRefreshCount() >= 1,
@@ -1724,6 +1733,1974 @@ async function validateUi(
       );
     }
   }
+
+  markProgress('settings');
+  const settingsFixtureId = 'settings-ui-fixture';
+  const settingsPaneId = `${settingsFixtureId}.pane`;
+  const settingsGroupId = `${settingsFixtureId}.group`;
+  const settingsDuplicateGroupId = `${settingsFixtureId}.duplicate-group`;
+  const settingsSnapshotPaneId = `${settingsFixtureId}.snapshot-pane`;
+  const settingsSecondPaneId = `${settingsFixtureId}.second-pane`;
+  const settingsSecondGroupId = `${settingsFixtureId}.second-group`;
+  const settingsSecondItemId = `${settingsFixtureId}.second-item`;
+  const settingsAppearanceGroupId = `${settingsFixtureId}.appearance-group`;
+  const settingsAppearanceItemId = `${settingsFixtureId}.appearance-item`;
+  const settingsToggleId = `${settingsFixtureId}.toggle`;
+  const settingsSelectId = `${settingsFixtureId}.select`;
+  const settingsButtonId = `${settingsFixtureId}.button`;
+  const settingsBuiltInGroupId = `${settingsFixtureId}.built-in-group`;
+  const settingsBuiltInItemId = `${settingsFixtureId}.built-in-item`;
+  const settingsProfileGroupId = `${settingsFixtureId}.profile-group`;
+  const settingsProfileItemId = `${settingsFixtureId}.profile-item`;
+  const settingsObserverId = 'settings-observer-fixture';
+  const settingsObserverReplayId = `${settingsObserverId}.replay`;
+  let settingsApi;
+  let settingsToggleChecked = false;
+  let settingsSelectedValue = 'first';
+  let settingsButtonClicks = 0;
+  let settingsBuiltInOverrideItemId;
+  let settingsBuiltInOverrideClicks = 0;
+  let settingsItemRegistration;
+  globalThis.__CGPTX_HOST__.registerExtension(settingsFixtureId, {
+    activate(api) {
+      settingsApi = api.settings;
+      const settingsBuiltInOverrideControl = settingsApi.ui.button({
+        label: 'Run built-in override',
+        onClick() {
+          settingsBuiltInOverrideClicks += 1;
+        },
+      });
+      settingsApi.transformCategories((categories) =>
+        categories.map((category) =>
+          category.id === 'integrations'
+            ? {
+                ...category,
+                keywords: [
+                  ...(category.keywords ?? []),
+                  'settings-category-marker',
+                ],
+                panes: [
+                  ...category.panes,
+                  {
+                    id: settingsPaneId,
+                    label: 'Settings UI Fixture',
+                    title: 'Settings UI Fixture',
+                    description: 'settings-pane-marker',
+                  },
+                  {
+                    id: settingsSecondPaneId,
+                    label: 'Second Settings UI Fixture',
+                  },
+                  {
+                    id: settingsSnapshotPaneId,
+                    label: 'Settings Snapshot Fixture',
+                  },
+                ],
+              }
+            : category,
+        ),
+      );
+      settingsApi.transformGroups((groups, pane) => {
+        if (pane.id === settingsPaneId) {
+          return [
+            ...groups,
+            {
+              id: settingsGroupId,
+              title: 'Settings fixture group',
+              description: 'settings-group-marker',
+              footer: 'Settings fixture footer',
+              items: [],
+            },
+            {
+              id: settingsDuplicateGroupId,
+              title: 'Duplicate item fixture group',
+              items: [
+                {
+                  id: settingsToggleId,
+                  label: 'Duplicate settings fixture toggle',
+                },
+              ],
+            },
+          ];
+        }
+        if (pane.id === settingsSecondPaneId) {
+          return [
+            ...groups,
+            {
+              id: settingsSecondGroupId,
+              items: [],
+            },
+          ];
+        }
+        if (pane.id === 'codex.settings.appearance') {
+          return [
+            ...groups,
+            {
+              id: settingsAppearanceGroupId,
+              items: [
+                {
+                  id: settingsAppearanceItemId,
+                  label: 'Appearance host fixture',
+                },
+              ],
+            },
+          ];
+        }
+        if (pane.id === 'codex.settings.general-settings') {
+          return [
+            ...groups,
+            {
+              id: settingsBuiltInGroupId,
+              title: 'Built-in pane fixture',
+              items: [],
+            },
+          ];
+        }
+        if (pane.id === 'codex.settings.profile') {
+          return [
+            ...groups,
+            {
+              id: settingsProfileGroupId,
+              title: 'Profile pane fixture',
+              items: [
+                {
+                  id: settingsProfileItemId,
+                  label: 'Profile pane item',
+                },
+              ],
+            },
+          ];
+        }
+        return groups;
+      });
+      settingsItemRegistration = settingsApi.transformItems(
+        (items, context) => {
+          if (
+            context.pane.id === 'codex.settings.general-settings' &&
+            context.group.origin === 'app'
+          ) {
+            settingsBuiltInOverrideItemId ??= items.find(
+              (item) => item.origin === 'app' && typeof item.id === 'string',
+            )?.id;
+            return items.map((item) =>
+              item.id === settingsBuiltInOverrideItemId
+                ? { ...item, control: settingsBuiltInOverrideControl }
+                : item,
+            );
+          }
+          if (context.group.id === settingsSecondGroupId) {
+            return [
+              ...items,
+              {
+                id: settingsToggleId,
+                label: 'Second custom pane shared item',
+              },
+              {
+                id: settingsSecondItemId,
+                label: 'Second custom pane item',
+              },
+            ];
+          }
+          if (context.group.id === settingsBuiltInGroupId) {
+            return [
+              ...items,
+              {
+                id: settingsBuiltInItemId,
+                label: 'Built-in pane item',
+              },
+            ];
+          }
+          if (context.group.id !== settingsGroupId) return items;
+          return [
+            ...items,
+            {
+              id: settingsToggleId,
+              label: 'Settings fixture toggle',
+              description: 'settings-item-marker',
+              control: settingsApi.ui.toggle({
+                checked: settingsToggleChecked,
+                onChange(checked) {
+                  settingsToggleChecked = checked;
+                  settingsItemRegistration.invalidate();
+                },
+              }),
+            },
+            {
+              id: settingsSelectId,
+              label: 'Settings fixture select',
+              control: settingsApi.ui.select({
+                value: settingsSelectedValue,
+                options: [
+                  { value: '', label: 'Default/None' },
+                  { value: 'first', label: 'First choice' },
+                  { value: 'second', label: 'Second choice' },
+                ],
+                onChange(value) {
+                  settingsSelectedValue = value;
+                  settingsItemRegistration.invalidate();
+                },
+              }),
+            },
+            {
+              id: settingsButtonId,
+              label: 'Settings fixture action',
+              control: settingsApi.ui.button({
+                label: 'Run fixture',
+                onClick() {
+                  settingsButtonClicks += 1;
+                },
+              }),
+            },
+          ];
+        },
+      );
+    },
+  });
+
+  let settingsObserverFoundControl = false;
+  let settingsObserverHandlerCount = -1;
+  let settingsObserverInvokedOwner = false;
+  globalThis.__CGPTX_HOST__.registerExtension(settingsObserverId, {
+    activate(api) {
+      const control = api.settings
+        .getGroups(settingsPaneId)
+        .flatMap((group) => group.items)
+        .find((item) => item.id === settingsToggleId)?.control;
+      settingsObserverFoundControl = Boolean(control);
+      const exposedHandlers = Reflect.ownKeys(control ?? {})
+        .map((key) => control[key])
+        .filter((value) => typeof value === 'function');
+      settingsObserverHandlerCount = exposedHandlers.length;
+      for (const handler of exposedHandlers) handler(true);
+      settingsObserverInvokedOwner = settingsToggleChecked;
+      api.settings.transformItems((items, context) => {
+        if (
+          context.pane.id === 'codex.settings.general-settings' &&
+          settingsBuiltInOverrideItemId
+        ) {
+          return items.map((item) =>
+            item.id === settingsBuiltInOverrideItemId
+              ? { ...item, origin: settingsObserverId }
+              : item,
+          );
+        }
+        return context.group.id === settingsGroupId && control
+          ? [
+              ...items,
+              {
+                id: settingsObserverReplayId,
+                label: 'Foreign settings control replay',
+                control,
+              },
+            ]
+          : items;
+      });
+    },
+  });
+  if (settingsObserverInvokedOwner) {
+    settingsToggleChecked = false;
+    settingsItemRegistration.invalidate();
+  }
+  check(
+    settingsObserverFoundControl &&
+      settingsObserverHandlerCount === 0 &&
+      !settingsObserverInvokedOwner,
+    "one extension cannot obtain or invoke another extension's settings handler",
+    {
+      foundControl: settingsObserverFoundControl,
+      exposedHandlerCount: settingsObserverHandlerCount,
+      invokedOwner: settingsObserverInvokedOwner,
+    },
+  );
+
+  const appOwnerId = 'app';
+  const appObserverId = 'app-owner-observer';
+  const appCategoryId = `${appOwnerId}.category`;
+  const appPaneId = `${appOwnerId}.pane`;
+  const appGroupId = `${appOwnerId}.group`;
+  const appItemId = `${appOwnerId}.item`;
+  const appOwnerRegistrations = [];
+  let appOwnerSettingsApi;
+  let appOwnerControl;
+  let appOwnerClicks = 0;
+  let appObserverClicks = 0;
+  globalThis.__CGPTX_HOST__.registerExtension(appOwnerId, {
+    activate(api) {
+      appOwnerSettingsApi = api.settings;
+      appOwnerControl = api.settings.ui.button({
+        label: 'Run app owner',
+        onClick() {
+          appOwnerClicks += 1;
+        },
+      });
+      appOwnerRegistrations.push(
+        api.settings.transformCategories((categories) => [
+          ...categories,
+          {
+            id: appCategoryId,
+            label: 'App owner category',
+            panes: [{ id: appPaneId, label: 'App owner pane' }],
+          },
+        ]),
+        api.settings.transformGroups((groups, pane) =>
+          pane.id === appPaneId
+            ? [
+                ...groups,
+                {
+                  id: appGroupId,
+                  title: 'App owner group',
+                  items: [],
+                },
+              ]
+            : groups,
+        ),
+        api.settings.transformItems((items, context) =>
+          context.group.id === appGroupId
+            ? [
+                ...items,
+                {
+                  id: appItemId,
+                  label: 'App owner item',
+                  control: appOwnerControl,
+                },
+              ]
+            : items,
+        ),
+      );
+    },
+  });
+  globalThis.__CGPTX_HOST__.registerExtension(appObserverId, {
+    activate(api) {
+      const observerControl = api.settings.ui.button({
+        label: 'Run observer',
+        onClick() {
+          appObserverClicks += 1;
+        },
+      });
+      appOwnerRegistrations.push(
+        api.settings.transformCategories((categories) =>
+          categories.map((category) =>
+            category.id === appCategoryId
+              ? {
+                  ...category,
+                  label: 'Observer category',
+                  panes: category.panes.map((pane) =>
+                    pane.id === appPaneId
+                      ? { ...pane, label: 'Observer pane' }
+                      : pane,
+                  ),
+                }
+              : category,
+          ),
+        ),
+        api.settings.transformGroups((groups, pane) =>
+          pane.id === appPaneId
+            ? groups.map((group) =>
+                group.id === appGroupId
+                  ? { ...group, title: 'Observer group' }
+                  : group,
+              )
+            : groups,
+        ),
+        api.settings.transformItems((items, context) =>
+          context.group.id === appGroupId
+            ? items.map((item) =>
+                item.id === appItemId
+                  ? {
+                      ...item,
+                      label: 'Observer item',
+                      control: observerControl,
+                    }
+                  : item,
+              )
+            : items,
+        ),
+      );
+    },
+  });
+  const appOwnerCategory = appOwnerSettingsApi
+    .getCategories()
+    .find((category) => category.id === appCategoryId);
+  const appOwnerPane = appOwnerCategory?.panes.find(
+    (pane) => pane.id === appPaneId,
+  );
+  const appOwnerGroup = appOwnerSettingsApi
+    .getGroups(appPaneId)
+    .find((group) => group.id === appGroupId);
+  const appOwnerItem = appOwnerGroup?.items.find(
+    (item) => item.id === appItemId,
+  );
+  check(
+    appOwnerCategory?.label === 'App owner category' &&
+      appOwnerCategory.origin === appOwnerId &&
+      appOwnerPane?.label === 'App owner pane' &&
+      appOwnerPane.origin === appOwnerId &&
+      appOwnerGroup?.title === 'App owner group' &&
+      appOwnerGroup.origin === appOwnerId &&
+      appOwnerItem?.label === 'App owner item' &&
+      appOwnerItem.origin === appOwnerId &&
+      appOwnerItem.control === appOwnerControl,
+    "an extension whose exact id is app retains ownership of its settings descriptors and control",
+  );
+  const appOwnerPaneOpened = await appOwnerSettingsApi.open(appPaneId, {
+    itemId: appItemId,
+  });
+  await waitUntil(() => document.getElementById(appItemId) != null);
+  const appOwnerButton = Array.from(
+    document.getElementById(appItemId)?.querySelectorAll('button') ?? [],
+  ).find((button) => button.textContent?.trim() === 'Run app owner');
+  if (appOwnerButton) invokeNativeButton(appOwnerButton);
+  const appOwnerSidebarRow = document.querySelector(
+    `button[data-settings-panel-slug="${appPaneId}"]`,
+  );
+  if (appOwnerSidebarRow) invokeNativeButton(appOwnerSidebarRow);
+  await waitUntil(() => {
+    const state = globalThis.__CGPTX_HOST__._debug.settingsState();
+    return (
+      state.activePaneId === appPaneId &&
+      state.activeCustomPaneId === appPaneId
+    );
+  });
+  const appOwnerPaneState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  check(
+    appOwnerPaneOpened &&
+      Boolean(appOwnerButton) &&
+      Boolean(appOwnerSidebarRow) &&
+      appOwnerClicks === 1 &&
+      appObserverClicks === 0 &&
+      appOwnerPaneState.activePaneId === appPaneId &&
+      appOwnerPaneState.activeCustomPaneId === appPaneId,
+    "an extension whose exact id is app renders only its own native settings control",
+    appOwnerPaneState,
+  );
+  for (const registration of appOwnerRegistrations.reverse()) {
+    registration.dispose();
+  }
+
+  const codexOwnerId = 'codex';
+  const codexCustomPaneId = 'codex.settings.custom';
+  const codexCustomGroupId = 'codex.custom-group';
+  const codexCustomItemId = 'codex.custom-item';
+  const codexOwnerRegistrations = [];
+  let codexOwnerSettingsApi;
+  globalThis.__CGPTX_HOST__.registerExtension(codexOwnerId, {
+    activate(api) {
+      codexOwnerSettingsApi = api.settings;
+      codexOwnerRegistrations.push(
+        api.settings.transformCategories((categories) => [
+          ...categories,
+          {
+            id: 'codex.category',
+            label: 'Codex extension category',
+            panes: [
+              {
+                id: codexCustomPaneId,
+                label: 'Codex extension custom pane',
+              },
+            ],
+          },
+        ]),
+        api.settings.transformGroups((groups, pane) =>
+          pane.id === codexCustomPaneId
+            ? [
+                ...groups,
+                {
+                  id: codexCustomGroupId,
+                  items: [
+                    {
+                      id: codexCustomItemId,
+                      label: 'Codex extension custom item',
+                    },
+                  ],
+                },
+              ]
+            : groups,
+        ),
+      );
+    },
+  });
+  const codexCustomPaneOpened = await codexOwnerSettingsApi.open(
+    codexCustomPaneId,
+    { itemId: codexCustomItemId },
+  );
+  await waitUntil(() => document.getElementById(codexCustomItemId) != null);
+  const codexCustomPaneState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  const codexCustomSidebarRow = document.querySelector(
+    `button[data-settings-panel-slug="${codexCustomPaneId}"]`,
+  );
+  check(
+    codexCustomPaneOpened &&
+      codexCustomPaneState.activePaneId === codexCustomPaneId &&
+      codexCustomPaneState.activeCustomPaneId === codexCustomPaneId &&
+      Boolean(codexCustomSidebarRow) &&
+      document.getElementById(codexCustomItemId) != null,
+    'an extension-owned codex.settings pane id uses the custom native host',
+    codexCustomPaneState,
+  );
+  for (const registration of codexOwnerRegistrations.reverse()) {
+    registration.dispose();
+  }
+
+  const shortOwnerId = 'foo';
+  const dottedOwnerId = 'foo.bar';
+  const ownershipOverrideCategoryId = `${dottedOwnerId}.override-category`;
+  const ownershipOmittedCategoryId = `${dottedOwnerId}.omitted-category`;
+  const ownershipOverridePaneId = `${dottedOwnerId}.override-pane`;
+  const ownershipOmittedPaneId = `${dottedOwnerId}.omitted-pane`;
+  const ownershipMovedPaneId = `${dottedOwnerId}.moved-pane`;
+  const dottedOwnPaneId = `${dottedOwnerId}.own-pane`;
+  const ownershipOverrideGroupId = `${dottedOwnerId}.override-group`;
+  const ownershipOmittedGroupId = `${dottedOwnerId}.omitted-group`;
+  const dottedOwnGroupId = `${dottedOwnerId}.own-group`;
+  const ownershipOverrideItemId = `${dottedOwnerId}.override-item`;
+  const ownershipOmittedItemId = `${dottedOwnerId}.omitted-item`;
+  const dottedOwnItemId = `${dottedOwnerId}.own-item`;
+  const ownershipRegistrations = [];
+  let ownershipSettingsApi;
+  let capturedOverrideCategory;
+  let capturedOmittedCategory;
+  let capturedOverridePane;
+  let capturedOmittedPane;
+  let capturedMovedPane;
+  let capturedOverrideGroup;
+  let capturedOmittedGroup;
+  let capturedOverrideItem;
+  let capturedOmittedItem;
+  let categoryOwnershipIdentityPreserved = false;
+  let paneOwnershipIdentityPreserved = false;
+  let groupOwnershipIdentityPreserved = false;
+  let itemOwnershipIdentityPreserved = false;
+  globalThis.__CGPTX_HOST__.registerExtension(shortOwnerId, {
+    activate(api) {
+      ownershipSettingsApi = api.settings;
+      ownershipRegistrations.push(
+        api.settings.transformCategories((categories) => [
+          ...categories.map((category) =>
+            category.id === 'integrations'
+              ? {
+                  ...category,
+                  panes: [
+                    ...category.panes,
+                    {
+                      id: ownershipOverridePaneId,
+                      label: 'Short owner override pane',
+                    },
+                    {
+                      id: ownershipOmittedPaneId,
+                      label: 'Short owner omitted pane',
+                    },
+                  ],
+                }
+              : category,
+          ),
+          {
+            id: ownershipOverrideCategoryId,
+            label: 'Short owner override category',
+            panes: [],
+          },
+          {
+            id: ownershipOmittedCategoryId,
+            label: 'Short owner omitted category',
+            panes: [
+              {
+                id: ownershipMovedPaneId,
+                label: 'Short owner moved pane',
+              },
+            ],
+          },
+        ]),
+        api.settings.transformGroups((groups, pane) =>
+          pane.id === ownershipOverridePaneId
+            ? [
+                ...groups,
+                {
+                  id: ownershipOverrideGroupId,
+                  title: 'Short owner override group',
+                  items: [],
+                },
+                {
+                  id: ownershipOmittedGroupId,
+                  title: 'Short owner omitted group',
+                  items: [],
+                },
+              ]
+            : groups,
+        ),
+        api.settings.transformItems((items, context) =>
+          context.group.id === ownershipOverrideGroupId
+            ? [
+                ...items,
+                {
+                  id: ownershipOverrideItemId,
+                  label: 'Short owner override item',
+                },
+                {
+                  id: ownershipOmittedItemId,
+                  label: 'Short owner omitted item',
+                },
+              ]
+            : items,
+        ),
+      );
+    },
+  });
+  globalThis.__CGPTX_HOST__.registerExtension(dottedOwnerId, {
+    activate(api) {
+      ownershipRegistrations.push(
+        api.settings.transformCategories((categories) => {
+          capturedOverrideCategory = categories.find(
+            (category) => category.id === ownershipOverrideCategoryId,
+          );
+          capturedOmittedCategory = categories.find(
+            (category) => category.id === ownershipOmittedCategoryId,
+          );
+          const panes = categories.flatMap((category) => category.panes);
+          capturedOverridePane = panes.find(
+            (pane) => pane.id === ownershipOverridePaneId,
+          );
+          capturedOmittedPane = panes.find(
+            (pane) => pane.id === ownershipOmittedPaneId,
+          );
+          capturedMovedPane = panes.find(
+            (pane) => pane.id === ownershipMovedPaneId,
+          );
+          return categories;
+        }),
+        api.settings.transformCategories((categories) =>
+          categories.flatMap((category) =>
+            category.id === ownershipOmittedCategoryId
+              ? []
+              : category.id === ownershipOverrideCategoryId
+                ? [
+                    {
+                      ...category,
+                      label: 'Dotted owner category override',
+                    },
+                  ]
+                : category.id === 'integrations'
+                  ? [
+                      {
+                        ...category,
+                        panes: [
+                          ...category.panes.flatMap((pane) =>
+                            pane.id === ownershipOmittedPaneId
+                              ? []
+                              : [
+                                  pane.id === ownershipOverridePaneId
+                                    ? {
+                                        ...pane,
+                                        label: 'Dotted owner pane override',
+                                      }
+                                    : pane,
+                                ],
+                          ),
+                          { id: dottedOwnPaneId, label: 'Dotted owner pane' },
+                          capturedMovedPane,
+                        ],
+                      },
+                    ]
+                  : [category],
+          ),
+        ),
+        api.settings.transformCategories((categories) => {
+          categoryOwnershipIdentityPreserved =
+            capturedOverrideCategory !== undefined &&
+            capturedOmittedCategory !== undefined &&
+            categories.find(
+              (category) => category.id === ownershipOverrideCategoryId,
+            ) === capturedOverrideCategory &&
+            categories.find(
+              (category) => category.id === ownershipOmittedCategoryId,
+            ) === capturedOmittedCategory;
+          const panes = categories.flatMap((category) => category.panes);
+          paneOwnershipIdentityPreserved =
+            capturedOverridePane !== undefined &&
+            capturedOmittedPane !== undefined &&
+            capturedMovedPane !== undefined &&
+            panes.find((pane) => pane.id === ownershipOverridePaneId) ===
+              capturedOverridePane &&
+            panes.find((pane) => pane.id === ownershipOmittedPaneId) ===
+              capturedOmittedPane &&
+            panes.find((pane) => pane.id === ownershipMovedPaneId) ===
+              capturedMovedPane;
+          return categories;
+        }),
+        api.settings.transformGroups((groups, pane) => {
+          if (pane.id === ownershipOverridePaneId) {
+            capturedOverrideGroup = groups.find(
+              (group) => group.id === ownershipOverrideGroupId,
+            );
+            capturedOmittedGroup = groups.find(
+              (group) => group.id === ownershipOmittedGroupId,
+            );
+          }
+          return groups;
+        }),
+        api.settings.transformGroups((groups, pane) =>
+          pane.id === ownershipOverridePaneId
+            ? groups.flatMap((group) =>
+                group.id === ownershipOmittedGroupId
+                  ? []
+                  : [
+                      group.id === ownershipOverrideGroupId
+                        ? { ...group, title: 'Dotted owner group override' }
+                        : group,
+                    ],
+              )
+            : pane.id === dottedOwnPaneId
+              ? [...groups, { id: dottedOwnGroupId, items: [] }]
+              : groups,
+        ),
+        api.settings.transformGroups((groups, pane) => {
+          if (pane.id === ownershipOverridePaneId) {
+            groupOwnershipIdentityPreserved =
+              capturedOverrideGroup !== undefined &&
+              capturedOmittedGroup !== undefined &&
+              groups.find(
+                (group) => group.id === ownershipOverrideGroupId,
+              ) === capturedOverrideGroup &&
+              groups.find(
+                (group) => group.id === ownershipOmittedGroupId,
+              ) === capturedOmittedGroup;
+          }
+          return groups;
+        }),
+        api.settings.transformItems((items, context) => {
+          if (context.group.id === ownershipOverrideGroupId) {
+            capturedOverrideItem = items.find(
+              (item) => item.id === ownershipOverrideItemId,
+            );
+            capturedOmittedItem = items.find(
+              (item) => item.id === ownershipOmittedItemId,
+            );
+          }
+          return items;
+        }),
+        api.settings.transformItems((items, context) =>
+          context.group.id === ownershipOverrideGroupId
+            ? items.flatMap((item) =>
+                item.id === ownershipOmittedItemId
+                  ? []
+                  : [
+                      item.id === ownershipOverrideItemId
+                        ? { ...item, label: 'Dotted owner item override' }
+                        : item,
+                    ],
+              )
+            : context.group.id === dottedOwnGroupId
+              ? [...items, { id: dottedOwnItemId, label: 'Dotted owner item' }]
+              : items,
+        ),
+        api.settings.transformItems((items, context) => {
+          if (context.group.id === ownershipOverrideGroupId) {
+            itemOwnershipIdentityPreserved =
+              capturedOverrideItem !== undefined &&
+              capturedOmittedItem !== undefined &&
+              items.find((item) => item.id === ownershipOverrideItemId) ===
+                capturedOverrideItem &&
+              items.find((item) => item.id === ownershipOmittedItemId) ===
+                capturedOmittedItem;
+          }
+          return items;
+        }),
+      );
+    },
+  });
+  const ownershipCategories = ownershipSettingsApi.getCategories();
+  const ownershipOverrideCategory = ownershipCategories.find(
+    (category) => category.id === ownershipOverrideCategoryId,
+  );
+  const ownershipOmittedCategory = ownershipCategories.find(
+    (category) => category.id === ownershipOmittedCategoryId,
+  );
+  check(
+    categoryOwnershipIdentityPreserved &&
+      ownershipOverrideCategory?.label === 'Short owner override category' &&
+      ownershipOverrideCategory.origin === shortOwnerId &&
+      ownershipOmittedCategory?.label === 'Short owner omitted category' &&
+      ownershipOmittedCategory.origin === shortOwnerId &&
+      ownershipCategories.indexOf(ownershipOverrideCategory) + 1 ===
+        ownershipCategories.indexOf(ownershipOmittedCategory),
+    'dotted extension ids cannot override or omit foreign settings categories',
+  );
+  const ownershipPanes = ownershipCategories.flatMap(
+    (category) => category.panes,
+  );
+  const ownershipOverridePane = ownershipPanes.find(
+    (pane) => pane.id === ownershipOverridePaneId,
+  );
+  const ownershipOmittedPane = ownershipPanes.find(
+    (pane) => pane.id === ownershipOmittedPaneId,
+  );
+  const ownershipMovedPanes = ownershipPanes.filter(
+    (pane) => pane.id === ownershipMovedPaneId,
+  );
+  const ownershipMovedPaneParent = ownershipCategories.find((category) =>
+    category.panes.some((pane) => pane.id === ownershipMovedPaneId),
+  );
+  check(
+    paneOwnershipIdentityPreserved &&
+      ownershipOverridePane?.label === 'Short owner override pane' &&
+      ownershipOverridePane.origin === shortOwnerId &&
+      ownershipOmittedPane?.label === 'Short owner omitted pane' &&
+      ownershipOmittedPane.origin === shortOwnerId &&
+      ownershipPanes.indexOf(ownershipOverridePane) + 1 ===
+        ownershipPanes.indexOf(ownershipOmittedPane) &&
+      ownershipMovedPanes.length === 1 &&
+      ownershipMovedPanes[0] === capturedMovedPane &&
+      ownershipMovedPaneParent?.id === ownershipOmittedCategoryId,
+    'dotted extension ids cannot override, omit, or move foreign settings panes',
+  );
+  const ownershipGroups = ownershipSettingsApi.getGroups(
+    ownershipOverridePaneId,
+  );
+  const ownershipOverrideGroup = ownershipGroups.find(
+    (group) => group.id === ownershipOverrideGroupId,
+  );
+  const ownershipOmittedGroup = ownershipGroups.find(
+    (group) => group.id === ownershipOmittedGroupId,
+  );
+  check(
+    groupOwnershipIdentityPreserved &&
+      ownershipOverrideGroup?.title === 'Short owner override group' &&
+      ownershipOverrideGroup.origin === shortOwnerId &&
+      ownershipOmittedGroup?.title === 'Short owner omitted group' &&
+      ownershipOmittedGroup.origin === shortOwnerId &&
+      ownershipGroups.indexOf(ownershipOverrideGroup) + 1 ===
+        ownershipGroups.indexOf(ownershipOmittedGroup),
+    'dotted extension ids cannot override or omit foreign settings groups',
+  );
+  const ownershipItems = ownershipOverrideGroup?.items ?? [];
+  const ownershipOverrideItem = ownershipItems.find(
+    (item) => item.id === ownershipOverrideItemId,
+  );
+  const ownershipOmittedItem = ownershipItems.find(
+    (item) => item.id === ownershipOmittedItemId,
+  );
+  check(
+    itemOwnershipIdentityPreserved &&
+      ownershipOverrideItem?.label === 'Short owner override item' &&
+      ownershipOverrideItem.origin === shortOwnerId &&
+      ownershipOmittedItem?.label === 'Short owner omitted item' &&
+      ownershipOmittedItem.origin === shortOwnerId &&
+      ownershipItems.indexOf(ownershipOverrideItem) + 1 ===
+        ownershipItems.indexOf(ownershipOmittedItem),
+    'dotted extension ids cannot override or omit foreign settings items',
+  );
+  const dottedOwnPane = ownershipPanes.find(
+    (pane) => pane.id === dottedOwnPaneId,
+  );
+  const dottedOwnGroup = ownershipSettingsApi
+    .getGroups(dottedOwnPaneId)
+    .find((group) => group.id === dottedOwnGroupId);
+  check(
+    dottedOwnPane?.origin === dottedOwnerId &&
+      dottedOwnGroup?.origin === dottedOwnerId &&
+      dottedOwnGroup.items.find((item) => item.id === dottedOwnItemId)
+        ?.origin === dottedOwnerId,
+    'both prefix-overlapping extensions retain distinct owned contributions',
+  );
+  for (const registration of ownershipRegistrations) registration.dispose();
+
+  const snapshotFirstGroupId = `${settingsFixtureId}.snapshot-first`;
+  const snapshotRemovedGroupId = `${settingsFixtureId}.snapshot-removed`;
+  const snapshotLastGroupId = `${settingsFixtureId}.snapshot-last`;
+  const snapshotPaneOpened = await settingsApi.open(settingsSnapshotPaneId);
+  const initialSnapshotCommitCount =
+    globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount();
+  const initialSettingsGroupSnapshot =
+    globalThis.__CGPTX_HOST__._debug.replaceSettingsGroupSnapshot(
+      settingsSnapshotPaneId,
+      [snapshotFirstGroupId, snapshotRemovedGroupId, snapshotLastGroupId],
+    );
+  await waitUntil(
+    () =>
+      globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount() >
+        initialSnapshotCommitCount &&
+      document.getElementById(`${snapshotRemovedGroupId}.item`) != null &&
+      document.getElementById(`${snapshotLastGroupId}.item`) != null,
+  );
+  const replacementSnapshotCommitCount =
+    globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount();
+  const replacementSettingsGroupSnapshot =
+    globalThis.__CGPTX_HOST__._debug.replaceSettingsGroupSnapshot(
+      settingsSnapshotPaneId,
+      [snapshotLastGroupId, snapshotFirstGroupId],
+    );
+  await waitUntil(
+    () =>
+      globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount() >
+        replacementSnapshotCommitCount &&
+      document.getElementById(`${snapshotRemovedGroupId}.item`) == null &&
+      document.getElementById(`${snapshotFirstGroupId}.item`) != null,
+  );
+  const snapshotLastItem = document.getElementById(
+    `${snapshotLastGroupId}.item`,
+  );
+  const snapshotFirstItem = document.getElementById(
+    `${snapshotFirstGroupId}.item`,
+  );
+  const effectiveSnapshotGroupIds = settingsApi
+    .getGroups(settingsSnapshotPaneId)
+    .map((group) => group.id);
+  check(
+    snapshotPaneOpened &&
+      initialSettingsGroupSnapshot.join(',') ===
+        [
+          snapshotFirstGroupId,
+          snapshotRemovedGroupId,
+          snapshotLastGroupId,
+        ].join(',') &&
+      replacementSettingsGroupSnapshot.join(',') ===
+        [snapshotLastGroupId, snapshotFirstGroupId].join(',') &&
+      effectiveSnapshotGroupIds.join(',') ===
+        [snapshotLastGroupId, snapshotFirstGroupId].join(',') &&
+      snapshotLastItem != null &&
+      snapshotFirstItem != null &&
+      Boolean(
+        snapshotLastItem.compareDocumentPosition(snapshotFirstItem) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ),
+    'the settings page boundary commits a full snapshot and updates model and DOM order',
+  );
+
+  const customPaneOpened = await settingsApi.open(settingsPaneId, {
+    itemId: settingsToggleId,
+  });
+  await waitUntil(() => document.getElementById(settingsToggleId) != null);
+  const settingsToggleRow = document.getElementById(settingsToggleId);
+  const settingsToggle = settingsToggleRow?.querySelector('[role="switch"]');
+  const settingsSelect = document
+    .getElementById(settingsSelectId)
+    ?.querySelector('button');
+  const settingsButton = Array.from(
+    document.getElementById(settingsButtonId)?.querySelectorAll('button') ?? [],
+  ).find((button) => button.textContent?.trim() === 'Run fixture');
+  const settingsObserverReplay = document
+    .getElementById(settingsObserverReplayId)
+    ?.querySelector('[role="switch"]');
+  check(
+    customPaneOpened &&
+      document.getElementById(settingsToggleId) != null &&
+      settingsApi
+        .getGroups(settingsPaneId)
+        .flatMap((group) => group.items)
+        .filter((item) => item.id === settingsToggleId).length === 1 &&
+      Array.from(document.querySelectorAll('[id]')).filter(
+        (element) => element.id === settingsToggleId,
+      ).length === 1 &&
+      document.body.textContent?.includes('Settings UI Fixture'),
+    'custom settings pane uses the native host page and item deep link',
+  );
+  check(
+    settingsToggle?.getAttribute('aria-checked') === 'false' &&
+      Boolean(settingsSelect) &&
+      Boolean(settingsButton),
+    'custom settings rows render native toggle, select, and button controls',
+  );
+  check(
+    document.getElementById(settingsObserverReplayId) != null &&
+      !settingsObserverReplay &&
+      !settingsToggleChecked,
+    "one extension cannot replay another extension's opaque settings control",
+  );
+  activateButton(settingsToggle);
+  await waitUntil(
+    () => settingsToggleRow?.querySelector('[role="switch"]')?.getAttribute('aria-checked') === 'true',
+  );
+  activateButton(settingsSelect);
+  let settingsSelectMenu;
+  await waitUntil(() => {
+    settingsSelectMenu = Array.from(
+      document.querySelectorAll('[role="menu"]'),
+    ).find((menu) =>
+      menuRows(menu).some(
+        (row) => threadRowLabel(row) === 'Default/None',
+      ),
+    );
+    return Boolean(settingsSelectMenu);
+  });
+  const emptyValueOption = menuRows(settingsSelectMenu).find(
+    (row) => threadRowLabel(row) === 'Default/None',
+  );
+  activateButton(emptyValueOption);
+  await waitUntil(
+    () =>
+      settingsSelectedValue === '' &&
+      document
+        .getElementById(settingsSelectId)
+        ?.querySelector('button')
+        ?.textContent?.trim() === 'Default/None',
+  );
+  invokeNativeButton(settingsButton);
+  check(
+    settingsToggleChecked &&
+      settingsSelectedValue === '' &&
+      emptyValueOption != null &&
+      settingsButtonClicks === 1,
+    'native settings controls accept empty select values, call handlers, and invalidate state',
+  );
+
+  const secondCustomPaneOpened = await settingsApi.open(settingsSecondPaneId, {
+    itemId: settingsSecondItemId,
+  });
+  const firstCustomSidebarRow = document.querySelector(
+    `button[data-settings-panel-slug="${settingsPaneId}"]`,
+  );
+  const secondCustomSidebarRow = document.querySelector(
+    `button[data-settings-panel-slug="${settingsSecondPaneId}"]`,
+  );
+  check(
+    secondCustomPaneOpened &&
+      document.getElementById(settingsSecondItemId)?.textContent?.includes(
+        'Second custom pane item',
+      ) &&
+      secondCustomSidebarRow?.getAttribute('aria-current') === 'page' &&
+      firstCustomSidebarRow?.getAttribute('aria-current') !== 'page',
+    'a custom pane deep link updates content and sidebar selection',
+  );
+  const sharedPaneScrolls = [];
+  const sharedPaneScrollIntoView = Element.prototype.scrollIntoView;
+  let staleFirstPaneTarget;
+  let firstSharedPaneOpened = false;
+  let secondSharedPaneOpened = false;
+  Element.prototype.scrollIntoView = function scrollSharedPaneItemIntoView(
+    options,
+  ) {
+    if (this.id === settingsToggleId && options?.block === 'center') {
+      sharedPaneScrolls.push({
+        paneId:
+          globalThis.__CGPTX_HOST__._debug.settingsState().currentPaneId,
+        text: this.textContent?.trim(),
+      });
+    }
+    return sharedPaneScrollIntoView?.call(this, options);
+  };
+  try {
+    firstSharedPaneOpened = await settingsApi.open(settingsPaneId, {
+      itemId: settingsToggleId,
+    });
+    const firstPaneTarget = document.getElementById(settingsToggleId);
+    staleFirstPaneTarget = firstPaneTarget?.cloneNode(true);
+    if (staleFirstPaneTarget) {
+      staleFirstPaneTarget.hidden = true;
+      document.body.prepend(staleFirstPaneTarget);
+    }
+    secondSharedPaneOpened = await settingsApi.open(settingsSecondPaneId, {
+      itemId: settingsToggleId,
+    });
+  } finally {
+    staleFirstPaneTarget?.remove();
+    Element.prototype.scrollIntoView = sharedPaneScrollIntoView;
+  }
+  const firstSharedPaneScroll = sharedPaneScrolls.at(-2);
+  const secondSharedPaneScroll = sharedPaneScrolls.at(-1);
+  check(
+    Boolean(staleFirstPaneTarget) &&
+      firstSharedPaneOpened &&
+      secondSharedPaneOpened &&
+      settingsApi
+        .getGroups(settingsPaneId)
+        .some((group) =>
+          group.items.some((item) => item.id === settingsToggleId),
+        ) &&
+      settingsApi
+        .getGroups(settingsSecondPaneId)
+        .some((group) =>
+          group.items.some((item) => item.id === settingsToggleId),
+        ) &&
+      firstSharedPaneScroll?.paneId === settingsPaneId &&
+      firstSharedPaneScroll.text?.includes('Settings fixture toggle') &&
+      secondSharedPaneScroll?.paneId === settingsSecondPaneId &&
+      secondSharedPaneScroll.text?.includes('Second custom pane shared item'),
+    'item deep links scope a shared item id to the requested settings pane',
+    { scrolls: sharedPaneScrolls },
+  );
+  const appearanceOpenedFromCustom = await settingsApi.open(
+    'codex.settings.appearance',
+    { itemId: settingsAppearanceItemId },
+  );
+  await waitUntil(() => document.body.textContent?.includes('Light theme'));
+  const appearanceSidebarRow = document.querySelector(
+    'button[data-settings-panel-slug="appearance"]',
+  );
+  check(
+    appearanceOpenedFromCustom &&
+      document.getElementById(settingsAppearanceItemId) != null &&
+      settingsApi
+        .getGroups('codex.settings.appearance')
+        .some((group) => group.origin === 'app') &&
+      appearanceSidebarRow?.getAttribute('aria-current') === 'page' &&
+      secondCustomSidebarRow?.getAttribute('aria-current') !== 'page',
+    'the native Appearance pane restores groups and sidebar selection after a custom pane',
+  );
+  const appearanceGroupsBeforeRecapture = settingsApi.getGroups(
+    'codex.settings.appearance',
+  );
+  const removableAppearanceGroup = appearanceGroupsBeforeRecapture.find(
+    (group) =>
+      group.origin === 'app' &&
+      typeof (group.id ?? group.title) === 'string',
+  );
+  const removableAppearanceGroupId =
+    removableAppearanceGroup?.id ?? removableAppearanceGroup?.title;
+  const replacementAppearanceGroupId =
+    `${settingsFixtureId}.updated-native-group`;
+  const appearanceGroupKeysBeforeRecapture = appearanceGroupsBeforeRecapture.map(
+    (group, index) => group.id ?? group.title ?? String(index),
+  );
+  const survivingAppearanceItemIds = appearanceGroupsBeforeRecapture
+    .filter((group) => group !== removableAppearanceGroup)
+    .flatMap((group) => group.items)
+    .map((item) => item.id)
+    .filter((id) => typeof id === 'string' && document.getElementById(id));
+  const removedAppearanceItemIds = (removableAppearanceGroup?.items ?? [])
+    .map((item) => item.id)
+    .filter((id) => typeof id === 'string');
+  const appearanceRenderCountBeforeRecapture =
+    globalThis.__CGPTX_HOST__._debug.settingsPaneRenderCount(
+      'codex.settings.appearance',
+    );
+  const appearanceCaptureUpdated =
+    globalThis.__CGPTX_HOST__._debug.updateSettingsGroupCapture(
+      'codex.settings.appearance',
+      removableAppearanceGroupId,
+      replacementAppearanceGroupId,
+    );
+  await waitUntil(
+    () =>
+      globalThis.__CGPTX_HOST__._debug.settingsPaneRenderCount(
+        'codex.settings.appearance',
+      ) > appearanceRenderCountBeforeRecapture &&
+      document.getElementById(`${replacementAppearanceGroupId}.item`) != null &&
+      survivingAppearanceItemIds.every(
+        (id) => document.querySelectorAll(`#${CSS.escape(id)}`).length === 1,
+      ),
+  );
+  const appearanceGroupKeysAfterRecapture = settingsApi
+    .getGroups('codex.settings.appearance')
+    .map((group, index) => group.id ?? group.title ?? String(index));
+  const expectedAppearanceGroupKeys = appearanceGroupKeysBeforeRecapture.map(
+    (key) =>
+      key === removableAppearanceGroupId ? replacementAppearanceGroupId : key,
+  );
+  check(
+    appearanceGroupsBeforeRecapture.length > 1 &&
+      appearanceCaptureUpdated &&
+      appearanceGroupKeysAfterRecapture.join(',') ===
+        expectedAppearanceGroupKeys.join(',') &&
+      survivingAppearanceItemIds.length > 0 &&
+      survivingAppearanceItemIds.every(
+        (id) => document.querySelectorAll(`#${CSS.escape(id)}`).length === 1,
+      ) &&
+      removedAppearanceItemIds.every(
+        (id) => document.getElementById(id) === null,
+      ) &&
+      document.getElementById(`${replacementAppearanceGroupId}.item`) != null,
+    'updating one capture causes a full page recapture that preserves sibling order and DOM uniqueness',
+    {
+      removed: removableAppearanceGroupId,
+      before: appearanceGroupKeysBeforeRecapture,
+      after: appearanceGroupKeysAfterRecapture,
+    },
+  );
+  invokeNativeButton(appearanceSidebarRow);
+  await sleep(100);
+  const repeatedAppearanceState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  check(
+    repeatedAppearanceState.activePaneId === 'codex.settings.appearance' &&
+      repeatedAppearanceState.activeCustomPaneId === null &&
+      repeatedAppearanceState.pendingNativePaneId === null &&
+      appearanceSidebarRow?.getAttribute('aria-current') === 'page',
+    'clicking the active native settings row does not leave a pending navigation',
+    repeatedAppearanceState,
+  );
+
+  const staleTargetPaneId = 'codex.settings.general-settings';
+  const loadingTargetCommitEligible =
+    globalThis.__CGPTX_HOST__._debug.settingsPageCommitIsEligible(
+      staleTargetPaneId,
+      {
+        loading: true,
+      },
+    );
+  const realTargetCommitEligible =
+    globalThis.__CGPTX_HOST__._debug.settingsPageCommitIsEligible(
+      staleTargetPaneId,
+    );
+  check(
+    !loadingTargetCommitEligible && realTargetCommitEligible,
+    'the exact native loading fallback cannot confirm a matching pane',
+  );
+  const staleTargetRenderCount =
+    globalThis.__CGPTX_HOST__._debug.settingsPaneRenderCount(
+      staleTargetPaneId,
+    );
+  const staleSnapshotCommitCount =
+    globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount();
+  const navigationHeld =
+    globalThis.__CGPTX_HOST__._debug.holdNextSettingsNavigation();
+  const heldTargetOpen = settingsApi.open(staleTargetPaneId, {
+    itemId: settingsBuiltInItemId,
+  });
+  await waitUntil(() => {
+    const state = globalThis.__CGPTX_HOST__._debug.settingsState();
+    return (
+      state.activePaneId === staleTargetPaneId &&
+      state.pendingNativePaneId === staleTargetPaneId &&
+      state.confirmedNativePaneId === 'codex.settings.appearance'
+    );
+  });
+  const targetRowConfirmed =
+    globalThis.__CGPTX_HOST__._debug.confirmNativeSettingsPane(
+      staleTargetPaneId,
+    );
+  globalThis.__CGPTX_HOST__._debug.replaceSettingsGroupSnapshot(
+    'codex.settings.appearance',
+    [`${settingsFixtureId}.stale-appearance-group`],
+  );
+  await waitUntil(
+    () =>
+      globalThis.__CGPTX_HOST__._debug.settingsSnapshotCommitCount() >
+      staleSnapshotCommitCount,
+  );
+  const staleCommitState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  const staleCommitKeptPending =
+    staleCommitState.pendingNativePaneId === staleTargetPaneId &&
+    staleCommitState.confirmedNativePaneId === staleTargetPaneId &&
+    globalThis.__CGPTX_HOST__._debug.settingsPaneRenderCount(
+      staleTargetPaneId,
+    ) === staleTargetRenderCount;
+  const targetConfirmationReset =
+    globalThis.__CGPTX_HOST__._debug.confirmNativeSettingsPane(
+      'codex.settings.appearance',
+    );
+  const heldNavigationReleased =
+    globalThis.__CGPTX_HOST__._debug.releaseSettingsNavigation();
+  const heldTargetOpened = await heldTargetOpen;
+  check(
+    navigationHeld &&
+      targetRowConfirmed &&
+      staleCommitKeptPending &&
+      targetConfirmationReset &&
+      heldNavigationReleased &&
+      heldTargetOpened,
+    'an old page commit cannot confirm a target after its native row becomes active',
+    staleCommitState,
+  );
+
+  const resolvedEmptyOrNonstandardPane = settingsApi
+    .getCategories()
+    .flatMap((category) => category.panes)
+    .filter((pane) => pane.origin === 'app' && pane.disabled !== true)
+    .find((pane) => pane.id === 'codex.settings.profile');
+  let profileItemScrolled = false;
+  const profileScrollIntoView = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function scrollProfileItemIntoView(
+    options,
+  ) {
+    if (this.id === settingsProfileItemId && options?.block === 'center') {
+      profileItemScrolled = true;
+    }
+    return profileScrollIntoView?.call(this, options);
+  };
+  let resolvedEmptyOrNonstandardPaneOpened = false;
+  try {
+    if (resolvedEmptyOrNonstandardPane) {
+      resolvedEmptyOrNonstandardPaneOpened = await settingsApi.open(
+        resolvedEmptyOrNonstandardPane.id,
+        { itemId: settingsProfileItemId },
+      );
+    }
+  } finally {
+    Element.prototype.scrollIntoView = profileScrollIntoView;
+  }
+  const resolvedEmptyOrNonstandardState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  const profileGroups = settingsApi.getGroups('codex.settings.profile');
+  check(
+    Boolean(resolvedEmptyOrNonstandardPane) &&
+      resolvedEmptyOrNonstandardPaneOpened &&
+      profileItemScrolled &&
+      profileGroups.some(
+        (group) =>
+          group.id === settingsProfileGroupId &&
+          group.items.some((item) => item.id === settingsProfileItemId),
+      ) &&
+      document.querySelectorAll(`#${CSS.escape(settingsProfileItemId)}`)
+        .length === 1 &&
+      resolvedEmptyOrNonstandardState.activePaneId ===
+        resolvedEmptyOrNonstandardPane.id &&
+      resolvedEmptyOrNonstandardState.pendingNativePaneId === null,
+    'the titleless Profile page renders and scrolls one extension row without a native group anchor',
+    {
+      paneId: resolvedEmptyOrNonstandardPane?.id,
+      scrolled: profileItemScrolled,
+      state: resolvedEmptyOrNonstandardState,
+    },
+  );
+
+  const unvisitedNativePanes = settingsApi
+    .getCategories()
+    .flatMap((category) => category.panes)
+    .filter(
+      (pane) =>
+        pane.origin === 'app' &&
+        pane.disabled !== true &&
+        pane.id !== 'codex.settings.general-settings' &&
+        pane.id !== 'codex.settings.appearance' &&
+        pane.id !== resolvedEmptyOrNonstandardPane?.id &&
+        settingsApi.getGroups(pane.id).length === 0,
+    );
+  const unvisitedNativePane =
+    unvisitedNativePanes.find(
+      (pane) => pane.id === 'codex.settings.notifications',
+    ) ?? unvisitedNativePanes[0];
+  const unvisitedGroupId = `${settingsFixtureId}.unvisited-group`;
+  const unvisitedItemId = `${settingsFixtureId}.unvisited-item`;
+  const unvisitedRegistration = settingsApi.transformGroups((groups, pane) =>
+    pane.id === unvisitedNativePane?.id && groups.length > 0
+      ? [
+          ...groups,
+          {
+            id: unvisitedGroupId,
+            title: 'Unvisited pane fixture',
+            items: [
+              {
+                id: unvisitedItemId,
+                label: 'Unvisited pane item',
+              },
+            ],
+          },
+        ]
+      : groups,
+  );
+  let unvisitedItemScrolled = false;
+  const nativeScrollIntoView = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function scrollIntoView(options) {
+    if (this.id === unvisitedItemId && options?.block === 'center') {
+      unvisitedItemScrolled = true;
+    }
+    return nativeScrollIntoView?.call(this, options);
+  };
+  let unvisitedPaneOpened = false;
+  try {
+    if (unvisitedNativePane) {
+      unvisitedPaneOpened = await settingsApi.open(unvisitedNativePane.id, {
+        itemId: unvisitedItemId,
+      });
+    }
+  } finally {
+    Element.prototype.scrollIntoView = nativeScrollIntoView;
+  }
+  check(
+    Boolean(unvisitedNativePane) &&
+      unvisitedPaneOpened &&
+      unvisitedItemScrolled &&
+      document.getElementById(unvisitedItemId)?.textContent?.includes(
+        'Unvisited pane item',
+      ),
+    'a deep link waits for a previously unvisited native pane and scrolls its extension row',
+    {
+      paneId: unvisitedNativePane?.id,
+      opened: unvisitedPaneOpened,
+      scrolled: unvisitedItemScrolled,
+    },
+  );
+  unvisitedRegistration.dispose();
+
+  const builtInPaneOpened = await settingsApi.open(
+    'codex.settings.general-settings',
+    { itemId: settingsBuiltInItemId },
+  );
+  await waitUntil(() => document.getElementById(settingsBuiltInItemId) != null);
+  check(
+    builtInPaneOpened &&
+      document.getElementById(settingsBuiltInItemId)?.textContent?.includes(
+        'Built-in pane item',
+      ),
+    'an extension row renders inside the stable General settings pane',
+  );
+  const builtInSettingsGroups = settingsApi.getGroups(
+    'codex.settings.general-settings',
+  );
+  const builtInSettingsItems = builtInSettingsGroups.flatMap(
+    (group) => group.items,
+  );
+  const settingsBuiltInOverrideItem = builtInSettingsItems.find(
+    (item) => item.id === settingsBuiltInOverrideItemId,
+  );
+  const settingsBuiltInOverrideButton = Array.from(
+    document
+      .getElementById(settingsBuiltInOverrideItemId)
+      ?.querySelectorAll('button') ?? [],
+  ).find((button) => button.textContent?.trim() === 'Run built-in override');
+  if (settingsBuiltInOverrideButton) {
+    activateButton(settingsBuiltInOverrideButton);
+    await waitUntil(() => settingsBuiltInOverrideClicks === 1);
+  }
+  check(
+    settingsBuiltInOverrideItem?.origin === 'app' &&
+      Boolean(settingsBuiltInOverrideButton) &&
+      settingsBuiltInOverrideClicks === 1,
+    'a transformed built-in settings row renders the assigning extension control after foreign pass-through',
+    {
+      itemId: settingsBuiltInOverrideItemId,
+      origin: settingsBuiltInOverrideItem?.origin,
+      clicks: settingsBuiltInOverrideClicks,
+    },
+  );
+  const builtInSettingsControl = builtInSettingsItems
+    .find(
+      (item) => item.origin === 'app' && item.control?.kind === 'native',
+    )?.control;
+  const builtInControlDetails = Reflect.ownKeys(builtInSettingsControl ?? {})
+    .filter((key) => key !== 'kind');
+  check(
+    builtInSettingsControl?.kind === 'native' &&
+      builtInControlDetails.length === 0,
+    "built-in settings controls do not expose React elements or callbacks",
+    { exposedKeys: builtInControlDetails.map(String) },
+  );
+  const exposesPrivateSettingsValue = (value, seen = new Set()) => {
+    if (typeof value === 'function') return true;
+    if (value == null || typeof value !== 'object') return false;
+    if (typeof value.$$typeof === 'symbol') return true;
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return Reflect.ownKeys(value).some((key) =>
+      exposesPrivateSettingsValue(value[key], seen),
+    );
+  };
+  const nativeSettingsTextShape = (item) => {
+    const row = document.getElementById(item.id);
+    const fiberKey = row
+      ? Object.keys(row).find((key) => key.startsWith('__reactFiber$'))
+      : undefined;
+    let fiber = fiberKey ? row[fiberKey] : null;
+    for (let hops = 0; fiber && hops < 40; hops += 1) {
+      const props = fiber.memoizedProps;
+      if (
+        props?.['data-settings-target-id'] === item.id &&
+        Object.hasOwn(props, 'label')
+      ) {
+        return {
+          labelIsElement: typeof props.label?.$$typeof === 'symbol',
+          descriptionIsElement:
+            typeof props.description?.$$typeof === 'symbol',
+          controlIsRendered: props.control !== undefined,
+        };
+      }
+      fiber = fiber.return;
+    }
+    return null;
+  };
+  const semanticNativeSettingsItems = builtInSettingsItems.filter(
+    (item) =>
+      item.origin === 'app' &&
+      typeof item.id === 'string' &&
+      document.getElementById(item.id),
+  );
+  const nativeSettingsTextShapes = semanticNativeSettingsItems.map(
+    nativeSettingsTextShape,
+  );
+  const renderedNativeControl = semanticNativeSettingsItems.some(
+    (item, index) =>
+      item.control?.kind === 'native' &&
+      nativeSettingsTextShapes[index]?.controlIsRendered,
+  );
+  check(
+    semanticNativeSettingsItems.length > 0 &&
+      nativeSettingsTextShapes.every((shape) => shape?.labelIsElement) &&
+      renderedNativeControl,
+    'unchanged native settings rows retain localized React content and controls',
+    { shapes: nativeSettingsTextShapes },
+  );
+  check(
+    !exposesPrivateSettingsValue(builtInSettingsGroups),
+    'the public settings model excludes React elements and callbacks',
+  );
+
+  const nativeCollisionGroup = builtInSettingsGroups.find((group) =>
+    typeof group.id === 'string' &&
+    group.items.includes(settingsBuiltInOverrideItem),
+  );
+  const nativeCollisionItem = nativeCollisionGroup?.items.find(
+    (item) => item === settingsBuiltInOverrideItem,
+  );
+  const nativeCollisionNamespaceEnd =
+    nativeCollisionItem?.id?.lastIndexOf('.');
+  const nativeCollisionOwnerId =
+    typeof nativeCollisionNamespaceEnd === 'number' &&
+    nativeCollisionNamespaceEnd > 0
+      ? nativeCollisionItem.id.slice(0, nativeCollisionNamespaceEnd)
+      : undefined;
+  const nativeCollisionGroupId = `${nativeCollisionOwnerId}.native-id-collision-group`;
+  const nativeCollisionLabel = 'Extension row with native item ID';
+  let nativeCollisionRegistration;
+  if (
+    nativeCollisionItem &&
+    typeof nativeCollisionItem.id === 'string' &&
+    typeof nativeCollisionGroup?.id === 'string' &&
+    nativeCollisionOwnerId
+  ) {
+    globalThis.__CGPTX_HOST__.registerExtension(nativeCollisionOwnerId, {
+      activate(api) {
+        nativeCollisionRegistration = api.settings.transformGroups(
+          (groups, pane) =>
+            pane.id === 'codex.settings.general-settings'
+              ? [
+                  {
+                    id: nativeCollisionGroupId,
+                    title: 'Native item ID collision',
+                    items: [
+                      {
+                        id: nativeCollisionItem.id,
+                        label: nativeCollisionLabel,
+                      },
+                    ],
+                  },
+                  ...groups,
+                ]
+              : groups,
+        );
+      },
+    });
+  }
+  const nativeCollisionOpened = nativeCollisionRegistration
+    ? await settingsApi.open('codex.settings.general-settings', {
+        itemId: nativeCollisionItem.id,
+      })
+    : false;
+  if (nativeCollisionRegistration) {
+    await waitUntil(
+      () =>
+        document
+          .getElementById(nativeCollisionItem.id)
+          ?.textContent?.includes(nativeCollisionLabel) === true &&
+        document.querySelectorAll(
+          `#${CSS.escape(nativeCollisionItem.id)}`,
+        ).length === 1 &&
+        settingsApi
+          .getGroups('codex.settings.general-settings')
+          .some(
+            (group) =>
+              group.id === nativeCollisionGroup?.id &&
+              group.items.some(
+                (item) =>
+                  item.id === undefined &&
+                  item.origin === 'app' &&
+                  item.label === nativeCollisionItem.label,
+              ),
+          ),
+    );
+  }
+  const nativeCollisionGroups = settingsApi.getGroups(
+    'codex.settings.general-settings',
+  );
+  const nativeCollisionIds = nativeCollisionGroups
+    .flatMap((group) => group.items)
+    .filter((item) => item.id === nativeCollisionItem?.id);
+  const anonymizedNativeCollisionGroup = nativeCollisionGroups.find(
+    (group) => group.id === nativeCollisionGroup?.id,
+  );
+  const anonymizedNativeCollisionItem =
+    anonymizedNativeCollisionGroup?.items.find(
+      (item) =>
+        item.id === undefined &&
+        item.origin === 'app' &&
+        item.label === nativeCollisionItem?.label &&
+        item.control?.kind === nativeCollisionItem?.control?.kind,
+    );
+  const nativeCollisionDomCount = nativeCollisionItem
+    ? document.querySelectorAll(`#${CSS.escape(nativeCollisionItem.id)}`).length
+    : 0;
+  const nativeCollisionTargetText = nativeCollisionItem
+    ? document.getElementById(nativeCollisionItem.id)?.textContent
+    : undefined;
+  const preservedNativeCollisionButton = Array.from(
+    document.querySelectorAll('button'),
+  ).find((button) => button.textContent?.trim() === 'Run built-in override');
+  if (preservedNativeCollisionButton) {
+    activateButton(preservedNativeCollisionButton);
+    await waitUntil(() => settingsBuiltInOverrideClicks === 2);
+  }
+  nativeCollisionRegistration?.dispose();
+  if (nativeCollisionItem) {
+    await waitUntil(
+      () =>
+        document
+          .getElementById(nativeCollisionItem.id)
+          ?.textContent?.includes(nativeCollisionItem.label) === true,
+    );
+  }
+  const restoredNativeCollisionItem = settingsApi
+    .getGroups('codex.settings.general-settings')
+    .find((group) => group.id === nativeCollisionGroup?.id)
+    ?.items.find((item) => item.id === nativeCollisionItem?.id);
+  check(
+    nativeCollisionOpened &&
+      nativeCollisionIds.length === 1 &&
+      nativeCollisionIds[0]?.label === nativeCollisionLabel &&
+      nativeCollisionDomCount === 1 &&
+      nativeCollisionTargetText?.includes(nativeCollisionLabel) &&
+      anonymizedNativeCollisionGroup?.items.length ===
+        nativeCollisionGroup?.items.length &&
+      anonymizedNativeCollisionItem?.description ===
+        nativeCollisionItem?.description &&
+      Boolean(preservedNativeCollisionButton) &&
+      settingsBuiltInOverrideClicks === 2 &&
+      restoredNativeCollisionItem?.origin === 'app' &&
+      restoredNativeCollisionItem?.label === nativeCollisionItem?.label &&
+      restoredNativeCollisionItem?.control?.kind ===
+        nativeCollisionItem?.control?.kind,
+    'a later native item with a duplicate pane ID stays visible without the ambiguous ID',
+    {
+      nativeItemId: nativeCollisionItem?.id,
+      nativeGroupId: nativeCollisionGroup?.id,
+      idCount: nativeCollisionIds.length,
+      domCount: nativeCollisionDomCount,
+      anonymized: Boolean(anonymizedNativeCollisionItem),
+      preservedControlClicks: settingsBuiltInOverrideClicks,
+    },
+  );
+
+  const settingsNavigationTitleShape = (expectedString) => {
+    const containsPaneButton = (value) => {
+      if (Array.isArray(value)) return value.some(containsPaneButton);
+      if (value == null || typeof value !== 'object') return false;
+      if (
+        value.props?.['data-settings-panel-slug'] === settingsPaneId
+      ) {
+        return true;
+      }
+      return containsPaneButton(value.props?.children);
+    };
+    const paneButton = document.querySelector(
+      `button[data-settings-panel-slug="${settingsPaneId}"]`,
+    );
+    const fiberKey = paneButton
+      ? Object.keys(paneButton).find((key) =>
+          key.startsWith('__reactFiber$'),
+        )
+      : undefined;
+    let fiber = fiberKey ? paneButton[fiberKey] : null;
+    for (let hops = 0; fiber && hops < 60; hops += 1) {
+      for (const branch of [fiber, fiber.alternate]) {
+        const title = branch?.memoizedProps?.title;
+        if (
+          containsPaneButton(branch?.memoizedProps?.children) &&
+          (expectedString === undefined
+            ? typeof title?.$$typeof === 'symbol'
+            : title === expectedString)
+        ) {
+          return {
+            titleIsElement: typeof title?.$$typeof === 'symbol',
+            titleIsString: typeof title === 'string',
+            titleText: typeof title === 'string' ? title : undefined,
+          };
+        }
+      }
+      fiber = fiber.return;
+    }
+    return null;
+  };
+  const builtInMetadataCategory = settingsApi
+    .getCategories()
+    .find((category) => category.id === 'integrations');
+  const originalBuiltInCategoryLabel = builtInMetadataCategory?.label ?? '';
+  const unchangedBuiltInCategoryTitleShape =
+    settingsNavigationTitleShape();
+  const transformedBuiltInCategoryLabel =
+    'Transformed built-in category title';
+  const builtInCategoryMetadataRegistration =
+    settingsApi.transformCategories((categories) =>
+      categories.map((category) =>
+        category.id === builtInMetadataCategory?.id
+          ? { ...category, label: transformedBuiltInCategoryLabel }
+          : category,
+      ),
+    );
+  await waitUntil(
+    () =>
+      settingsNavigationTitleShape(transformedBuiltInCategoryLabel)
+        ?.titleIsString === true &&
+      document.body.textContent?.includes(transformedBuiltInCategoryLabel),
+  );
+  const transformedBuiltInCategory = settingsApi
+    .getCategories()
+    .find((category) => category.id === builtInMetadataCategory?.id);
+  const transformedBuiltInCategoryTitleShape =
+    settingsNavigationTitleShape(transformedBuiltInCategoryLabel);
+  builtInCategoryMetadataRegistration.dispose();
+  await waitUntil(
+    () =>
+      !document.body.textContent?.includes(transformedBuiltInCategoryLabel) &&
+      settingsNavigationTitleShape()?.titleIsElement === true,
+  );
+  const restoredBuiltInCategory = settingsApi
+    .getCategories()
+    .find((category) => category.id === builtInMetadataCategory?.id);
+  const restoredBuiltInCategoryTitleShape =
+    settingsNavigationTitleShape();
+
+  const builtInMetadataGroup = builtInSettingsGroups.find(
+    (group) =>
+      group.origin === 'app' &&
+      typeof group.id === 'string' &&
+      typeof group.title === 'string' &&
+      group.title.length > 0,
+  );
+  const builtInMetadataGroupId =
+    builtInMetadataGroup?.id ?? 'missing-built-in-metadata-group';
+  const originalBuiltInTitle = builtInMetadataGroup?.title ?? '';
+  const originalBuiltInDescription = builtInMetadataGroup?.description;
+  const originalBuiltInFooter = builtInMetadataGroup?.footer;
+  const originalBuiltInKeywords = builtInMetadataGroup?.keywords;
+  const nativeSettingsGroupHeaderShape = (description, expectedTitle) => {
+    const textElement = Array.from(document.querySelectorAll('*')).find(
+      (element) =>
+        element.textContent?.includes(description) &&
+        !Array.from(element.children).some((child) =>
+          child.textContent?.includes(description),
+        ),
+    );
+    const fiberKey = textElement
+      ? Object.keys(textElement).find((key) => key.startsWith('__reactFiber$'))
+      : undefined;
+    let fiber = fiberKey ? textElement[fiberKey] : null;
+    for (let hops = 0; fiber && hops < 40; hops += 1) {
+      for (const branch of [fiber, fiber.alternate]) {
+        const props = branch?.memoizedProps;
+        const titleMatches =
+          expectedTitle === undefined
+            ? typeof props?.title?.$$typeof === 'symbol'
+            : props?.title === expectedTitle;
+        if (props?.subtitle === description && titleMatches) {
+          return {
+            titleIsElement: typeof props.title?.$$typeof === 'symbol',
+            titleText: typeof props.title === 'string' ? props.title : undefined,
+          };
+        }
+      }
+      fiber = fiber.return;
+    }
+    return null;
+  };
+  let effectiveBuiltInTitle = originalBuiltInTitle;
+  let clearBuiltInMetadata = false;
+  const builtInMetadataRegistration = settingsApi.transformGroups(
+    (groups, pane) =>
+      pane.id === 'codex.settings.general-settings'
+        ? groups.map((group) =>
+            group.id === builtInMetadataGroupId
+              ? clearBuiltInMetadata
+                ? {
+                    ...group,
+                    title: undefined,
+                    description: undefined,
+                    footer: undefined,
+                    keywords: undefined,
+                  }
+                : {
+                    ...group,
+                    title: effectiveBuiltInTitle,
+                    description: 'Transformed built-in description',
+                    footer: 'Transformed built-in footer',
+                    keywords: ['transformed-built-in-keyword'],
+                  }
+              : group,
+          )
+        : groups,
+  );
+  const builtInMetadataPassThroughRegistration =
+    settingsApi.transformGroups((groups) => groups);
+  await waitUntil(
+    () =>
+      document.body.textContent?.includes(originalBuiltInTitle) &&
+      document.body.textContent?.includes(
+        'Transformed built-in description',
+      ) &&
+      document.body.textContent?.includes('Transformed built-in footer'),
+  );
+  const unchangedBuiltInTitleRendered = document.body.textContent?.includes(
+    originalBuiltInTitle,
+  );
+  const unchangedBuiltInHeaderShape = nativeSettingsGroupHeaderShape(
+    'Transformed built-in description',
+  );
+  effectiveBuiltInTitle = 'Transformed built-in title';
+  builtInMetadataRegistration.invalidate();
+  await waitUntil(
+    () =>
+      document.body.textContent?.includes('Transformed built-in title') &&
+      document.body.textContent?.includes(
+        'Transformed built-in description',
+      ) &&
+      document.body.textContent?.includes('Transformed built-in footer'),
+  );
+  const transformedBuiltInGroup = settingsApi
+    .getGroups('codex.settings.general-settings')
+    .find((group) => group.id === builtInMetadataGroupId);
+  const transformedBuiltInHeaderShape = nativeSettingsGroupHeaderShape(
+    'Transformed built-in description',
+    'Transformed built-in title',
+  );
+  clearBuiltInMetadata = true;
+  builtInMetadataRegistration.invalidate();
+  await waitUntil(
+    () =>
+      !document.body.textContent?.includes('Transformed built-in title') &&
+      !document.body.textContent?.includes(
+        'Transformed built-in description',
+      ) &&
+      !document.body.textContent?.includes('Transformed built-in footer'),
+  );
+  const clearedBuiltInGroup = settingsApi
+    .getGroups('codex.settings.general-settings')
+    .find((group) => group.id === builtInMetadataGroupId);
+  const clearedBuiltInMetadataIsAbsent =
+    !document.body.textContent?.includes('Transformed built-in title') &&
+    !document.body.textContent?.includes('Transformed built-in description') &&
+    !document.body.textContent?.includes('Transformed built-in footer');
+  builtInMetadataPassThroughRegistration.dispose();
+  builtInMetadataRegistration.dispose();
+  await waitUntil(() => {
+    const restored = settingsApi
+      .getGroups('codex.settings.general-settings')
+      .find((group) => group.id === builtInMetadataGroupId);
+    return (
+      restored?.title === originalBuiltInTitle &&
+      document.body.textContent?.includes(originalBuiltInTitle)
+    );
+  });
+  const restoredBuiltInGroup = settingsApi
+    .getGroups('codex.settings.general-settings')
+    .find((group) => group.id === builtInMetadataGroupId);
+  check(
+    builtInMetadataCategory?.id !== undefined &&
+      unchangedBuiltInCategoryTitleShape?.titleIsElement === true &&
+      transformedBuiltInCategory?.label ===
+        transformedBuiltInCategoryLabel &&
+      transformedBuiltInCategoryTitleShape?.titleIsString === true &&
+      transformedBuiltInCategoryTitleShape.titleText ===
+        transformedBuiltInCategoryLabel &&
+      restoredBuiltInCategory?.label === originalBuiltInCategoryLabel &&
+      restoredBuiltInCategoryTitleShape?.titleIsElement === true &&
+      builtInMetadataGroup?.id !== undefined &&
+      unchangedBuiltInTitleRendered &&
+      unchangedBuiltInHeaderShape?.titleIsElement === true &&
+      transformedBuiltInGroup?.title === 'Transformed built-in title' &&
+      transformedBuiltInGroup.description ===
+        'Transformed built-in description' &&
+      transformedBuiltInGroup.footer === 'Transformed built-in footer' &&
+      transformedBuiltInGroup.keywords?.includes(
+        'transformed-built-in-keyword',
+      ) &&
+      transformedBuiltInHeaderShape?.titleText ===
+        'Transformed built-in title' &&
+      clearedBuiltInGroup !== undefined &&
+      clearedBuiltInGroup.title === undefined &&
+      clearedBuiltInGroup.description === undefined &&
+      clearedBuiltInGroup.footer === undefined &&
+      clearedBuiltInGroup.keywords === undefined &&
+      clearedBuiltInMetadataIsAbsent &&
+      restoredBuiltInGroup?.title === originalBuiltInTitle &&
+      restoredBuiltInGroup.description === originalBuiltInDescription &&
+      restoredBuiltInGroup.footer === originalBuiltInFooter &&
+      JSON.stringify(restoredBuiltInGroup.keywords) ===
+        JSON.stringify(originalBuiltInKeywords),
+    'transformed built-in settings metadata renders through native owners',
+    {
+      unchangedCategory: unchangedBuiltInCategoryTitleShape,
+      transformedCategory: transformedBuiltInCategoryTitleShape,
+      restoredCategory: restoredBuiltInCategoryTitleShape,
+      unchangedHeader: unchangedBuiltInHeaderShape,
+      transformedHeader: transformedBuiltInHeaderShape,
+      clearedGroup: clearedBuiltInGroup,
+      restoredGroup: restoredBuiltInGroup,
+    },
+  );
+
+  await settingsApi.open('codex.settings.appearance');
+  await waitUntil(() => document.body.textContent?.includes('Light theme'));
+  const customSidebarRow = document.querySelector(
+    `button[data-settings-panel-slug="${settingsPaneId}"]`,
+  );
+  customSidebarRow?.click();
+  await waitUntil(
+    () => document.getElementById(settingsToggleId) != null,
+  );
+  check(
+    Boolean(customSidebarRow),
+    'a contributed settings pane has a native sidebar row',
+  );
+  check(
+    document.body.textContent?.includes('Settings UI Fixture'),
+    'selecting a contributed sidebar row opens its settings pane',
+  );
+
+  const setSettingsSearch = async (query) => {
+    const input = document.querySelector('input#settings-search');
+    if (!input) throw new Error('Native settings search input missing');
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    valueSetter.call(input, query);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    await waitUntil(
+      () =>
+        document.querySelector('input#settings-search')?.value === query &&
+        document.querySelectorAll('[data-list-navigation-item]').length > 0,
+    );
+  };
+  const settingsSearchResult = (panelLabel) =>
+    Array.from(
+      document.querySelectorAll('button[data-list-navigation-item]'),
+    ).find((button) =>
+      button.getAttribute('aria-label')?.endsWith(`, ${panelLabel}`),
+    );
+  const searchMarkers = [
+    'settings-category-marker',
+    'settings-pane-marker',
+    'settings-group-marker',
+    'settings-item-marker',
+  ];
+  const searchableLevels = [];
+  for (const marker of searchMarkers) {
+    await setSettingsSearch(marker);
+    searchableLevels.push(Boolean(settingsSearchResult('Settings UI Fixture')));
+  }
+  check(
+    searchableLevels.every(Boolean),
+    'settings search indexes contributed category, pane, group, and item text',
+    { searchableLevels },
+  );
+
+  await setSettingsSearch('Multiple Accounts');
+  const extensionTitleResult = settingsSearchResult('Extensions');
+  await setSettingsSearch('saved-account');
+  const extensionDescriptionResult = settingsSearchResult('Extensions');
+  check(
+    Boolean(extensionTitleResult) && Boolean(extensionDescriptionResult),
+    'Extensions settings search indexes installed package titles and descriptions',
+  );
+
+  await setSettingsSearch('settings-item-marker');
+  settingsSearchResult('Settings UI Fixture')?.click();
+  await waitUntil(
+    () =>
+      document.querySelector('input#settings-search')?.value === '',
+  );
+  check(
+    document.getElementById(settingsToggleId) != null,
+    'selecting a contributed search result opens its owning settings pane',
+  );
   markProgress('complete');
   return checks;
 }
