@@ -809,7 +809,7 @@ private extension ComponentStore {
             let componentsChanged = plan.current.map {
                 versions.chatgptApi != $0.versions.chatgptApi
                     || versions.binding != $0.versions.binding
-                    || versions.extensions != $0.versions.extensions
+                    || versions.extensions != $0.extensions
             } ?? true
 
             let activeMetadata = try? activeVersionsMetadata()

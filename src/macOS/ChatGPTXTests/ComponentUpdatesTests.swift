@@ -256,6 +256,10 @@ final class ComponentUpdatesTests: XCTestCase {
             [.current, .current, .current]
         )
 
+        try writeSettings([
+            "future": ["enabled": false, "channel": "stable"],
+            "sample": ["enabled": true],
+        ])
         ComponentUpdateURLProtocol.responses = [
             Self.indexURL: json(index)
         ]
@@ -265,8 +269,14 @@ final class ComponentUpdatesTests: XCTestCase {
             chatgptAsarSHA256: Self.asarHash
         )
         guard case .upToDate = secondOutcome.result else {
-            return XCTFail("Exact installed versions must not download again.")
+            return XCTFail(
+                "A settings-only change must not require a restart."
+            )
         }
+        XCTAssertTrue(secondOutcome.result.preparedStore.extensions[0].enabled)
+        XCTAssertTrue(
+            secondOutcome.result.preparedStore.versions.extensions[0].enabled
+        )
         XCTAssertEqual(
             ComponentUpdateURLProtocol.requestedURLs,
             [Self.indexURL]
