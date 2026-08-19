@@ -457,6 +457,13 @@ final class ChatGPTLaunchRecoveryMonitor {
         }
         approvedURL = canonicalURL
         approvedBuildIdentity = buildIdentity
+
+        guard state.phase != .bootstrapping else { return }
+
+        for application in lifecycleSource.runningApplications
+            where applicationIsRunning(application) {
+            applicationLaunched(application)
+        }
     }
 
     func registerExpectedLaunch(token: String? = nil) {

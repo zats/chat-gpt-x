@@ -349,6 +349,26 @@ final class ComponentStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testPrepareInstalledRejectsModifiedActiveComponent() throws {
+        let store = try makeStore()
+        let lock = makeLock(extensions: [])
+        try installFixture(lock, in: store)
+        try Data("modified".utf8).write(
+            to: try store.resolveStorePath(
+                "\(lock.binding.path)/host.js"
+            )
+        )
+
+        XCTAssertThrowsError(try store.prepareInstalled()) { error in
+            XCTAssertTrue(
+                error.localizedDescription.contains(
+                    "integrity receipt does not match"
+                )
+            )
+        }
+    }
+
+    @MainActor
     func testAuthorizationModuleRequirementFollowsAPIVersion() throws {
         let store = try makeStore()
         let legacyLock = makeLock(
@@ -359,16 +379,21 @@ final class ComponentStoreTests: XCTestCase {
         let legacyAuthorizationURL = try store.resolveStorePath(
             "\(legacyLock.chatgptApi.path)/runtime/extension-manager-authorization.cjs"
         )
-        try FileManager.default.removeItem(at: legacyAuthorizationURL)
 
         XCTAssertNotNil(try store.prepareInstalled())
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: legacyAuthorizationURL.path
+            )
+        )
         XCTAssertFalse(
             chatgptAPIRequiresExtensionManagerAuthorization("1.1.0")
         )
 
         let currentLock = makeLock(
             extensions: [],
-            apiVersion: "1.1.1"
+            apiVersion: "1.1.1",
+            bindingVersion: "2.0.1"
         )
         try installFixture(currentLock, in: store)
         let currentAuthorizationURL = try store.resolveStorePath(
@@ -395,7 +420,8 @@ final class ComponentStoreTests: XCTestCase {
     @MainActor
     private func makeLock(
         extensions: [StoredExtension],
-        apiVersion: String = "1.2.3"
+        apiVersion: String = "1.2.3",
+        bindingVersion: String = "2.0.0"
     ) -> ComponentVersionsLock {
         ComponentVersionsLock(
             schemaVersion: 1,
@@ -408,12 +434,12 @@ final class ComponentStoreTests: XCTestCase {
             ),
             binding: StoredBinding(
                 chatgpt: "26.900.1",
-                version: "2.0.0",
+                version: bindingVersion,
                 chatgptApi: apiVersion,
                 asarSha256: hashB,
-                release: "binding-26.900.1-v2.0.0",
+                release: "binding-26.900.1-v\(bindingVersion)",
                 sha256: hashC,
-                path: "components/bindings/26.900.1/2.0.0"
+                path: "components/bindings/26.900.1/\(bindingVersion)"
             ),
             extensions: extensions
         )
@@ -473,26 +499,36 @@ final class ComponentStoreTests: XCTestCase {
         _ lock: ComponentVersionsLock,
         in store: ComponentStore
     ) throws {
+        let apiRootURL = try store.resolveStorePath(lock.chatgptApi.path)
         try writeJSON(
             ["version": lock.chatgptApi.version],
-            to: try store.resolveStorePath(
-                "\(lock.chatgptApi.path)/manifest.json"
-            )
+            to: apiRootURL.appendingPathComponent("manifest.json")
         )
-        for relativePath in [
+        var apiFiles = [
             "bridge/main.cjs",
             "bridge/preload.cjs",
             "runtime/codex-paths.cjs",
             "runtime/extension-launch-config.cjs",
-            "runtime/extension-manager-authorization.cjs",
-        ] {
-            try writeText(
-                "module.exports = {};\n",
-                to: try store.resolveStorePath(
-                    "\(lock.chatgptApi.path)/\(relativePath)"
-                )
+        ]
+        if chatgptAPIRequiresExtensionManagerAuthorization(
+            lock.chatgptApi.version
+        ) {
+            apiFiles.append(
+                "runtime/extension-manager-authorization.cjs"
             )
         }
+        for relativePath in apiFiles {
+            try writeText(
+                "module.exports = {};\n",
+                to: apiRootURL.appendingPathComponent(relativePath)
+            )
+        }
+        try store.writeComponentIntegrityReceipt(
+            at: apiRootURL,
+            archiveSHA256: lock.chatgptApi.sha256
+        )
+
+        let bindingRootURL = try store.resolveStorePath(lock.binding.path)
         try writeJSON(
             [
                 "version": lock.binding.version,
@@ -500,13 +536,15 @@ final class ComponentStoreTests: XCTestCase {
                 "chatgptApi": lock.binding.chatgptApi,
                 "asarSha256": lock.binding.asarSha256,
             ],
-            to: try store.resolveStorePath(
-                "\(lock.binding.path)/manifest.json"
-            )
+            to: bindingRootURL.appendingPathComponent("manifest.json")
         )
         try writeText(
             "(() => {})();\n",
-            to: try store.resolveStorePath("\(lock.binding.path)/host.js")
+            to: bindingRootURL.appendingPathComponent("host.js")
+        )
+        try store.writeComponentIntegrityReceipt(
+            at: bindingRootURL,
+            archiveSHA256: lock.binding.sha256
         )
     }
 
@@ -517,6 +555,9 @@ final class ComponentStoreTests: XCTestCase {
         includeOldChatGPTKey: Bool = true,
         omitMain: Bool = false
     ) throws {
+        let extensionRootURL = try store.resolveStorePath(
+            extensionComponent.path
+        )
         var compatibility: [String: Any] = [
             "chatgptApi": extensionComponent.compatibility.chatgptApi
         ]
@@ -536,18 +577,20 @@ final class ComponentStoreTests: XCTestCase {
         }
         try writeJSON(
             manifest,
-            to: try store.resolveStorePath(
-                "\(extensionComponent.path)/package.json"
-            )
+            to: extensionRootURL.appendingPathComponent("package.json")
         )
         if !omitMain {
             try writeText(
                 "module.exports = {};\n",
-                to: try store.resolveStorePath(
-                    "\(extensionComponent.path)/contents/main.js"
+                to: extensionRootURL.appendingPathComponent(
+                    "contents/main.js"
                 )
             )
         }
+        try store.writeComponentIntegrityReceipt(
+            at: extensionRootURL,
+            archiveSHA256: extensionComponent.sha256
+        )
     }
 
     @MainActor

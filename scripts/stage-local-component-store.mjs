@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -17,6 +19,7 @@ const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
+const integrityReceiptFileName = ".chatgptx-integrity.json";
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -57,6 +60,66 @@ function readExtensionManifests() {
 function writeJson(filePath, value) {
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, {
     mode: 0o600,
+  });
+}
+
+function compareCodeUnits(left, right) {
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+}
+
+function componentFileHashes(root, relativeDirectory = "") {
+  if (!relativeDirectory) {
+    const rootStatus = lstatSync(root, { throwIfNoEntry: false });
+    if (
+      !rootStatus ||
+      rootStatus.isSymbolicLink() ||
+      !rootStatus.isDirectory()
+    ) {
+      throw new Error(`Component root is not a directory: ${root}`);
+    }
+  }
+  const files = {};
+  const entries = readdirSync(path.join(root, relativeDirectory), {
+    withFileTypes: true,
+  }).sort((left, right) => compareCodeUnits(left.name, right.name));
+  for (const entry of entries) {
+    const relativePath = relativeDirectory
+      ? `${relativeDirectory}/${entry.name}`
+      : entry.name;
+    if (relativePath === integrityReceiptFileName) {
+      throw new Error(`Component contains a reserved receipt: ${root}`);
+    }
+    const filePath = path.join(root, relativePath);
+    const status = lstatSync(filePath);
+    if (status.isSymbolicLink()) {
+      throw new Error(`Component contains a symbolic link: ${filePath}`);
+    }
+    if (status.isDirectory()) {
+      Object.assign(files, componentFileHashes(root, relativePath));
+      continue;
+    }
+    if (!status.isFile()) {
+      throw new Error(`Component contains a non-file entry: ${filePath}`);
+    }
+    files[relativePath] = createHash("sha256")
+      .update(readFileSync(filePath))
+      .digest("hex");
+  }
+  return files;
+}
+
+function writeIntegrityReceipt(root, archiveSHA256) {
+  const receiptPath = path.join(root, integrityReceiptFileName);
+  if (lstatSync(receiptPath, { throwIfNoEntry: false })) {
+    throw new Error(`Component contains a reserved receipt: ${receiptPath}`);
+  }
+  writeJson(receiptPath, {
+    schemaVersion: 1,
+    archiveSHA256,
+    files: componentFileHashes(root),
   });
 }
 
@@ -157,6 +220,7 @@ function run() {
       { recursive: true },
     );
   }
+  writeIntegrityReceipt(apiRoot, apiRelease.sha256);
 
   const bindingPath =
     `components/bindings/${pinned.chatgpt}/${binding.version}`;
@@ -169,10 +233,14 @@ function run() {
     path.join(output, bindingPath),
     { recursive: true },
   );
+  writeIntegrityReceipt(
+    path.join(output, bindingPath),
+    bindingRelease.sha256,
+  );
 
   const extensions = [...extensionManifests]
     .filter(([, manifest]) => manifest.private !== true)
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => compareCodeUnits(left, right))
     .flatMap(([id, manifest]) => {
       const release = latest.extensions[id]?.versions?.[manifest.version];
       if (
@@ -200,6 +268,10 @@ function run() {
       cpSync(builtRoot, path.join(output, installedPath), {
         recursive: true,
       });
+      writeIntegrityReceipt(
+        path.join(output, installedPath),
+        release.sha256,
+      );
       return [{
         id,
         name: manifest.name,

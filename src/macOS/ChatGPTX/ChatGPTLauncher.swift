@@ -1,5 +1,6 @@
 import AppKit
 import CryptoKit
+import Darwin
 import Foundation
 
 enum ChatGPTLaunchMode {

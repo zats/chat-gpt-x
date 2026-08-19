@@ -29,9 +29,11 @@ function assertExtensionManagerAuthorization(expected, received) {
 }
 
 function isAuthorizedExtensionManagerEntry(entry, managerPath) {
+  if (entry?.id !== extensionManagerId || typeof entry.path !== "string") {
+    return false;
+  }
+  if (entry.configured === true) return true;
   return (
-    entry?.id === extensionManagerId &&
-    typeof entry.path === "string" &&
     typeof managerPath === "string" &&
     path.resolve(entry.path) === path.resolve(managerPath)
   );

@@ -272,6 +272,48 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
+    func testApprovalRefreshReconsidersLaunchObservedBeforeApproval() async {
+        let source = MockLifecycleSource()
+        let direct = MockApplication(pid: 15, url: applicationURL)
+        let injected = MockApplication(
+            pid: 16,
+            url: applicationURL,
+            injected: true
+        )
+        var approvedURL: URL?
+        direct.onTerminate = {
+            direct.isTerminated = true
+        }
+        var relaunchCount = 0
+        let monitor = makeMonitor(
+            source: source,
+            approvedApplicationURL: { approvedURL }
+        ) { _ in
+            relaunchCount += 1
+            source.applications = [injected]
+            return injected
+        }
+
+        monitor.start()
+        source.applications = [direct]
+        source.emitLaunch(direct)
+        await Task.yield()
+
+        XCTAssertEqual(direct.terminateCount, 0)
+        XCTAssertEqual(relaunchCount, 0)
+
+        approvedURL = applicationURL
+        monitor.refreshApprovedApplication()
+
+        await waitUntil {
+            relaunchCount == 1 && monitor.recoveryPhase == .armed
+        }
+
+        XCTAssertEqual(direct.terminateCount, 1)
+        XCTAssertEqual(relaunchCount, 1)
+    }
+
+    @MainActor
     func testEligibleDirectLaunchQuitsThenRelaunchesOnce() async {
         let source = MockLifecycleSource()
         let direct = MockApplication(pid: 20, url: applicationURL)

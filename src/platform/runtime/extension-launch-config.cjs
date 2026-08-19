@@ -25,6 +25,7 @@ function readExtensionEntries({
       .filter((extension) => extension.enabled)
       .map((extension) => ({
         id: extension.id,
+        configured: false,
         enabled: true,
         path: path.join(
           extensionPackageDirectory(extensionsDirectory, extension.path),
@@ -63,7 +64,12 @@ function readExtensionEntries({
       throw new Error("Invalid ChatGPTX launch extension");
     }
     ids.add(extension.id);
-    return { id: extension.id, enabled: true, path: extension.path };
+    return {
+      id: extension.id,
+      configured: true,
+      enabled: true,
+      path: extension.path,
+    };
   });
 }
 

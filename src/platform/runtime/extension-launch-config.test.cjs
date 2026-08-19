@@ -82,6 +82,7 @@ test("installed extensions use locked version paths and deterministic id order",
     [
     {
       id: "multiple-accounts",
+      configured: false,
       enabled: true,
       path: path.join(
         root,
@@ -90,6 +91,7 @@ test("installed extensions use locked version paths and deterministic id order",
     },
     {
       id: "thread-colors",
+      configured: false,
       enabled: true,
       path: path.join(
         root,
@@ -286,7 +288,14 @@ test("launch configuration replaces the complete extension set", () => {
       versions,
       extensionsDirectory: root,
     }),
-    [{ id: "api-test-suite", enabled: true, path: extensionPath }],
+    [
+      {
+        id: "api-test-suite",
+        configured: true,
+        enabled: true,
+        path: extensionPath,
+      },
+    ],
   );
   assert.equal(fs.existsSync(configurationFile), false);
 });
@@ -341,6 +350,34 @@ test("invalid launch configuration is rejected and consumed", () => {
   assert.equal(fs.existsSync(configurationFile), false);
 });
 
+test("launch configuration schema 2 is rejected and consumed", () => {
+  const { root, versions } = makeStore([]);
+  const configurationFile = path.join(root, "launch-v2.json");
+  fs.writeFileSync(
+    configurationFile,
+    JSON.stringify({
+      schemaVersion: 2,
+      extensions: [
+        {
+          id: "extensions",
+          origin: "local",
+          path: "/tmp/extensions/main.js",
+        },
+      ],
+    }),
+  );
+  assert.throws(
+    () =>
+      readExtensionEntries({
+        configurationFile,
+        versions,
+        extensionsDirectory: root,
+      }),
+    /Invalid ChatGPTX launch configuration/,
+  );
+  assert.equal(fs.existsSync(configurationFile), false);
+});
+
 test("extension management requires its exact random authorization", () => {
   const authorization = createExtensionManagerAuthorization();
   const otherAuthorization = createExtensionManagerAuthorization();
@@ -371,10 +408,10 @@ test("only the locked extension manager receives management authorization", () =
   const code =
     "module.exports = { activate(...arguments_) { return arguments_; } };";
 
-  function load(id, extensionPath) {
+  function load(id, extensionPath, configured = false) {
     let registered;
     const managerAuthorized = isAuthorizedExtensionManagerEntry(
-      { id, path: extensionPath },
+      { id, configured, path: extensionPath },
       managerPath,
     );
     const wrapped = wrapExtensionSource({
@@ -411,17 +448,46 @@ test("only the locked extension manager receives management authorization", () =
   );
   assert.equal(ordinary.wrapped.includes(authorization), false);
 
+  const localOrdinary = load(
+    "thread-colors",
+    "/tmp/local-thread-colors/main.js",
+    true,
+  );
+  assert.deepEqual(
+    Array.from(localOrdinary.registered.moduleExports.activate("api")),
+    ["api"],
+  );
+  assert.equal(localOrdinary.wrapped.includes(authorization), false);
+
   const forgedManager = load("extensions", "/tmp/forged-manager/main.js");
   assert.deepEqual(
     Array.from(forgedManager.registered.moduleExports.activate("api")),
     ["api"],
   );
   assert.equal(forgedManager.wrapped.includes(authorization), false);
+
+  const localManager = load(
+    "extensions",
+    "/tmp/local-manager/main.js",
+    true,
+  );
+  assert.deepEqual(
+    Array.from(localManager.registered.moduleExports.activate("api")),
+    ["api", authorization],
+  );
   assert.deepEqual(
     orderExtensionEntries(
       [
-        { id: "thread-colors", path: "/tmp/thread-colors/main.js" },
-        { id: "extensions", path: "/tmp/forged-manager/main.js" },
+        {
+          id: "thread-colors",
+          configured: false,
+          path: "/tmp/thread-colors/main.js",
+        },
+        {
+          id: "extensions",
+          configured: false,
+          path: "/tmp/forged-manager/main.js",
+        },
       ],
       managerPath,
     ).map((entry) => entry.id),
@@ -429,20 +495,21 @@ test("only the locked extension manager receives management authorization", () =
   );
 });
 
-test("explicit extensions follow the authorized manager in lexical id order", () => {
-  const managerPath =
+test("an explicit local manager override is authorized and activates first", () => {
+  const lockedManagerPath =
     "/component-store/extensions/extensions/0.1.1/contents/main.js";
+  const localManagerPath = "/tmp/extensions/contents/main.js";
   const ordered = orderExtensionEntries(
     [
-      { id: "z", path: "/tmp/z/main.js" },
-      { id: "a_a", path: "/tmp/a_a/main.js" },
-      { id: "extensions", path: managerPath },
-      { id: "aa", path: "/tmp/aa/main.js" },
-      { id: "a.a", path: "/tmp/a.a/main.js" },
-      { id: "a-a", path: "/tmp/a-a/main.js" },
-      { id: "a", path: "/tmp/a/main.js" },
+      { id: "z", configured: true, path: "/tmp/z/main.js" },
+      { id: "a_a", configured: true, path: "/tmp/a_a/main.js" },
+      { id: "extensions", configured: true, path: localManagerPath },
+      { id: "aa", configured: true, path: "/tmp/aa/main.js" },
+      { id: "a.a", configured: true, path: "/tmp/a.a/main.js" },
+      { id: "a-a", configured: true, path: "/tmp/a-a/main.js" },
+      { id: "a", configured: true, path: "/tmp/a/main.js" },
     ],
-    managerPath,
+    lockedManagerPath,
   );
 
   assert.deepEqual(
@@ -451,7 +518,7 @@ test("explicit extensions follow the authorized manager in lexical id order", ()
   );
   assert.deepEqual(
     ordered.map((entry) =>
-      isAuthorizedExtensionManagerEntry(entry, managerPath),
+      isAuthorizedExtensionManagerEntry(entry, lockedManagerPath),
     ),
     [true, false, false, false, false, false, false],
   );
@@ -464,6 +531,7 @@ test("the manager activates before an earlier third-party id can replace the hos
   const entries = [
     {
       id: "aaa-third-party",
+      configured: false,
       path: "/tmp/aaa-third-party/main.js",
       code: `module.exports = { activate() {
         window.__CGPTX_HOST__ = {
@@ -478,6 +546,7 @@ test("the manager activates before an earlier third-party id can replace the hos
     },
     {
       id: "extensions",
+      configured: false,
       path: managerPath,
       code: `module.exports = { activate(_api, received) {
         globalThis.managerAuthorization = received;
@@ -485,6 +554,7 @@ test("the manager activates before an earlier third-party id can replace the hos
     },
     {
       id: "zzz-third-party",
+      configured: false,
       path: "/tmp/zzz-third-party/main.js",
       code: "module.exports = { activate() {} };",
     },

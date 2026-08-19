@@ -224,6 +224,20 @@ final class ComponentUpdatesTests: XCTestCase {
                 ).appendingPathComponent("contents/main.js").path
             )
         )
+        for path in [
+            prepared.versions.chatgptApi.path,
+            prepared.versions.binding.path,
+            prepared.versions.extensions[0].path,
+        ] {
+            XCTAssertTrue(
+                FileManager.default.fileExists(
+                    atPath: prepared.rootURL.appendingPathComponent(path)
+                        .appendingPathComponent(
+                            ComponentStore.integrityReceiptFileName
+                        ).path
+                )
+            )
+        }
 
         let settings = try settingsRecords()
         XCTAssertEqual(settings["future"]?["enabled"] as? Bool, false)
@@ -655,6 +669,236 @@ final class ComponentUpdatesTests: XCTestCase {
         XCTAssertEqual(
             ComponentUpdateURLProtocol.requestedURLs,
             [Self.indexURL, releaseURL("chatgpt-api-v\(apiVersion)")]
+        )
+    }
+
+    @MainActor
+    func testUpdateRepairsModifiedComponentContent() async throws {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let binding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(binding)
+        )
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let hostURL = codexHomeURL.appendingPathComponent(
+            "extensions/components/bindings/\(Self.chatgptVersion)/1.0.0/host.js"
+        )
+        try Data("modified".utf8).write(to: hostURL)
+        installResponses(
+            index: index,
+            archives: [
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding
+            ]
+        )
+
+        guard case .installed = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        ).result else {
+            return XCTFail("Modified component content must be repaired.")
+        }
+        XCTAssertEqual(
+            try Data(contentsOf: hostURL),
+            Data("module.exports = {};".utf8)
+        )
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [
+                Self.indexURL,
+                releaseURL(
+                    "binding-\(Self.chatgptVersion)-v1.0.0"
+                ),
+            ]
+        )
+    }
+
+    @MainActor
+    func testUpdateRepairsUnexpectedComponentFile() async throws {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let binding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(binding)
+        )
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let unexpectedURL = codexHomeURL.appendingPathComponent(
+            "extensions/components/chatgpt-api/1.1.0/unexpected.js"
+        )
+        try Data("unexpected".utf8).write(to: unexpectedURL)
+        installResponses(
+            index: index,
+            archives: ["chatgpt-api-v1.1.0": api]
+        )
+
+        guard case .installed = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        ).result else {
+            return XCTFail("Unexpected component files must be removed.")
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: unexpectedURL.path)
+        )
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [Self.indexURL, releaseURL("chatgpt-api-v1.1.0")]
+        )
+    }
+
+    @MainActor
+    func testUpdateRepairsMissingIntegrityReceipt() async throws {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let binding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(binding)
+        )
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let receiptURL = codexHomeURL.appendingPathComponent(
+            "extensions/components/bindings/\(Self.chatgptVersion)/1.0.0"
+        ).appendingPathComponent(ComponentStore.integrityReceiptFileName)
+        try FileManager.default.removeItem(at: receiptURL)
+        installResponses(
+            index: index,
+            archives: [
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding
+            ]
+        )
+
+        guard case .installed = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        ).result else {
+            return XCTFail("A missing integrity receipt must be repaired.")
+        }
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: receiptURL.path)
+        )
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [
+                Self.indexURL,
+                releaseURL(
+                    "binding-\(Self.chatgptVersion)-v1.0.0"
+                ),
+            ]
+        )
+    }
+
+    @MainActor
+    func testUpdateRepairsReceiptWithWrongArchiveHash() async throws {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let binding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(binding)
+        )
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let receiptURL = codexHomeURL.appendingPathComponent(
+            "extensions/components/bindings/\(Self.chatgptVersion)/1.0.0"
+        ).appendingPathComponent(ComponentStore.integrityReceiptFileName)
+        var receipt = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: receiptURL)
+            ) as? [String: Any]
+        )
+        receipt["archiveSHA256"] = hash("not-the-archive")
+        try json(receipt).write(to: receiptURL, options: .atomic)
+        installResponses(
+            index: index,
+            archives: [
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding
+            ]
+        )
+
+        guard case .installed = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        ).result else {
+            return XCTFail("A receipt for another archive must be repaired.")
+        }
+        let repairedReceipt = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: receiptURL)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(
+            repairedReceipt["archiveSHA256"] as? String,
+            digest(binding)
+        )
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [
+                Self.indexURL,
+                releaseURL(
+                    "binding-\(Self.chatgptVersion)-v1.0.0"
+                ),
+            ]
         )
     }
 

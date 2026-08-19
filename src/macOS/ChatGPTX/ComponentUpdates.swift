@@ -868,6 +868,10 @@ private extension ComponentStore {
         if fileManager.fileExists(atPath: destinationURL.path) {
             do {
                 try validateArchive(at: destinationURL, kind: kind)
+                try validateComponentIntegrity(
+                    at: destinationURL,
+                    archiveSHA256: sha256
+                )
                 return
             } catch {
                 // Keep the invalid package until its replacement is ready.
@@ -952,6 +956,14 @@ private extension ComponentStore {
         }
 
         try validateArchive(at: stagingURL, kind: kind)
+        try writeComponentIntegrityReceipt(
+            at: stagingURL,
+            archiveSHA256: sha256
+        )
+        try validateComponentIntegrity(
+            at: stagingURL,
+            archiveSHA256: sha256
+        )
         try withExclusiveMutationLock {
             let destinationParentURL = destinationURL
                 .deletingLastPathComponent()
@@ -967,6 +979,10 @@ private extension ComponentStore {
 
             do {
                 try validateArchive(at: destinationURL, kind: kind)
+                try validateComponentIntegrity(
+                    at: destinationURL,
+                    archiveSHA256: sha256
+                )
                 return
             } catch {
                 let invalidURL = destinationParentURL.appendingPathComponent(

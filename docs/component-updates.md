@@ -116,9 +116,9 @@ Installed components live under `<Codex home>/extensions`:
 ```text
 extensions/
   components/
-    chatgpt-api/<api-version>/
-    bindings/<chatgpt-version>/<binding-version>/
-    extensions/<extension-id>/<extension-version>/
+    chatgpt-api/<api-version>/.chatgptx-integrity.json
+    bindings/<chatgpt-version>/<binding-version>/.chatgptx-integrity.json
+    extensions/<extension-id>/<extension-version>/.chatgptx-integrity.json
   state/<extension-id>/
   versions-lock.json
   settings.json
@@ -130,7 +130,9 @@ extensions/
 Component directories are immutable. `versions-lock.json` schema 1 selects
 one exact API, binding, and compatible extension set. Schema 1 is retained
 because released runtimes already read this lock contract. The launcher writes
-the complete lock only after all selected packages pass validation.
+the complete lock only after all selected packages pass validation. Each
+component receipt records the verified archive SHA-256 and the SHA-256 of every
+extracted file. The launcher rejects a changed, missing, or extra file.
 
 `settings.json` maps extension IDs to extensible settings objects:
 
@@ -163,7 +165,7 @@ flowchart TD
     C -- "Yes" --> D["Select binding and its API/runtime"]
     D --> E["For each extension, select newest API-compatible version"]
     E --> F["Omit incompatible extensions; preserve their settings"]
-    F --> G["Download only missing versioned archives"]
+    F --> G["Download missing or invalid versioned archives"]
     G --> H["Verify SHA-256, manifest identity, and archive layout"]
     H --> I["Reconcile saved enablement"]
     I --> J["Atomically replace versions-lock.json"]
@@ -213,11 +215,13 @@ The updater:
 2. Checks the minimum launcher version.
 3. Matches the exact ChatGPT version and `app.asar` hash.
 4. Selects the API and the newest compatible extension versions.
-5. Downloads only missing versioned archives.
+5. Downloads missing or invalid versioned archives.
 6. Verifies each archive SHA-256 and expected package manifest.
-7. Rejects symbolic links, missing files, and path escapes.
-8. Preserves extension settings.
-9. Writes one atomic active lock last.
+7. Records the complete extracted file set against that archive SHA-256.
+8. Rechecks the receipt before package reuse and active-lock selection.
+9. Rejects symbolic links, changed file sets, and path escapes.
+10. Preserves extension settings.
+11. Writes one atomic active lock last.
 
 At every injected launch, the launcher reads the current lock and settings. It
 writes a mode-`0600` launch configuration with the exact enabled extension
@@ -237,6 +241,8 @@ The launcher accepts repeatable development overrides:
 
 A local extension must be compatible with the selected ChatGPTX API. It
 overrides an installed extension with the same ID for that launch only.
+An explicit local `extensions` override keeps manager permission and activates
+before all other extensions.
 
 API test mode requires an explicit suite and an isolated profile:
 

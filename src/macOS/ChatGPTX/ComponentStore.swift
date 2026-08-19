@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -77,6 +78,7 @@ struct PreparedExtensionSettings {
 struct ComponentStore {
     private static let schemaVersion = 1
     private static let mutationLockFileName = "update.lock"
+    static let integrityReceiptFileName = ".chatgptx-integrity.json"
 
     let fileManager: FileManager
     let rootURL: URL
@@ -543,6 +545,181 @@ struct ComponentStore {
                 )
             }
         }
+
+        try validateComponentIntegrity(
+            at: try resolveStorePath(versions.chatgptApi.path),
+            archiveSHA256: versions.chatgptApi.sha256
+        )
+        try validateComponentIntegrity(
+            at: try resolveStorePath(versions.binding.path),
+            archiveSHA256: versions.binding.sha256
+        )
+        for extensionComponent in versions.extensions {
+            try validateComponentIntegrity(
+                at: try resolveStorePath(extensionComponent.path),
+                archiveSHA256: extensionComponent.sha256
+            )
+        }
+    }
+
+    /// Writes the trusted file list only after the caller verifies the exact
+    /// release archive SHA-256. The receipt then ties all extracted files to
+    /// that verified archive for later store validation.
+    func writeComponentIntegrityReceipt(
+        at componentRootURL: URL,
+        archiveSHA256: String
+    ) throws {
+        guard isHash(archiveSHA256) else {
+            throw ComponentStoreError.componentIntegrityMismatch(
+                componentRootURL.path
+            )
+        }
+        let receiptURL = componentRootURL.appendingPathComponent(
+            Self.integrityReceiptFileName
+        )
+        guard !fileManager.fileExists(atPath: receiptURL.path) else {
+            throw ComponentStoreError.componentIntegrityMismatch(
+                componentRootURL.path
+            )
+        }
+        let receipt = ComponentIntegrityReceipt(
+            schemaVersion: 1,
+            archiveSHA256: archiveSHA256,
+            files: try componentFileHashes(at: componentRootURL)
+        )
+        try atomicWrite(try encode(receipt), to: receiptURL)
+    }
+
+    func validateComponentIntegrity(
+        at componentRootURL: URL,
+        archiveSHA256: String
+    ) throws {
+        let receiptURL = componentRootURL.appendingPathComponent(
+            Self.integrityReceiptFileName
+        )
+        let receiptValues = try? receiptURL.resourceValues(
+            forKeys: [
+                .isRegularFileKey,
+                .isSymbolicLinkKey,
+            ]
+        )
+        guard receiptValues?.isRegularFile == true,
+            receiptValues?.isSymbolicLink != true,
+            let receipt = try? JSONDecoder().decode(
+                ComponentIntegrityReceipt.self,
+                from: Data(contentsOf: receiptURL)
+            ),
+            receipt.schemaVersion == 1,
+            receipt.archiveSHA256 == archiveSHA256,
+            isHash(receipt.archiveSHA256),
+            !receipt.files.isEmpty,
+            receipt.files.allSatisfy({ path, hash in
+                !path.isEmpty
+                    && !path.hasPrefix("/")
+                    && !path.split(separator: "/").contains("..")
+                    && path != Self.integrityReceiptFileName
+                    && isHash(hash)
+            })
+        else {
+            throw ComponentStoreError.componentIntegrityMismatch(
+                componentRootURL.path
+            )
+        }
+
+        let currentFiles: [String: String]
+        do {
+            currentFiles = try componentFileHashes(at: componentRootURL)
+        } catch {
+            throw ComponentStoreError.componentIntegrityMismatch(
+                componentRootURL.path
+            )
+        }
+        guard receipt.files == currentFiles else {
+            throw ComponentStoreError.componentIntegrityMismatch(
+                componentRootURL.path
+            )
+        }
+    }
+
+    private func componentFileHashes(
+        at componentRootURL: URL
+    ) throws -> [String: String] {
+        let rootValues = try componentRootURL.resourceValues(
+            forKeys: [
+                .isDirectoryKey,
+                .isSymbolicLinkKey,
+            ]
+        )
+        guard rootValues.isDirectory == true,
+            rootValues.isSymbolicLink != true
+        else {
+            throw ComponentStoreError.componentIntegrityMismatch(
+                componentRootURL.path
+            )
+        }
+
+        var hashes: [String: String] = [:]
+        try collectComponentFileHashes(
+            in: componentRootURL,
+            relativeDirectory: "",
+            hashes: &hashes
+        )
+        return hashes
+    }
+
+    private func collectComponentFileHashes(
+        in directoryURL: URL,
+        relativeDirectory: String,
+        hashes: inout [String: String]
+    ) throws {
+        let children = try fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: [
+                .isDirectoryKey,
+                .isRegularFileKey,
+                .isSymbolicLinkKey,
+            ],
+            options: []
+        ).sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+        for childURL in children {
+            let relativePath = relativeDirectory.isEmpty
+                ? childURL.lastPathComponent
+                : "\(relativeDirectory)/\(childURL.lastPathComponent)"
+            if relativePath == Self.integrityReceiptFileName {
+                continue
+            }
+
+            let values = try childURL.resourceValues(
+                forKeys: [
+                    .isDirectoryKey,
+                    .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                ]
+            )
+            guard values.isSymbolicLink != true else {
+                throw ComponentStoreError.componentIntegrityMismatch(
+                    childURL.path
+                )
+            }
+            if values.isDirectory == true {
+                try collectComponentFileHashes(
+                    in: childURL,
+                    relativeDirectory: relativePath,
+                    hashes: &hashes
+                )
+                continue
+            }
+            guard values.isRegularFile == true else {
+                throw ComponentStoreError.componentIntegrityMismatch(
+                    childURL.path
+                )
+            }
+            let hash = SHA256.hash(data: try Data(contentsOf: childURL)).map {
+                String(format: "%02x", $0)
+            }.joined()
+            hashes[relativePath] = hash
+        }
     }
 
     func resolveStorePath(_ relativePath: String) throws -> URL {
@@ -647,6 +824,12 @@ private struct BindingPackageManifest: Decodable {
     let asarSha256: String
 }
 
+private struct ComponentIntegrityReceipt: Codable {
+    let schemaVersion: Int
+    let archiveSHA256: String
+    let files: [String: String]
+}
+
 private enum ComponentStoreError: LocalizedError {
     case invalidVersionsLock
     case invalidSettings
@@ -654,6 +837,7 @@ private enum ComponentStoreError: LocalizedError {
     case invalidJSON(URL, any Error)
     case componentFileMissing(String)
     case componentManifestMismatch(String)
+    case componentIntegrityMismatch(String)
     case extensionManifestMismatch(String)
 
     var errorDescription: String? {
@@ -670,6 +854,8 @@ private enum ComponentStoreError: LocalizedError {
             "The installed component file is missing: \(path)"
         case .componentManifestMismatch(let component):
             "The installed \(component) manifest does not match the versions lock."
+        case .componentIntegrityMismatch(let component):
+            "The installed component integrity receipt does not match: \(component)"
         case .extensionManifestMismatch(let id):
             "The installed extension manifest does not match the versions lock: \(id)"
         }
