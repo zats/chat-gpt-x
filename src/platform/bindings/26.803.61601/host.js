@@ -248,6 +248,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const settingsNavigationGroupTemplates = new Map();
   const settingsGroupModels = new Map();
   const settingsPaneRenderCounts = new Map();
+  const APP_SETTINGS_OWNER = Symbol("app-settings-owner");
   const settingsCategoryOwners = new WeakMap();
   const settingsPaneOwners = new WeakMap();
   const settingsGroupOwners = new WeakMap();
@@ -865,7 +866,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
   function canChangeSettingsDescriptor(owners, descriptor, extId) {
     const owner = owners.get(descriptor);
-    return owner === "app" || owner === extId;
+    return owner === APP_SETTINGS_OWNER || owner === extId;
   }
 
   function mergeSettingsDescriptor(base, override) {
@@ -1264,9 +1265,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return Object.freeze(
       groups.map((group) => {
         let items = group.items;
-        const context = Object.freeze({ pane, group });
         for (const { extId, transform } of settingsItemTransformers) {
           try {
+            const context = Object.freeze({
+              pane,
+              group: Object.freeze({ ...group, items }),
+            });
             const output = transform(items, context);
             if (!Array.isArray(output)) {
               warn(
@@ -1339,7 +1343,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           kind: "section",
           label,
           panelLabel: pane.label,
-          sectionSlug: settingsSlug(pane.id) ?? pane.id,
+          sectionSlug: settingsSectionSlug(pane),
         });
       }
     }
@@ -2337,11 +2341,27 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       : null;
   }
 
+  function settingsPaneIsNative(pane) {
+    return (
+      pane !== undefined &&
+      settingsPaneOwners.get(pane) === APP_SETTINGS_OWNER &&
+      settingsNavigationRows.has(pane.id)
+    );
+  }
+
+  function settingsNativeSlug(pane) {
+    return settingsPaneIsNative(pane) ? settingsSlug(pane.id) : null;
+  }
+
+  function settingsSectionSlug(pane) {
+    return settingsNativeSlug(pane) ?? pane.id;
+  }
+
   function settingsHostPaneId(paneId) {
     if (typeof paneId !== "string") return null;
-    return settingsSlug(paneId) === null
-      ? "codex.settings.appearance"
-      : paneId;
+    return settingsNavigationRows.has(paneId)
+      ? paneId
+      : "codex.settings.appearance";
   }
 
   function settingsPagePaneId(child) {
@@ -2449,7 +2469,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           disabled: button.props.disabled === true,
           origin: "app",
         },
-        "app",
+        APP_SETTINGS_OWNER,
       ),
       button,
     };
@@ -2502,7 +2522,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         panes,
         origin: "app",
       },
-      "app",
+      APP_SETTINGS_OWNER,
     );
     settingsNativeCategoryViews.set(
       category,
@@ -2528,7 +2548,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       "data-settings-panel-slug",
     );
     if (!sourceButton) return null;
-    const isBuiltIn = settingsPaneOwners.get(pane) === "app";
+    const isBuiltIn = settingsPaneIsNative(pane);
     const sourceOnClick = sourceButton.props.onClick;
     const button = native.jsx(
       sourceButton.type,
@@ -2538,7 +2558,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         label: pane.label,
         isActive: currentSettingsPaneId() === pane.id,
         disabled: pane.disabled === true,
-        "data-settings-panel-slug": settingsSlug(pane.id) ?? pane.id,
+        "data-settings-panel-slug": settingsSectionSlug(pane),
         ...(isBuiltIn
           ? {
               onClick: (...args) => {
@@ -2667,9 +2687,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ...(control ? { control } : {}),
         origin: "app",
       },
-      "app",
+      APP_SETTINGS_OWNER,
       undefined,
-      control ? "app" : undefined,
+      control ? APP_SETTINGS_OWNER : undefined,
     );
     settingsNativeItemContent.set(
       item,
@@ -2731,7 +2751,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         items,
         origin: "app",
       },
-      "app",
+      APP_SETTINGS_OWNER,
     );
     const view = { source, header, footer, rows, rowElements, descriptor, key };
     settingsNativeGroupViews.set(descriptor, view);
@@ -2814,12 +2834,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
                 label: id,
                 origin: "app",
               },
-              "app",
+              APP_SETTINGS_OWNER,
             ),
           ]),
           origin: "app",
         },
-        "app",
+        APP_SETTINGS_OWNER,
       ),
     };
   }
@@ -2862,7 +2882,10 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     paneId,
     { loading = false, captureReady = true } = {},
   ) {
-    const slug = typeof paneId === "string" ? settingsSlug(paneId) : null;
+    const slug =
+      typeof paneId === "string" && settingsNavigationRows.has(paneId)
+        ? settingsSlug(paneId)
+        : null;
     if (slug === null) return false;
     const child = native.jsx(native.SettingsPage, {
       title: native.jsx(native.SettingsSectionTitle, { slug }),
@@ -2910,7 +2933,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function renderSettingsControl(control, itemId, controlOwner) {
     if (!control || typeof control !== "object") return undefined;
     if (control.kind === "native") {
-      return controlOwner === "app"
+      return controlOwner === APP_SETTINGS_OWNER
         ? settingsNativeControlElements.get(control)
         : undefined;
     }
@@ -2983,7 +3006,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     const itemOwner = settingsItemOwners.get(item);
     const controlOwner = settingsItemControlOwners.get(item);
     const nativeContent =
-      itemOwner === "app" ? settingsNativeItemContent.get(item) : undefined;
+      itemOwner === APP_SETTINGS_OWNER
+        ? settingsNativeItemContent.get(item)
+        : undefined;
     return native.jsx(
       native.SettingsRow,
       {
@@ -3286,7 +3311,10 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   function navigateSettingsPane(paneId) {
-    const slug = settingsSlug(paneId);
+    if (typeof paneId !== "string") return false;
+    const slug = settingsNavigationRows.has(paneId)
+      ? settingsSlug(paneId)
+      : null;
     if (slug !== null) {
       const nativeRow = settingsNavigationRows.get(paneId);
       const action = nativeRow?.button.props.onClick;
@@ -5209,7 +5237,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       confirmNativeSettingsPane: (paneId) => {
         if (
           typeof paneId !== "string" ||
-          settingsSlug(paneId) === null
+          !settingsNavigationRows.has(paneId)
         ) {
           return false;
         }

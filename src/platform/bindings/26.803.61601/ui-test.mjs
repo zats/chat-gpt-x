@@ -1985,6 +1985,236 @@ async function validateUi(
     },
   );
 
+  const appOwnerId = 'app';
+  const appObserverId = 'app-owner-observer';
+  const appCategoryId = `${appOwnerId}.category`;
+  const appPaneId = `${appOwnerId}.pane`;
+  const appGroupId = `${appOwnerId}.group`;
+  const appItemId = `${appOwnerId}.item`;
+  const appOwnerRegistrations = [];
+  let appOwnerSettingsApi;
+  let appOwnerControl;
+  let appOwnerClicks = 0;
+  let appObserverClicks = 0;
+  globalThis.__CGPTX_HOST__.registerExtension(appOwnerId, {
+    activate(api) {
+      appOwnerSettingsApi = api.settings;
+      appOwnerControl = api.settings.ui.button({
+        label: 'Run app owner',
+        onClick() {
+          appOwnerClicks += 1;
+        },
+      });
+      appOwnerRegistrations.push(
+        api.settings.transformCategories((categories) => [
+          ...categories,
+          {
+            id: appCategoryId,
+            label: 'App owner category',
+            panes: [{ id: appPaneId, label: 'App owner pane' }],
+          },
+        ]),
+        api.settings.transformGroups((groups, pane) =>
+          pane.id === appPaneId
+            ? [
+                ...groups,
+                {
+                  id: appGroupId,
+                  title: 'App owner group',
+                  items: [],
+                },
+              ]
+            : groups,
+        ),
+        api.settings.transformItems((items, context) =>
+          context.group.id === appGroupId
+            ? [
+                ...items,
+                {
+                  id: appItemId,
+                  label: 'App owner item',
+                  control: appOwnerControl,
+                },
+              ]
+            : items,
+        ),
+      );
+    },
+  });
+  globalThis.__CGPTX_HOST__.registerExtension(appObserverId, {
+    activate(api) {
+      const observerControl = api.settings.ui.button({
+        label: 'Run observer',
+        onClick() {
+          appObserverClicks += 1;
+        },
+      });
+      appOwnerRegistrations.push(
+        api.settings.transformCategories((categories) =>
+          categories.map((category) =>
+            category.id === appCategoryId
+              ? {
+                  ...category,
+                  label: 'Observer category',
+                  panes: category.panes.map((pane) =>
+                    pane.id === appPaneId
+                      ? { ...pane, label: 'Observer pane' }
+                      : pane,
+                  ),
+                }
+              : category,
+          ),
+        ),
+        api.settings.transformGroups((groups, pane) =>
+          pane.id === appPaneId
+            ? groups.map((group) =>
+                group.id === appGroupId
+                  ? { ...group, title: 'Observer group' }
+                  : group,
+              )
+            : groups,
+        ),
+        api.settings.transformItems((items, context) =>
+          context.group.id === appGroupId
+            ? items.map((item) =>
+                item.id === appItemId
+                  ? {
+                      ...item,
+                      label: 'Observer item',
+                      control: observerControl,
+                    }
+                  : item,
+              )
+            : items,
+        ),
+      );
+    },
+  });
+  const appOwnerCategory = appOwnerSettingsApi
+    .getCategories()
+    .find((category) => category.id === appCategoryId);
+  const appOwnerPane = appOwnerCategory?.panes.find(
+    (pane) => pane.id === appPaneId,
+  );
+  const appOwnerGroup = appOwnerSettingsApi
+    .getGroups(appPaneId)
+    .find((group) => group.id === appGroupId);
+  const appOwnerItem = appOwnerGroup?.items.find(
+    (item) => item.id === appItemId,
+  );
+  check(
+    appOwnerCategory?.label === 'App owner category' &&
+      appOwnerCategory.origin === appOwnerId &&
+      appOwnerPane?.label === 'App owner pane' &&
+      appOwnerPane.origin === appOwnerId &&
+      appOwnerGroup?.title === 'App owner group' &&
+      appOwnerGroup.origin === appOwnerId &&
+      appOwnerItem?.label === 'App owner item' &&
+      appOwnerItem.origin === appOwnerId &&
+      appOwnerItem.control === appOwnerControl,
+    "an extension whose exact id is app retains ownership of its settings descriptors and control",
+  );
+  const appOwnerPaneOpened = await appOwnerSettingsApi.open(appPaneId, {
+    itemId: appItemId,
+  });
+  await waitUntil(() => document.getElementById(appItemId) != null);
+  const appOwnerButton = Array.from(
+    document.getElementById(appItemId)?.querySelectorAll('button') ?? [],
+  ).find((button) => button.textContent?.trim() === 'Run app owner');
+  if (appOwnerButton) invokeNativeButton(appOwnerButton);
+  const appOwnerSidebarRow = document.querySelector(
+    `button[data-settings-panel-slug="${appPaneId}"]`,
+  );
+  if (appOwnerSidebarRow) invokeNativeButton(appOwnerSidebarRow);
+  await waitUntil(() => {
+    const state = globalThis.__CGPTX_HOST__._debug.settingsState();
+    return (
+      state.activePaneId === appPaneId &&
+      state.activeCustomPaneId === appPaneId
+    );
+  });
+  const appOwnerPaneState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  check(
+    appOwnerPaneOpened &&
+      Boolean(appOwnerButton) &&
+      Boolean(appOwnerSidebarRow) &&
+      appOwnerClicks === 1 &&
+      appObserverClicks === 0 &&
+      appOwnerPaneState.activePaneId === appPaneId &&
+      appOwnerPaneState.activeCustomPaneId === appPaneId,
+    "an extension whose exact id is app renders only its own native settings control",
+    appOwnerPaneState,
+  );
+  for (const registration of appOwnerRegistrations.reverse()) {
+    registration.dispose();
+  }
+
+  const codexOwnerId = 'codex';
+  const codexCustomPaneId = 'codex.settings.custom';
+  const codexCustomGroupId = 'codex.custom-group';
+  const codexCustomItemId = 'codex.custom-item';
+  const codexOwnerRegistrations = [];
+  let codexOwnerSettingsApi;
+  globalThis.__CGPTX_HOST__.registerExtension(codexOwnerId, {
+    activate(api) {
+      codexOwnerSettingsApi = api.settings;
+      codexOwnerRegistrations.push(
+        api.settings.transformCategories((categories) => [
+          ...categories,
+          {
+            id: 'codex.category',
+            label: 'Codex extension category',
+            panes: [
+              {
+                id: codexCustomPaneId,
+                label: 'Codex extension custom pane',
+              },
+            ],
+          },
+        ]),
+        api.settings.transformGroups((groups, pane) =>
+          pane.id === codexCustomPaneId
+            ? [
+                ...groups,
+                {
+                  id: codexCustomGroupId,
+                  items: [
+                    {
+                      id: codexCustomItemId,
+                      label: 'Codex extension custom item',
+                    },
+                  ],
+                },
+              ]
+            : groups,
+        ),
+      );
+    },
+  });
+  const codexCustomPaneOpened = await codexOwnerSettingsApi.open(
+    codexCustomPaneId,
+    { itemId: codexCustomItemId },
+  );
+  await waitUntil(() => document.getElementById(codexCustomItemId) != null);
+  const codexCustomPaneState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  const codexCustomSidebarRow = document.querySelector(
+    `button[data-settings-panel-slug="${codexCustomPaneId}"]`,
+  );
+  check(
+    codexCustomPaneOpened &&
+      codexCustomPaneState.activePaneId === codexCustomPaneId &&
+      codexCustomPaneState.activeCustomPaneId === codexCustomPaneId &&
+      Boolean(codexCustomSidebarRow) &&
+      document.getElementById(codexCustomItemId) != null,
+    'an extension-owned codex.settings pane id uses the custom native host',
+    codexCustomPaneState,
+  );
+  for (const registration of codexOwnerRegistrations.reverse()) {
+    registration.dispose();
+  }
+
   const shortOwnerId = 'foo';
   const dottedOwnerId = 'foo.bar';
   const ownershipOverrideCategoryId = `${dottedOwnerId}.override-category`;
@@ -2870,6 +3100,7 @@ async function validateUi(
           labelIsElement: typeof props.label?.$$typeof === 'symbol',
           descriptionIsElement:
             typeof props.description?.$$typeof === 'symbol',
+          controlIsRendered: props.control !== undefined,
         };
       }
       fiber = fiber.return;
@@ -2885,10 +3116,16 @@ async function validateUi(
   const nativeSettingsTextShapes = semanticNativeSettingsItems.map(
     nativeSettingsTextShape,
   );
+  const renderedNativeControl = semanticNativeSettingsItems.some(
+    (item, index) =>
+      item.control?.kind === 'native' &&
+      nativeSettingsTextShapes[index]?.controlIsRendered,
+  );
   check(
     semanticNativeSettingsItems.length > 0 &&
-      nativeSettingsTextShapes.every((shape) => shape?.labelIsElement),
-    'unchanged native settings rows retain localized React content',
+      nativeSettingsTextShapes.every((shape) => shape?.labelIsElement) &&
+      renderedNativeControl,
+    'unchanged native settings rows retain localized React content and controls',
     { shapes: nativeSettingsTextShapes },
   );
   check(

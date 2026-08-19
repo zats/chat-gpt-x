@@ -1213,6 +1213,10 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
 });
 
 test("settings: transformers chain, isolate failures, and validate ids", async () => {
+  const contextGroupId = `${EXT_ID}.context-group`;
+  const contextFirstItemId = `${EXT_ID}.context-first`;
+  const contextSecondItemId = `${EXT_ID}.context-second`;
+  let laterContextMatchesCurrentItems = false;
   const first = api.settings.transformCategories((categories) => [
     ...categories,
     {
@@ -1253,7 +1257,53 @@ test("settings: transformers chain, isolate failures, and validate ids", async (
       ),
     })),
   );
-  activeTestDisposables?.push(first, throwing, second);
+  const contextGroup = api.settings.transformGroups((groups, pane) =>
+    pane.id === SETTINGS_PANE_ID
+      ? [
+          ...groups,
+          {
+            id: contextGroupId,
+            items: [
+              {
+                id: contextFirstItemId,
+                label: "First context item",
+              },
+            ],
+          },
+        ]
+      : groups,
+  );
+  const contextFirst = api.settings.transformItems((current, context) =>
+    context.group.id === contextGroupId
+      ? [
+          ...current,
+          {
+            id: contextSecondItemId,
+            label: "Second context item",
+          },
+        ]
+      : current,
+  );
+  const contextSecond = api.settings.transformItems((current, context) => {
+    if (context.group.id === contextGroupId) {
+      laterContextMatchesCurrentItems =
+        Object.isFrozen(context) &&
+        Object.isFrozen(context.group) &&
+        Object.isFrozen(current) &&
+        context.group.items === current &&
+        current.map((item) => item.id).join(",") ===
+          `${contextFirstItemId},${contextSecondItemId}`;
+    }
+    return current;
+  });
+  activeTestDisposables?.push(
+    first,
+    throwing,
+    second,
+    contextGroup,
+    contextFirst,
+    contextSecond,
+  );
 
   assert(
     await waitFor(() => settingPane(SETTINGS_PANE_ID) !== undefined, 5000),
@@ -1283,6 +1333,14 @@ test("settings: transformers chain, isolate failures, and validate ids", async (
       .find((category) => category.id === `${EXT_ID}.category`)?.origin ===
       EXT_ID,
     "contributed category origins are stamped",
+  );
+  const effectiveContextGroup = api.settings
+    .getGroups(SETTINGS_PANE_ID)
+    .find((group) => group.id === contextGroupId);
+  assert(
+    laterContextMatchesCurrentItems &&
+      effectiveContextGroup?.items.length === 2,
+    "later item transformers receive a fresh context for the current item list",
   );
 });
 

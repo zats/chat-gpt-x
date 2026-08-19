@@ -161,7 +161,9 @@ render contributed groups in a separate stable slot.
 
 Private weak maps assign every normalized category, pane, group, and item to
 ChatGPT or to the extension that contributed it. Public `origin` values are
-not ownership input. A later extension can pass or reorder a foreign
+not ownership input. ChatGPT ownership uses a private non-string sentinel, so
+an extension whose exact ID is `app` remains distinct even though its public
+`origin` is also `"app"`. A later extension can pass or reorder a foreign
 descriptor, but a copied override resolves to the trusted original object and
 an omission reinserts it at its previous index. ChatGPT-owned descriptors stay
 editable and removable. Group-transform output also routes inline items
@@ -208,8 +210,12 @@ native query and invokes the same pane-selection path as a sidebar row.
 
 Settings pane selection is local app state. It does not change
 `window.location`. The binding stores the effective pane ID and invokes the
-app's captured native sidebar callback. Custom panes use Appearance as their
-native host selection. `SettingsContentBoundary` wraps each rendered `Wa`
+app's captured native sidebar callback. Search and sidebar descriptors use the
+private ChatGPT owner sentinel plus a captured navigation row. ID-only host
+routing uses the captured navigation-row set directly. An extension-owned ID
+such as `codex.settings.custom` remains a custom pane. Custom panes use
+Appearance as their native host selection.
+`SettingsContentBoundary` wraps each rendered `Wa`
 page, subscribes to binding invalidation, and replaces the Appearance page
 props with the custom title and native group tree. A pending native pane ID
 prevents the previous active row from winning during the app's asynchronous
@@ -232,14 +238,17 @@ the stable content boundary for this build.
 The stable API suite covers new panes and groups, insertion into General,
 standard control descriptors, empty-string select values, malformed select
 input rejection, built-in row control and group metadata transforms,
-transformer ordering and isolation, namespace enforcement, invalidation,
-disposal, and deep-link failure behavior. The version-specific UI suite uses
+transformer ordering and isolation, a fresh item context whose `group.items`
+is the same current array as the transformer input, namespace enforcement,
+invalidation, disposal, and deep-link failure behavior. The version-specific UI suite uses
 concurrent `foo` and `foo.bar` APIs to verify copied, omitted, cross-category
 moved, and distinct owned categories, panes, groups, and items without
 duplicate pane IDs. It also assigns an extension button to a ChatGPT-owned
 row, passes a copied descriptor through a later extension with a forged public
 origin, and verifies that the button still invokes only the assigning
-extension. It also covers native rendering, exact empty-string
+extension. A separate exact-ID `app` fixture proves that another extension
+cannot change its descriptors or replace its rendered native button. It also
+covers native rendering, exact empty-string
 select callbacks, General-pane insertion, transformed built-in category and
 group metadata, exact native-group snapshot replacement, child-only
 recapture, loading and stale-page rejection, deep links into an unvisited
@@ -310,7 +319,7 @@ Results:
 - Launcher unit tests: `66/66`.
 - Extension and shared-utility unit tests: `35/35`.
 - Stable public API assertions: `44/44`.
-- Current native UI suite: `91/91`.
+- Current native UI suite: `94/94`.
 - The Multiple Accounts extension switched to another account and restored the
   original account.
 - Shipped-extension composition with the API suite enabled: passed.

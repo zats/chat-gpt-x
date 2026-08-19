@@ -165,7 +165,9 @@ value identity path as the live-verified title restoration.
 
 Private weak maps assign every normalized category, pane, group, and item to
 ChatGPT or to the extension that contributed it. Public `origin` values are
-not ownership input. A later extension can pass or reorder a foreign
+not ownership input. ChatGPT ownership uses a private non-string sentinel, so
+an extension whose exact ID is `app` remains distinct even though its public
+`origin` is also `"app"`. A later extension can pass or reorder a foreign
 descriptor, but a copied override resolves to the trusted original object and
 an omission reinserts it at its previous index. ChatGPT-owned descriptors stay
 editable and removable. Group-transform output also routes inline items
@@ -177,7 +179,10 @@ copied, omitted, cross-category moved, and distinct owned categories, panes,
 groups, and items without duplicate pane IDs. It also assigns an extension
 button to a ChatGPT-owned row, passes a copied descriptor through a later
 extension with a forged public origin, and verifies that the button still
-invokes only the assigning extension.
+invokes only the assigning extension. A separate exact-ID `app` fixture proves
+that another extension cannot change its descriptors or replace its rendered
+native button. Each item transformer receives a newly frozen context whose
+`group.items` is the same current array supplied as its first argument.
 
 Native search keeps the `searchQuery`, `onQueryChange`, `searchResults`, and
 `onSelect` contracts. The binding adds one result for each matching effective
@@ -195,9 +200,13 @@ page commit during navigation. Pages without a native group anchor retain
 their original content and render contributed groups in a separate stable
 slot. Custom pane selection remains local Settings state. The binding selects
 the native Appearance pane as the content host, then replaces its native `Wa`
-page props with the contributed title and group tree. `open()` waits for the
-initial Settings snapshot and the requested pane commit before it tests an
-optional target row, then scrolls that row into view. Custom panes that share
+page props with the contributed title and group tree. Search and sidebar
+descriptors use the private ChatGPT owner sentinel plus a captured navigation
+row. ID-only host routing uses the captured navigation-row set directly. An
+extension-owned ID such as `codex.settings.custom` remains a custom pane.
+`open()` waits for the initial Settings snapshot and the requested pane commit
+before it tests an optional target row, then scrolls that row into view. Custom
+panes that share
 an active Appearance host switch without a redundant native navigation. When
 Settings is closed, the binding uses the main-process `navigate-to-route`
 message to open General before it selects the requested pane.
@@ -257,7 +266,7 @@ Results:
 - Launcher unit tests: `66/66`.
 - Extension and shared-utility unit tests: `35/35`.
 - Stable public API assertions: `44/44`.
-- Current native UI assertions: `91/91`.
+- Current native UI assertions: `94/94`.
 - The Multiple Accounts extension switched to another account and restored the
   original account.
 - Shipped-extension composition with the API suite enabled: passed.

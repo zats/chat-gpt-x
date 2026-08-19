@@ -537,8 +537,11 @@ export interface SettingsApi {
   /**
    * Transform every native settings row list.
    *
-   * `transform` receives the complete item list for one effective group and
-   * its pane and group context. Return the final list to keep, remove,
+   * `transform` receives the complete current item list for one effective
+   * group and its pane and group context. `context.group.items` is the same
+   * frozen list as the first argument. The platform rebuilds the frozen
+   * context for each transformer, so both values include every earlier item
+   * transformer's accepted output. Return the final list to keep, remove,
    * reorder, modify, or add rows. Built-in rows have stable semantic ids when
    * ChatGPT supplies a semantic identity; otherwise their `id` is undefined
    * and the same object must be returned to preserve them. Every new item
@@ -669,7 +672,10 @@ export interface SettingsCategory {
   /** Ordered navigation panes in this category. */
   readonly panes: readonly SettingsPane[];
 
-  /** Contributor id assigned by the platform; `"app"` denotes ChatGPT. */
+  /**
+   * Contributor label assigned by the platform. ChatGPT uses `"app"`; do not
+   * use this value as ownership authority.
+   */
   readonly origin?: "app" | string;
 }
 
@@ -704,7 +710,10 @@ export interface SettingsPane {
   /** Whether a built-in pane opens an external destination. */
   readonly external?: boolean;
 
-  /** Contributor id assigned by the platform; `"app"` denotes ChatGPT. */
+  /**
+   * Contributor label assigned by the platform. ChatGPT uses `"app"`; do not
+   * use this value as ownership authority.
+   */
   readonly origin?: "app" | string;
 }
 
@@ -748,7 +757,10 @@ export interface SettingsGroup {
   /** Ordered rows in the group. */
   readonly items: readonly SettingsItem[];
 
-  /** Contributor id assigned by the platform; `"app"` denotes ChatGPT. */
+  /**
+   * Contributor label assigned by the platform. ChatGPT uses `"app"`; do not
+   * use this value as ownership authority.
+   */
   readonly origin?: "app" | string;
 }
 
@@ -761,7 +773,10 @@ export interface SettingsItemContext {
   /** Effective pane that owns the group. */
   readonly pane: SettingsPane;
 
-  /** Effective group that owns the item list. */
+  /**
+   * Effective group that owns the item list. Its `items` property is the same
+   * frozen current list supplied as the transformer's first argument.
+   */
   readonly group: SettingsGroup;
 }
 
@@ -804,7 +819,10 @@ export interface SettingsItem {
   /** Extra native settings-search terms for this row. */
   readonly keywords?: readonly string[];
 
-  /** Contributor id assigned by the platform; `"app"` denotes ChatGPT. */
+  /**
+   * Contributor label assigned by the platform. ChatGPT uses `"app"`; do not
+   * use this value as ownership authority.
+   */
   readonly origin?: "app" | string;
 }
 
