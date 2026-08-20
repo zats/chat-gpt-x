@@ -9,7 +9,6 @@ import {
   authenticationFileName,
   discoverAccounts,
   deactivate,
-  logOutCurrent,
   saveAuthentication,
   selectAccount,
   transformProfileMenuItems,
@@ -72,7 +71,7 @@ test("the account row becomes a submenu whose Profile child preserves native nav
   const openProfile = () => undefined;
   const account = action(accountRowId, "Current Account", { onClick: openProfile, origin: "app" });
   const settings = action("codex.profileDropdown.settingsPage", "Settings", { origin: "app" });
-  const result = transformProfileMenuItems([account, settings], "current-user", "current@example.com", [], { addAccount() {}, selectAccount() {}, logOut() {} });
+  const result = transformProfileMenuItems([account, settings], "current-user", "current@example.com", [], { addAccount() {}, selectAccount() {} });
   const parent = result[0];
 
   assert.equal(parent?.id, accountRowId);
@@ -86,7 +85,7 @@ test("the account row becomes a submenu whose Profile child preserves native nav
 
 test("Add account uses the supplied action", () => {
   let additions = 0;
-  const result = transformProfileMenuItems([action(accountRowId, "Current")], "current-user", "current@example.com", [], { addAccount: () => additions += 1, selectAccount() {}, logOut() {} });
+  const result = transformProfileMenuItems([action(accountRowId, "Current")], "current-user", "current@example.com", [], { addAccount: () => additions += 1, selectAccount() {} });
   const parent = result[0];
   assert.equal(parent?.kind, "action");
   if (parent?.kind !== "action") return;
@@ -103,7 +102,7 @@ test("stored accounts exclude the current account and remain selectable", () => 
   const selected: StoredAccount[] = [];
   const current = storedAccount("current-user", "Current");
   const other = storedAccount("other-user", "Other");
-  const result = transformProfileMenuItems([action(accountRowId, "Current")], current.userId, "current@example.com", [current, other], { addAccount() {}, selectAccount: (account) => selected.push(account), logOut() {} });
+  const result = transformProfileMenuItems([action(accountRowId, "Current")], current.userId, "current@example.com", [current, other], { addAccount() {}, selectAccount: (account) => selected.push(account) });
   const parent = result[0];
   assert.equal(parent?.kind, "action");
   if (parent?.kind !== "action") return;
@@ -117,7 +116,7 @@ test("stored accounts exclude the current account and remain selectable", () => 
 
 test("children contributed by earlier extensions are preserved", () => {
   const priorChild = action("prior.child", "Prior child", { origin: "prior" });
-  const result = transformProfileMenuItems([action(accountRowId, "Current", { items: [priorChild], origin: "app" })], "current-user", "current@example.com", [], { addAccount() {}, selectAccount() {}, logOut() {} });
+  const result = transformProfileMenuItems([action(accountRowId, "Current", { items: [priorChild], origin: "app" })], "current-user", "current@example.com", [], { addAccount() {}, selectAccount() {} });
   const parent = result[0];
   assert.equal(parent?.kind, "action");
   if (parent?.kind !== "action") return;
@@ -127,25 +126,16 @@ test("children contributed by earlier extensions are preserved", () => {
 
 test("a menu without an account identity row is unchanged", () => {
   const items: readonly ProfileMenuItem[] = [action("codex.profileDropdown.settingsPage", "Settings", { origin: "app" })];
-  assert.equal(transformProfileMenuItems(items, "current-user", "current@example.com", [], { addAccount() {}, selectAccount() {}, logOut() {} }), items);
+  assert.equal(transformProfileMenuItems(items, "current-user", "current@example.com", [], { addAccount() {}, selectAccount() {} }), items);
 });
 
-test("the native Log out row is routed through the extension while preserving its presentation", () => {
-  let nativeLogouts = 0;
-  const nativeLogout = () => { nativeLogouts += 1; };
-  const logout = action(logoutRowId, "Log out", { icon: "log-out", origin: "app", onClick: nativeLogout });
+test("the native Log out row remains unchanged so ChatGPT owns confirmation", () => {
+  const logout = action(logoutRowId, "Log out", { icon: "log-out", origin: "app", onClick() {} });
   const result = transformProfileMenuItems([action(accountRowId, "Current"), logout], "current-user", "current@example.com", [], {
     addAccount() {},
     selectAccount() {},
-    logOut(original) { original(); },
   });
-  const transformedLogout = result[1];
-  assert.equal(transformedLogout?.kind, "action");
-  if (transformedLogout?.kind !== "action") return;
-  assert.equal(transformedLogout.label, logout.label);
-  assert.equal(transformedLogout.icon, logout.icon);
-  transformedLogout.onClick?.();
-  assert.equal(nativeLogouts, 1);
+  assert.equal(result[1], logout);
 });
 
 test("current credentials are saved under auth-<user-id>.json", async () => {
@@ -155,10 +145,47 @@ test("current credentials are saved under auth-<user-id>.json", async () => {
   assert.deepEqual(store.writes, [["auth-user%2Fid.json", current.authJson]]);
 });
 
+test("two account-specific identities are saved without overwriting each other", async () => {
+  const store = storage();
+  const first: CurrentAuthentication = { userId: '["account-a","shared-user"]', label: "Shared", authJson: "{\"account\":\"a\"}" };
+  const second: CurrentAuthentication = { userId: '["account-b","shared-user"]', label: "Shared", authJson: "{\"account\":\"b\"}" };
+  await saveAuthentication(store, first);
+  await saveAuthentication(store, second);
+  assert.deepEqual(store.writes, [
+    [authenticationFileName(first.userId), first.authJson],
+    [authenticationFileName(second.userId), second.authJson],
+  ]);
+  assert.notEqual(authenticationFileName(first.userId), authenticationFileName(second.userId));
+});
+
 test("account discovery inspects only top-level auth JSON files and sorts labels", async () => {
   const store = storage({ "auth-b.json": JSON.stringify({ userId: "b", label: "Zulu" }), "auth-a.json": JSON.stringify({ userId: "a", label: "Alpha" }), "notes.json": "ignored", "nested/auth-c.json": JSON.stringify({ userId: "c", label: "Nested" }) });
   const accounts = await discoverAccounts(store, authentication());
   assert.deepEqual(accounts, [storedAccount("a", "Alpha"), storedAccount("b", "Zulu")]);
+});
+
+test("account discovery prefers a canonical identity file without deleting an older copy", async () => {
+  const identity = { userId: '["account-a","shared-user"]', label: "Shared" };
+  const canonicalFileName = authenticationFileName(identity.userId);
+  const store = storage({
+    "auth-shared-user.json": JSON.stringify(identity),
+    [canonicalFileName]: JSON.stringify(identity),
+  });
+  const accounts = await discoverAccounts(store, authentication());
+  assert.deepEqual(accounts, [{ fileName: canonicalFileName, ...identity }]);
+  assert.deepEqual(store.deletes, []);
+});
+
+test("account discovery retains an account that exists only under its older filename", async () => {
+  const identity = { userId: '["account-a","shared-user"]', label: "Shared" };
+  const store = storage({
+    "auth-shared-user.json": JSON.stringify(identity),
+  });
+  const accounts = await discoverAccounts(store, authentication());
+  assert.deepEqual(accounts, [
+    { fileName: "auth-shared-user.json", ...identity },
+  ]);
+  assert.deepEqual(store.deletes, []);
 });
 
 test("adding an account persists the current credentials before native sign-in starts", async () => {
@@ -196,45 +223,6 @@ test("selecting an account preserves the account being left before replacement",
   await selectAccount(store, authentication({ async getCurrent() { return current; }, async replaceCurrent(value) { order.push(`replace:${value}`); } }), account);
   assert.deepEqual(order, ["save-current", `replace:${targetAuthJson}`]);
   assert.deepEqual(store.writes, [[authenticationFileName(current.userId), current.authJson]]);
-});
-
-test("logging out deletes the current saved account and follows native logout when no other account exists", async () => {
-  const current: CurrentAuthentication = { userId: "current-user", label: "Current", authJson: "{\"current\":true}" };
-  const store = storage({ [authenticationFileName(current.userId)]: current.authJson });
-  const order: string[] = [];
-  const originalDelete = store.deleteFile;
-  store.deleteFile = async (path) => {
-    order.push("delete");
-    await originalDelete(path);
-  };
-  let nativeLogouts = 0;
-  let replacements = 0;
-  await logOutCurrent(store, authentication({ async getCurrent() { return current; }, async replaceCurrent() { replacements += 1; } }), [storedAccount(current.userId, current.label)], () => { order.push("native-logout"); nativeLogouts += 1; });
-  assert.deepEqual(store.deletes, [authenticationFileName(current.userId)]);
-  assert.deepEqual(order, ["delete", "native-logout"]);
-  assert.equal(nativeLogouts, 1);
-  assert.equal(replacements, 0);
-});
-
-test("logging out deletes the current saved account and switches to another saved account when available", async () => {
-  const current: CurrentAuthentication = { userId: "current-user", label: "Current", authJson: "{\"current\":true}" };
-  const other = storedAccount("other-user", "Other");
-  const otherAuthJson = "{\"other\":true}";
-  const store = storage({ [authenticationFileName(current.userId)]: current.authJson, [other.fileName]: otherAuthJson });
-  const order: string[] = [];
-  const originalDelete = store.deleteFile;
-  store.deleteFile = async (path) => {
-    order.push("delete");
-    await originalDelete(path);
-  };
-  const replacements: string[] = [];
-  let nativeLogouts = 0;
-  await logOutCurrent(store, authentication({ async getCurrent() { return current; }, async replaceCurrent(value) { order.push("replace"); replacements.push(value); } }), [storedAccount(current.userId, current.label), other], () => { nativeLogouts += 1; });
-  assert.deepEqual(store.deletes, [authenticationFileName(current.userId)]);
-  assert.deepEqual(order, ["delete", "replace"]);
-  assert.deepEqual(store.writes, []);
-  assert.deepEqual(replacements, [otherAuthJson]);
-  assert.equal(nativeLogouts, 0);
 });
 
 test("a successful authentication change refreshes the current and stored account menu state", async () => {

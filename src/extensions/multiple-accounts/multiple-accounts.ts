@@ -13,7 +13,6 @@ import {
 
 const EXTENSION_ID = "multiple-accounts";
 const ACCOUNT_ROW_ID = "codex.profileDropdown.account";
-const LOGOUT_ROW_ID = "codex.profileDropdown.logOut";
 const PROFILE_ITEM_ID = `${EXTENSION_ID}.profile`;
 const ADD_ACCOUNT_ITEM_ID = `${EXTENSION_ID}.add-account`;
 const AUTH_FILE_PATTERN = /^auth-.+\.json$/;
@@ -27,7 +26,6 @@ export interface StoredAccount {
 export interface AccountMenuActions {
   readonly addAccount: () => void;
   readonly selectAccount: (account: StoredAccount) => void;
-  readonly logOut: (nativeLogout: () => void) => void;
 }
 
 export function authenticationFileName(userId: string): string {
@@ -39,19 +37,23 @@ export async function saveAuthentication(storage: ExtensionStorage, authenticati
 }
 
 export async function discoverAccounts(storage: ExtensionStorage, authentication: AuthenticationApi): Promise<readonly StoredAccount[]> {
-  const accounts: StoredAccount[] = [];
+  const accounts = new Map<string, StoredAccount>();
   for (const fileName of await storage.listFiles()) {
     if (!AUTH_FILE_PATTERN.test(fileName) || fileName.includes("/")) continue;
     const authJson = await storage.readTextFile(fileName);
     if (authJson === undefined) continue;
     try {
       const identity = await authentication.inspect(authJson);
-      accounts.push({ fileName, ...identity });
+      const canonicalFileName = authenticationFileName(identity.userId);
+      const existing = accounts.get(identity.userId);
+      if (!existing || fileName === canonicalFileName) {
+        accounts.set(identity.userId, { fileName, ...identity });
+      }
     } catch (error) {
       console.error(`[${EXTENSION_ID}] invalid stored authentication: ${fileName}`, error);
     }
   }
-  return accounts.sort((left, right) => left.label.localeCompare(right.label) || left.userId.localeCompare(right.userId));
+  return [...accounts.values()].sort((left, right) => left.label.localeCompare(right.label) || left.userId.localeCompare(right.userId));
 }
 
 export async function addAccount(storage: ExtensionStorage, authentication: AuthenticationApi): Promise<void> {
@@ -72,21 +74,9 @@ async function replaceWithStoredAccount(storage: ExtensionStorage, authenticatio
   await authentication.replaceCurrent(authJson);
 }
 
-export async function logOutCurrent(storage: ExtensionStorage, authentication: AuthenticationApi, accounts: readonly StoredAccount[], nativeLogout: () => void): Promise<void> {
-  const current = await authentication.getCurrent();
-  if (current) await storage.deleteFile(authenticationFileName(current.userId));
-  const nextAccount = accounts.find((account) => account.userId !== current?.userId);
-  if (nextAccount) {
-    await replaceWithStoredAccount(storage, authentication, nextAccount);
-    return;
-  }
-  nativeLogout();
-}
-
 export function transformProfileMenuItems(items: readonly ProfileMenuItem[], currentUserId: string, currentLabel: string, accounts: readonly StoredAccount[], actions: AccountMenuActions): readonly ProfileMenuItem[] {
   const row = items.find((item) => item.id === ACCOUNT_ROW_ID && item.kind === "action");
-  const logout = items.find((item) => item.id === LOGOUT_ROW_ID && item.kind === "action" && typeof item.onClick === "function");
-  if (!row && !logout) return items;
+  if (!row) return items;
   const accountItems = row?.kind === "action"
     ? [
         { kind: "action", id: PROFILE_ITEM_ID, label: "Profile", onClick: row.onClick } satisfies ProfileMenuActionItem,
@@ -103,14 +93,11 @@ export function transformProfileMenuItems(items: readonly ProfileMenuItem[], cur
       ]
     : undefined;
 
-  return items.map((item): ProfileMenuItem => {
-    if (item.id === ACCOUNT_ROW_ID && row?.kind === "action" && accountItems) return { ...row, label: currentLabel, items: accountItems };
-    if (item.id === LOGOUT_ROW_ID && item.kind === "action" && typeof item.onClick === "function") {
-      const nativeLogout = item.onClick;
-      return { ...item, onClick: () => actions.logOut(nativeLogout) };
-    }
-    return item;
-  });
+  return items.map((item): ProfileMenuItem =>
+    item.id === ACCOUNT_ROW_ID && row.kind === "action" && accountItems
+      ? { ...row, label: currentLabel, items: accountItems }
+      : item,
+  );
 }
 
 let registration: Disposable | undefined;
@@ -152,9 +139,6 @@ async function refreshMenuState(api: PlatformApi, storage: ExtensionStorage, sta
     },
     selectAccount: (account) => {
       void selectAccount(storage, api.authentication, account).catch((error) => console.error(`[${EXTENSION_ID}] failed to switch account`, error));
-    },
-    logOut: (nativeLogout) => {
-      void logOutCurrent(storage, api.authentication, state.accounts, nativeLogout).catch((error) => console.error(`[${EXTENSION_ID}] failed to log out`, error));
     },
   };
   registration ??= api.menus.profile.transformItems((items) => transformProfileMenuItems(items, state.currentUserId, state.currentLabel, state.accounts, actions));
