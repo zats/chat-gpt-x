@@ -4170,16 +4170,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           profileProps?.onOpenProfile?.();
         }
       };
-      openNativeSettings = () => {
-        if (typeof dispatchHostMessage === "function") {
-          native.messageBus.dispatchHostMessage({
-            type: "navigate-to-route",
-            path: "/settings/general-settings",
-          });
-        } else {
-          profileProps?.onOpenSettings?.();
-        }
-      };
     }
 
     function threadContextForMenuProps(props) {
@@ -4675,6 +4665,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ["palette", paletteIconModule.t],
         ["settings", appInitialModule.l4],
       ]),
+    };
+    openNativeSettings = () => {
+      native.messageBus.dispatchHostMessage({
+        type: "navigate-to-route",
+        path: "/settings/general-settings",
+      });
     };
     settingsPageCaptureContext = native.React.createContext(null);
     installJsxHook();
@@ -5319,6 +5315,8 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         contentBoundaryRenderCount: settingsContentBoundaryRenderCount,
         contentMountCount: settingsContentMountCount,
       }),
+      settingsNavigationReady: () =>
+        typeof openNativeSettings === "function",
       replaceSettingsGroupSnapshot: replaceDebugSettingsGroupSnapshot,
       settingsSnapshotCommitCount: () =>
         debugSettingsSnapshotCommitCount,

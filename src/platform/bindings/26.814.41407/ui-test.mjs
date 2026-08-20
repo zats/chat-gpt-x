@@ -3853,7 +3853,31 @@ if (selectThreadKind) {
 } else if (selectedThreadId) {
   await selectThread(selectedThreadId, false);
 }
-await waitFor('globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true', 90000);
+if (noProfile) {
+  await waitFor(
+    'globalThis.__CGPTX_HOST__?._debug.nativeReady() === true',
+  );
+  const preProfileSettingsState = await evaluate(`({
+    profileBoundaryReady:
+      globalThis.__CGPTX_HOST__?._debug.authenticationReady() === true,
+    settingsNavigationReady:
+      globalThis.__CGPTX_HOST__?._debug.settingsNavigationReady?.() === true,
+  })`);
+  if (
+    preProfileSettingsState.profileBoundaryReady ||
+    !preProfileSettingsState.settingsNavigationReady
+  ) {
+    throw new Error(
+      'Native Settings navigation is unavailable before the lazy profile menu mounts: ' +
+        JSON.stringify(preProfileSettingsState),
+    );
+  }
+}
+await waitFor(
+  `globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true ||
+    Array.isArray(globalThis.__CGPTX_TEST_RESULTS__)`,
+  90000,
+);
 if (selectedThreadId) await selectThread(selectedThreadId);
 const semanticResults = await evaluate('globalThis.__CGPTX_TEST_RESULTS__');
 const failedSemantic = semanticResults.filter((result) => !result.pass);

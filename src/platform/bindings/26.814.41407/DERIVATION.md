@@ -170,6 +170,11 @@ page props with the contributed title and groups. Search indexes effective
 category, pane, group, item, package-title, and package-description text. A
 result uses the same native selection callback as the sidebar.
 
+The Settings opener uses the initialized native message bus directly. It is
+available before ChatGPT mounts the lazy profile-menu subtree. This is required
+in API-key mode, where the profile boundary can remain unmounted while the
+direct Settings button and public Settings API are available.
+
 ## authentication
 
 The exact helper in `chatgpt-desktop-auth-url-BOw-tdIM.js` has the contract
@@ -233,6 +238,12 @@ bundle. Results:
 - External-browser dispatch: returned without error.
 - `nativeSignInUsedApplicationScope()`: `true`.
 
+A focused API-key run then verified the pre-profile Settings path. The main
+renderer completed all `25/25` applicable public checks with no failures,
+including all four Settings checks. The test driver now waits for completed
+semantic results as well as the visual-fixture signal, so a public failure is
+reported directly instead of as a later fixture-readiness timeout.
+
 The complete deterministic command is:
 
 ```bash
@@ -259,6 +270,8 @@ longer suites.
   fallback page `Ji` and `Yi`.
 - Native Settings text rendered as a string: private app-content retention
   failed.
+- Settings cannot open before the profile menu mounts: the bootstrap message
+  bus opener was not installed.
 - A removed or reordered Settings group stays visible: the committed group
   snapshot was not replaced.
 - Authentication startup failure: the application scope was not captured, the
