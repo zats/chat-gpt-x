@@ -96,6 +96,24 @@ async function waitFor(expression, timeoutMs = 20000) {
   throw new Error('Timed out waiting for: ' + expression);
 }
 
+function findSettingsBackLink() {
+  const hasMessageId = (value) =>
+    Array.isArray(value)
+      ? value.some(hasMessageId)
+      : Boolean(
+          value &&
+            typeof value === 'object' &&
+            (value.props?.id === 'settings.nav.back' ||
+              hasMessageId(value.props?.children)),
+        );
+  return Array.from(document.querySelectorAll('[role="link"]')).find((link) => {
+    const reactPropsKey = Object.keys(link).find((key) =>
+      key.startsWith('__reactProps$'),
+    );
+    return hasMessageId(link[reactPropsKey]?.children);
+  });
+}
+
 async function validateUi(
   expectMissingProfileCallback,
   alternateAuthentication,
@@ -3709,6 +3727,7 @@ async function threadSelectionSnapshot(selector) {
   return evaluate(
     `(() => {
       const row = document.querySelector(${JSON.stringify(selector)});
+      const settingsBack = (${findSettingsBackLink.toString()})();
       const trigger = row?.querySelector("[data-thread-title-trigger]");
       const rect = row?.getBoundingClientRect();
       const reactPropsKey = row
@@ -3720,6 +3739,20 @@ async function threadSelectionSnapshot(selector) {
           globalThis.__CGPTX_UI_TEST_THREADS__?.getCurrent()?.threadId ?? null,
         fixtureReady: globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true,
         nativeReady: globalThis.__CGPTX_HOST__?._debug.nativeReady() === true,
+        settingsBack: settingsBack
+          ? {
+              connected: settingsBack.isConnected,
+              role: settingsBack.getAttribute("role"),
+              messageId: "settings.nav.back",
+            }
+          : null,
+        threadRows: Array.from(
+          document.querySelectorAll("[data-app-action-sidebar-thread-row]"),
+        ).map((candidate) => ({
+          id: candidate.getAttribute("data-app-action-sidebar-thread-id"),
+          kind: candidate.getAttribute("data-app-action-sidebar-thread-kind"),
+          height: candidate.getBoundingClientRect().height,
+        })),
         row: row
           ? {
               connected: row.isConnected,
@@ -3747,13 +3780,39 @@ async function threadSelectionSnapshot(selector) {
   );
 }
 
+async function returnFromSettingsForThreadSelection(selector) {
+  const clicked = await evaluate(
+    `(() => {
+      if (document.querySelector(${JSON.stringify(selector)})) return false;
+      const settingsBack = (${findSettingsBackLink.toString()})();
+      if (!settingsBack) return false;
+      settingsBack.click();
+      return true;
+    })()`,
+  );
+  if (!clicked) return;
+  try {
+    await waitFor(
+      `Boolean(document.querySelector(${JSON.stringify(selector)}))`,
+      20000,
+    );
+  } catch (error) {
+    const state = await threadSelectionSnapshot(selector);
+    throw new Error(
+      `${error.message}; Settings Back did not restore the requested thread row: ${JSON.stringify(state)}`,
+    );
+  }
+}
+
 async function activateThreadRow(
   selector,
   expectedThreadId,
   waitForCurrent = true,
 ) {
-  const selection = await evaluate(
-    `(async () => {
+  let selection;
+  try {
+    selection = await evaluate(
+      `(async () => {
       const deadline = Date.now() + 60000;
       let row;
       let reactPropsKey;
@@ -3817,7 +3876,13 @@ async function activateThreadRow(
       row.click();
       return { before, threadId };
     })()`,
-  );
+    );
+  } catch (error) {
+    const state = await threadSelectionSnapshot(selector);
+    throw new Error(
+      `${error.message}; thread selection state: ${JSON.stringify(state)}`,
+    );
+  }
   if (!waitForCurrent) return selection.threadId;
   try {
     await waitFor(
@@ -3878,7 +3943,6 @@ await waitFor(
     Array.isArray(globalThis.__CGPTX_TEST_RESULTS__)`,
   90000,
 );
-if (selectedThreadId) await selectThread(selectedThreadId);
 const semanticResults = await evaluate('globalThis.__CGPTX_TEST_RESULTS__');
 const failedSemantic = semanticResults.filter((result) => !result.pass);
 if (failedSemantic.length > 0) {
@@ -3898,6 +3962,12 @@ if (publicAPIOnly) {
     ),
   );
   process.exit(0);
+}
+if (selectedThreadId) {
+  const selector =
+    '[data-app-action-sidebar-thread-id$=":' + selectedThreadId + '"]';
+  await returnFromSettingsForThreadSelection(selector);
+  await selectThread(selectedThreadId);
 }
 
 const report = await evaluate(

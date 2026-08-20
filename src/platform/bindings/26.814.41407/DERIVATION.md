@@ -8,7 +8,7 @@ Pinned build:
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.814.41407.zip`
 - Version-watcher reference: issue `#34`
 - Binding date: `2026-08-20`
-- Binding version: `1.1.2`
+- Binding version: `1.1.3`
 - ChatGPT API version: `1.1.1`
 
 Research used an extracted copy of this exact stock application. Static
@@ -18,7 +18,7 @@ The stock app bundle and installed user state were not changed.
 
 ## Correction scope
 
-The first binding for this app build used ChatGPT API `1.0.4`. Binding `1.1.2`
+The first binding for this app build used ChatGPT API `1.0.4`. Binding `1.1.3`
 promotes the exact build to the current API `1.1.1`, including the native
 Settings integration. It also corrects the current ChatGPT sign-in contract.
 The current sign-in helper requires the application scope object. Calling the
@@ -135,7 +135,7 @@ it through the native React DOM renderer, and resolves
 
 ## settings
 
-Binding `1.1.2` adds ChatGPT API `1.1.1` Settings support to this exact build.
+Binding `1.1.3` adds ChatGPT API `1.1.1` Settings support to this exact build.
 `settings-page-BZsvuxcO.js` supplies the native Settings shell, search, and
 selection contracts. Contributed panes and controls use only the current
 app's native page, group, row, toggle, select, dropdown, button, icon, and
@@ -244,16 +244,27 @@ including all four Settings checks. The test driver now waits for completed
 semantic results as well as the visual-fixture signal, so a public failure is
 reported directly instead of as a later fixture-readiness timeout.
 
-The complete deterministic command is:
+The Settings checks finish on the native Settings route, where the main app
+sidebar is not mounted. The binding test driver validates those semantic
+results before it changes routes. A public-only run exits at that point. The
+native-UI run finds the current `role="link"` Back control through its
+`settings.nav.back` React message descriptor, activates it, waits for the exact
+seeded thread row to return, and only then restores the selected thread. It
+does not depend on localized Back text or CDP target order. A missing row now
+reports the Settings Back state and every available scoped thread row.
+
+The complete deterministic API-key command is:
 
 ```bash
 CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
-  scripts/run-local-ci.sh --use-current-accounts
+  scripts/run-local-ci.sh /path/to/api-key-auth.json
 ```
 
-The complete public and native result counts are recorded after that command
-finishes. The focused authenticated result above is independent of those
-longer suites.
+The exact stock build passed `25/25` public checks and persisted the same main
+renderer result, passed `35/35` native composition checks, and passed `35`
+extension and utility unit checks under Bun `1.3.14`. The Release launcher was
+signed and contained no bundled platform components. The focused authenticated
+sign-in result above is independent of this API-key matrix.
 
 ## Failure signatures
 
