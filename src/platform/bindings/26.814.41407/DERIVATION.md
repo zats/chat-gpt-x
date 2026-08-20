@@ -7,8 +7,8 @@ Pinned build:
 - Electron: `151.0.7922.137`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.814.41407.zip`
 - Version-watcher reference: issue `#34`
-- Binding date: `2026-08-19`
-- Binding version: `1.1.1`
+- Binding date: `2026-08-20`
+- Binding version: `1.1.2`
 - ChatGPT API version: `1.1.1`
 
 Research used an extracted copy of this exact stock application. Static
@@ -18,7 +18,7 @@ The stock app bundle and installed user state were not changed.
 
 ## Correction scope
 
-The first binding for this app build used ChatGPT API `1.0.4`. This correction
+The first binding for this app build used ChatGPT API `1.0.4`. Binding `1.1.2`
 promotes the exact build to the current API `1.1.1`, including the native
 Settings integration. It also corrects the current ChatGPT sign-in contract.
 The current sign-in helper requires the application scope object. Calling the
@@ -135,7 +135,7 @@ it through the native React DOM renderer, and resolves
 
 ## settings
 
-Binding `1.1.1` adds ChatGPT API `1.1.1` Settings support to this exact build.
+Binding `1.1.2` adds ChatGPT API `1.1.1` Settings support to this exact build.
 `settings-page-BZsvuxcO.js` supplies the native Settings shell, search, and
 selection contracts. Contributed panes and controls use only the current
 app's native page, group, row, toggle, select, dropdown, button, icon, and
