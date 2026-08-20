@@ -1748,18 +1748,24 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     const accessAuthentication =
       accessClaims?.["https://api.openai.com/auth"];
     const accessProfile = accessClaims?.["https://api.openai.com/profile"];
-    const userId = nonEmptyString(
-      idAuthentication?.chatgpt_user_id,
-      idAuthentication?.user_id,
-      accessAuthentication?.chatgpt_user_id,
-      accessAuthentication?.chatgpt_account_user_id,
-      accessAuthentication?.user_id,
-      idClaims?.sub,
-      accessClaims?.sub,
+    const accountId = nonEmptyString(
+      accessAuthentication?.chatgpt_account_id,
+      accessAuthentication?.account_id,
+      idAuthentication?.chatgpt_account_id,
+      idAuthentication?.account_id,
     );
-    if (!userId) {
-      throw new TypeError("authJson does not contain a ChatGPT user id");
+    const authenticationUserId = nonEmptyString(
+      accessAuthentication?.user_id,
+      accessAuthentication?.chatgpt_user_id,
+      idAuthentication?.user_id,
+      idAuthentication?.chatgpt_user_id,
+    );
+    if (!accountId || !authenticationUserId) {
+      throw new TypeError(
+        "authJson does not contain a ChatGPT account identity",
+      );
     }
+    const userId = JSON.stringify([accountId, authenticationUserId]);
     const label = nonEmptyString(
       idClaims?.email,
       accessProfile?.email,

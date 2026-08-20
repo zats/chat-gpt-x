@@ -9,8 +9,8 @@ Pinned build:
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.818.21641.zip`
 - Enclosure length: `603590340` bytes
 - Binding date: `2026-08-20`
-- Binding version: `1.0.0`
-- ChatGPT API version: `1.1.1`
+- Binding version: `1.0.1`
+- ChatGPT API version: `1.1.2`
 
 Research used an extracted copy of this exact stock application. The cached
 Sparkle appcast for build `6849` supplied the exact enclosure URL and length.
@@ -19,7 +19,8 @@ app.asar hash. Static candidates were checked through current ESM import edges,
 stock callers, and semantic anchors. Live behavior was checked with isolated
 profiles. The stock app bundle and installed user state were not changed.
 
-This binding starts from the completed `26.814.41407` API `1.1.1` behavior.
+This binding starts from the completed `26.814.41407` API `1.1.1` behavior
+and implements the account-identity correction in API `1.1.2`.
 All content-hashed assets, initializers, public exports, stock callers, CSS
 tokens, and build-specific wrappers were derived again from `26.818.21641`.
 No short export name was accepted without a current semantic check. This was
@@ -166,6 +167,10 @@ the Profile boundary. `startSignIn` rejects if the scope is not ready. It
 passes that exact object to `o`, decorates the returned URL through `t`, and
 uses `zut` for the external-browser dispatch.
 
+Identity inspection uses the access token's ChatGPT account ID and auth user
+ID as one opaque storage identity. This keeps two account memberships for the
+same user distinct and keeps one membership stable across token refreshes.
+
 Successful sign-in removes the exact `_jt("account-info")` query and updates
 the auth nonce under native providers. Credential replacement atomically
 updates `auth.json` under the resolved Codex home, dispatches
@@ -209,11 +214,12 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
   scripts/run-local-ci.sh /path/to/api-key-auth.json
 ```
 
-The exact stock build passed `25/25` applicable public checks and persisted
-the same main renderer result. It passed `35/35` native composition checks and
-`35` extension and utility unit checks under Bun `1.3.14`. The Release
-launcher built and signed successfully and contained no bundled platform
-components.
+The original `1.0.0` binding passed `25/25` applicable public checks,
+`35/35` native composition checks, and `35` extension and utility unit checks
+under Bun `1.3.14`. The `1.0.1` identity correction passed the focused
+Multiple Accounts suite `15/15` and the authenticated public API suite
+`45/45`, with matching persisted renderer results. The Release launcher built
+and signed successfully and contained no bundled platform components.
 
 A separate focused authenticated probe used an isolated component store, a
 copied authentication file, a separate copied Electron profile, and the exact
@@ -238,6 +244,9 @@ also proves that the external-browser path was reached.
 - Some prior short exports still existed but had different meanings. In
   particular, the old scope aliases now identify browser-use routes. The stock
   login-route consumer led to `uVt(hFt)`.
+- The original account identity ignored `chatgpt_account_id`, so two account
+  memberships for one user could overwrite one saved authentication file.
+  The opaque account-and-user pair removes that collision.
 - The thread overflow topology changed from a direct Radix root or special
   native-context wrapper to the shared `v1` generic adapter. A direct wrapper
   expansion did not retain semantic IDs because `v1` converts messages to

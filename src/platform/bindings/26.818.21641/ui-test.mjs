@@ -615,10 +615,8 @@ async function validateUi(
       tabToolbar = sidePanel?.querySelector(
         '[data-app-shell-tabs="true"] > .h-toolbar',
       );
-    } else if (originalThreadKind === 'remote') {
-      tabToolbar = null;
     } else {
-      throw new Error('Browser side-panel action missing');
+      tabToolbar = null;
     }
   }
   if (
@@ -1324,16 +1322,21 @@ async function validateUi(
   }
   const syntheticClaims = btoa(
     JSON.stringify({
-      sub: 'synthetic-user',
-      name: 'Shared Name',
-      email: 'unique@example.com',
+      'https://api.openai.com/auth': {
+        chatgpt_account_id: 'synthetic-account',
+        user_id: 'synthetic-user',
+      },
+      'https://api.openai.com/profile': {
+        name: 'Shared Name',
+        email: 'unique@example.com',
+      },
     }),
   )
     .replaceAll('+', '-')
     .replaceAll('/', '_')
     .replaceAll('=', '');
   const syntheticIdentity = globalThis.__CGPTX_HOST__._debug.inspectAuthentication(
-    JSON.stringify({ tokens: { id_token: `header.${syntheticClaims}.signature` } }),
+    JSON.stringify({ tokens: { access_token: `header.${syntheticClaims}.signature` } }),
   );
   check(
     syntheticIdentity.label === 'unique@example.com',

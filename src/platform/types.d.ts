@@ -967,7 +967,11 @@ export interface SettingsButtonOptions {
  * @group Authentication
  */
 export interface AuthenticationIdentity {
-  /** Stable account identifier used to distinguish stored accounts. */
+  /**
+   * Stable opaque identity for one ChatGPT account membership.
+   *
+   * Two accounts remain distinct even when they belong to the same ChatGPT user. The value stays stable across token refreshes and is suitable for a storage key. Do not parse it.
+   */
   readonly userId: string;
 
   /** User-facing account label, preferring email, then account name, then user id. */

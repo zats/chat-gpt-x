@@ -1950,6 +1950,42 @@ test("authentication: invalid serialized credentials are rejected", async () => 
   assert(rejected, "invalid credentials are rejected");
 });
 
+test("authentication: stored identity distinguishes ChatGPT accounts for one user", async () => {
+  const credentials = (accountId: string, userId: string, tokenId: string) => {
+    const claims = btoa(
+      JSON.stringify({
+        jti: tokenId,
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: accountId,
+          user_id: userId,
+        },
+        "https://api.openai.com/profile": {
+          email: "shared@example.com",
+        },
+      }),
+    )
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replaceAll("=", "");
+    return JSON.stringify({
+      tokens: { access_token: `header.${claims}.signature` },
+    });
+  };
+
+  const first = await api.authentication.inspect(
+    credentials("account-a", "shared-user", "first-token"),
+  );
+  const refreshed = await api.authentication.inspect(
+    credentials("account-a", "shared-user", "refreshed-token"),
+  );
+  const second = await api.authentication.inspect(
+    credentials("account-b", "shared-user", "second-token"),
+  );
+
+  assert(first.userId === refreshed.userId, "the same account keeps its identity across token refreshes");
+  assert(first.userId !== second.userId, "different accounts for one user have different identities");
+});
+
 profileTest("authentication: native sign-in starts and credential replacement preserves the selected account", async () => {
   const current = await api.authentication.getCurrent();
   assert(current, "authenticated test profile has credentials to restore");
