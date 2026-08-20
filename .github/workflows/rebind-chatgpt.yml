@@ -220,6 +220,7 @@ jobs:
       base-sha: ${{ steps.base.outputs.sha }}
       codex-version: ${{ steps.codex.outputs.version }}
       patch-artifact: ${{ steps.patch.outputs.artifact-name }}
+      binding-ready: ${{ steps.result.outputs.ready }}
       app-validation-error: ${{ steps.chatgpt.outputs.validation-error }}
     steps:
       - uses: actions/checkout@v4
@@ -598,6 +599,7 @@ jobs:
           "$RUNNER_TEMP/chatgpt-app"
 
       - name: Require successful binding
+        id: result
         if: always()
         env:
           AGENT_EXIT_CODE: ${{ steps.agent.outputs.exit-code }}
@@ -605,13 +607,30 @@ jobs:
           PATCH_OUTCOME: ${{ steps.patch.outcome }}
           EXPOSURE_OUTCOME: ${{ steps.exposure.outcome }}
         run: |
-          [[ "$AGENT_EXIT_CODE" == "0" ]]
-          [[ "$SCOPE_OUTCOME" == "success" ]]
-          [[ "$PATCH_OUTCOME" == "success" ]]
-          [[ "$EXPOSURE_OUTCOME" == "success" ]]
+          if [[ "$AGENT_EXIT_CODE" != "0" ]]; then
+            echo "::error title=Codex rebind agent failed::Codex exited with status $AGENT_EXIT_CODE. See the Report agent result step and failure diagnostics."
+            exit 1
+          fi
+          if [[ "$SCOPE_OUTCOME" != "success" ]]; then
+            echo "::error title=Binding scope validation failed::Scope validation outcome: $SCOPE_OUTCOME."
+            exit 1
+          fi
+          if [[ "$PATCH_OUTCOME" != "success" ]]; then
+            echo "::error title=Binding patch creation failed::Patch creation outcome: $PATCH_OUTCOME."
+            exit 1
+          fi
+          if [[ "$EXPOSURE_OUTCOME" != "success" ]]; then
+            echo "::error title=Authentication exposure check failed::Exposure check outcome: $EXPOSURE_OUTCOME."
+            exit 1
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
   open-pull-request:
     needs: generate
+    if: >-
+      needs.generate.result == 'success' &&
+      needs.generate.outputs.binding-ready == 'true' &&
+      needs.generate.outputs.patch-artifact != ''
     runs-on: ubuntu-latest
     environment: codex-agent
     permissions:
