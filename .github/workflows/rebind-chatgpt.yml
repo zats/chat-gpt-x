@@ -447,6 +447,7 @@ jobs:
           agent_exit_code="${PIPESTATUS[0]}"
           set -e
           echo "exit-code=$agent_exit_code" >> "$GITHUB_OUTPUT"
+          exit "$agent_exit_code"
 
       - name: Finalize update index hashes
         if: steps.agent.outputs.exit-code == '0'
@@ -560,9 +561,46 @@ jobs:
           DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
         run: |
           if [[ "$AGENT_EXIT_CODE" != "0" ]]; then
-            echo "Codex exited with status $AGENT_EXIT_CODE"
-            rg -n -i '"type":"error"|error:|failed|failure|exception|fatal' \
-              "$DIAGNOSTICS_ROOT/agent.jsonl" || true
+            failure_cause="$(
+              jq -Rr '
+                fromjson?
+                | if .type == "turn.failed" then .error.message
+                  elif .type == "error" then .message
+                  elif .type == "item.completed" and .item.type == "error" then .item.message
+                  else empty
+                  end
+              ' "$DIAGNOSTICS_ROOT/agent.jsonl" |
+                tail -n 1 |
+                cut -c 1-1000
+            )"
+            next_action="Open the failed Codex step and the failure diagnostics artifact."
+            if rg -q 'token_revoked|invalidated oauth token' \
+              "$DIAGNOSTICS_ROOT/agent.jsonl"; then
+              failure_cause="Codex authentication failed because CODEX_AGENT_AUTH_JSON contains a revoked OAuth token (token_revoked)."
+              next_action="Refresh the CI Codex authentication secret, then rerun this workflow."
+            elif [[ -z "$failure_cause" ]]; then
+              failure_cause="Codex exited with status $AGENT_EXIT_CODE without a final error message."
+            fi
+
+            annotation="$failure_cause $next_action"
+            annotation="${annotation//'%'/'%25'}"
+            annotation="${annotation//$'\r'/'%0D'}"
+            annotation="${annotation//$'\n'/'%0A'}"
+            echo "::error title=Codex rebind agent failed::$annotation"
+            {
+              echo "## Binding generation failed"
+              echo
+              echo "**Failed stage:** Codex rebind agent"
+              echo
+              echo "**Cause:** $failure_cause"
+              echo
+              echo "**Next action:** $next_action"
+              echo
+              echo "**Exit status:** $AGENT_EXIT_CODE"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            echo "$failure_cause"
+            echo "$next_action"
           fi
           if [[ -s "$DIAGNOSTICS_ROOT/agent-final.txt" ]]; then
             cat "$DIAGNOSTICS_ROOT/agent-final.txt"
@@ -600,7 +638,7 @@ jobs:
 
       - name: Require successful binding
         id: result
-        if: always()
+        if: always() && !failure()
         env:
           AGENT_EXIT_CODE: ${{ steps.agent.outputs.exit-code }}
           SCOPE_OUTCOME: ${{ steps.scope.outcome }}
