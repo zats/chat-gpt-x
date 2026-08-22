@@ -1,0 +1,43 @@
+name: Retry runner infrastructure failure
+
+on:
+  workflow_run:
+    workflows:
+      - Rebind ChatGPT
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retry-runner-infrastructure-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+      contains(
+        fromJSON('["workflow_dispatch", "repository_dispatch", "issues", "issue_comment"]'),
+        github.event.workflow_run.event
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+    steps:
+      - name: Check out trusted retry logic
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Retry hosted-runner communication failure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: node scripts/retry-runner-infrastructure-failure.mjs

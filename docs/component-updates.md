@@ -259,6 +259,27 @@ in its temporary versioned store before it starts the launcher. This tests
 unpublished changes without putting components in the launcher bundle or
 requiring their releases to exist before CI can approve them.
 
+## Automated binding retries
+
+The version watcher creates one issue for each unknown ChatGPT build. The
+`Rebind ChatGPT` workflow moves the issue from `pending` or `failed` to
+`in-progress`. It then prepares the exact stock app before it starts the Codex
+agent. The agent cannot download another ChatGPT app.
+
+An authorized repository member can comment `retry` on a failed version issue.
+This starts the same full binding flow again. The workflow publishes the tested
+binding, updates the issue to `success`, and closes the issue only after all
+required jobs pass.
+
+The `Retry runner infrastructure failure` workflow handles one GitHub-hosted
+runner failure that is outside the binding logic. It requires GitHub's exact
+"hosted runner lost communication" failure annotation. It reruns only the
+failed jobs and their dependent jobs, restores the version issue to
+`in-progress`, and adds a comment with the new attempt. It permits one automatic
+retry, for a maximum of two attempts. A second runner communication failure
+leaves the issue failed. Test failures, agent failures, timeouts, cancellations,
+and other errors do not start an automatic retry.
+
 ## Publication
 
 CI derives release changes from component paths, builds deterministic archives,

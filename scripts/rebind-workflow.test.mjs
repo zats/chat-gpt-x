@@ -12,6 +12,13 @@ const skill = readFileSync(
   new URL("../.agents/skills/rebind-chatgpt-version/SKILL.md", import.meta.url),
   "utf8",
 );
+const retryWorkflow = readFileSync(
+  new URL(
+    "../.github/workflows/retry-runner-infrastructure-failure.yml",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("the workflow prepares the exact research tree before the agent", () => {
   const extraction = workflow.indexOf(
@@ -52,4 +59,14 @@ test("the rebind skill honors prepared research inputs", () => {
     /When orchestration supplies an exact stock app path and prepared `app\.asar` research tree/,
   );
   assert.match(skill, /Never download a ChatGPT app during an agent-driven rebind\./);
+});
+
+test("runner infrastructure retries are isolated and limited", () => {
+  assert.match(retryWorkflow, /workflows:\s*\n\s*- Rebind ChatGPT/);
+  assert.match(retryWorkflow, /workflow_run\.conclusion == 'failure'/);
+  assert.match(retryWorkflow, /actions: write/);
+  assert.match(
+    retryWorkflow,
+    /node scripts\/retry-runner-infrastructure-failure\.mjs/,
+  );
 });
