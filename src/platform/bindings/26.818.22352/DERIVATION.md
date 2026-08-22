@@ -8,8 +8,8 @@ Pinned build:
 - Electron: `151.0.7922.170`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.818.22352.zip`
 - Enclosure length: `603601973` bytes
-- Binding date: `2026-08-20`
-- Binding version: `1.0.0`
+- Binding date: `2026-08-22`
+- Binding version: `1.0.1`
 - ChatGPT API version: `1.1.2`
 
 Research used an extracted copy of this exact stock application. The Sparkle
@@ -27,6 +27,13 @@ asset remains unchanged.
 No short export name was accepted without a current semantic check. This was
 required because some unchanged short names have different meanings in this
 build.
+
+Binding correction `1.0.1` keeps the host implementation unchanged. The live
+native UI validator now activates each visible thread action trigger with the
+complete pointer-down, pointer-up, and click sequence used elsewhere in the
+suite. This covers both current native trigger variants. A failed activation
+reports the selected trigger geometry, thread identity, visible trigger count,
+and any visible menus.
 
 ## Verified module map
 
@@ -216,7 +223,7 @@ CHATGPT_APP_PATH="$CHATGPT_APP_PATH" \
 ```
 
 The exact stock build passed the canonical API-key validation with Bun
-`1.3.14`: `36` extension and utility unit checks, `26/26` applicable public
+`1.4.0`: `36` extension and utility unit checks, `26/26` applicable public
 API checks with matching persisted renderer results, and `35/35` native UI
 and shipped-extension composition checks. The Release launcher built and
 signed successfully and contained no bundled platform components.
@@ -229,6 +236,9 @@ signed successfully and contained no bundled platform components.
   shared exports moved. The binding uses only the current export map above.
 - The stock login-route consumer identifies `TVt(AFt)` as the current
   application-scope hook call.
+- GitHub's headed runner can select a different visible thread action trigger
+  than a local run. Pointer-only synthetic activation did not cover both
+  current trigger variants. The complete native activation sequence does.
 
 ## Failure signatures
 

@@ -237,29 +237,43 @@ async function validateUi(
     );
     const trigger = findTrigger();
     if (!trigger) throw new Error('Thread menu trigger missing');
-    for (const type of ['pointerdown', 'pointerup']) {
-      trigger.dispatchEvent(
-        new PointerEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          isPrimary: true,
-          button: 0,
-          pointerType: 'mouse',
-        }),
+    activateButton(trigger);
+    let menu;
+    try {
+      await waitUntil(
+        () => {
+          menu = Array.from(document.querySelectorAll('[role="menu"]')).find(
+            (candidate) =>
+              Array.from(candidate.children).some((child) =>
+                child.hasAttribute('data-cgptx-thread-id'),
+              ),
+          );
+          return Boolean(menu);
+        },
+      );
+    } catch (error) {
+      const triggerRect = trigger.getBoundingClientRect();
+      const state = {
+        triggerConnected: trigger.isConnected,
+        threadId: trigger.getAttribute('data-cgptx-thread-id'),
+        triggerRect: {
+          x: triggerRect.x,
+          y: triggerRect.y,
+          width: triggerRect.width,
+          height: triggerRect.height,
+        },
+        visibleTriggerCount: Array.from(
+          document.querySelectorAll('button[aria-label="Chat actions"]'),
+        ).filter((button) => button.getBoundingClientRect().height > 0).length,
+        visibleMenus: Array.from(document.querySelectorAll('[role="menu"]')).map(
+          (candidate) => candidate.textContent?.trim(),
+        ),
+      };
+      const cause = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Thread menu did not open after full pointer and click activation: ${JSON.stringify(state)}. ${cause}`,
       );
     }
-    let menu;
-    await waitUntil(
-      () => {
-        menu = Array.from(document.querySelectorAll('[role="menu"]')).find(
-          (candidate) =>
-            Array.from(candidate.children).some((child) =>
-              child.hasAttribute('data-cgptx-thread-id'),
-            ),
-        );
-        return Boolean(menu);
-      },
-    );
     return menu;
   };
   const openProfile = async () => {
