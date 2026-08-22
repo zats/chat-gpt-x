@@ -177,12 +177,12 @@ test("retries the exact color-picker timing failure after earlier tests pass", a
       { id: 10, name: "generate", conclusion: "success" },
       {
         id: 11,
-        name: "validate-pull-request / static",
+        name: "validate-candidate / static",
         conclusion: "success",
       },
       {
         id: 12,
-        name: "validate-pull-request / end-to-end",
+        name: "validate-candidate / end-to-end",
         conclusion: "failure",
       },
     ],

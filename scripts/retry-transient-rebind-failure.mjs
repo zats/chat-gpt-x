@@ -53,7 +53,7 @@ export async function findRetryableFailures({
     ) &&
     jobs.some(
       (job) =>
-        job.name === "validate-pull-request / static" &&
+        job.name === "validate-candidate / static" &&
         job.conclusion === "success",
     );
 
@@ -76,7 +76,7 @@ export async function findRetryableFailures({
     if (
       failures.some((failure) => failure.jobId === job.id) ||
       !bindingPassedEarlierTests ||
-      job.name !== "validate-pull-request / end-to-end"
+      job.name !== "validate-candidate / end-to-end"
     ) {
       continue;
     }
@@ -125,7 +125,7 @@ function retryReason(failures) {
   if (kinds.has("runner-lost-communication")) {
     return "GitHub reported that the hosted runner lost communication";
   }
-  return "The binding passed its earlier agent tests, but PR validation hit the known native-UI color-picker timing failure";
+  return "The binding passed its earlier agent tests, but candidate validation hit the known native-UI color-picker timing failure";
 }
 
 export async function retryTransientRebindFailure({

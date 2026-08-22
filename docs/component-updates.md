@@ -292,9 +292,10 @@ The version watcher creates one issue for each unknown ChatGPT build. The
 agent. The agent cannot download another ChatGPT app.
 
 An authorized repository member can comment `retry` on a failed version issue.
-This starts the same full binding flow again. If the failed run created a pull
-request, the workflow verifies and applies that generated binding patch to the
-new `main` base. It also gives the agent the exact prior end-to-end failure log.
+This starts the same full binding flow again. If the failed run created a
+candidate branch, the workflow verifies and applies that generated binding
+patch to the new `main` base. It also gives the agent the exact prior
+end-to-end failure log.
 The agent must diagnose and correct that evidence before it runs the full suite
 again. The workflow publishes the tested binding, updates the issue to
 `success`, and closes the issue only after all required jobs pass.

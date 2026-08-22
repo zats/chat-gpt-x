@@ -271,7 +271,6 @@ jobs:
       actions: read
       contents: read
       issues: read
-      pull-requests: read
     outputs:
       version: ${{ needs.request.outputs.version }}
       download-url: ${{ needs.request.outputs.download-url }}
@@ -321,7 +320,7 @@ jobs:
             echo "mode=new" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Seed retry from previous generated pull request
+      - name: Seed retry from previous candidate branch
         id: previous-attempt
         env:
           APP_VERSION: ${{ needs.request.outputs.version }}
@@ -331,56 +330,37 @@ jobs:
         run: |
           echo "available=false" >> "$GITHUB_OUTPUT"
           branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
-          gh pr list \
-            --repo "$GITHUB_REPOSITORY" \
-            --head "$branch_name" \
-            --base main \
-            --state open \
-            --json number,url,author,baseRefName,headRefName,headRefOid,isCrossRepository \
-            > "$RUNNER_TEMP/previous-binding-prs.json"
-          pr_count="$(jq length "$RUNNER_TEMP/previous-binding-prs.json")"
-          if [[ "$pr_count" == "0" ]]; then
-            echo "No previous generated pull request found."
+          candidate_ref="$(
+            git ls-remote --heads origin "refs/heads/$branch_name"
+          )"
+          if [[ -z "$candidate_ref" ]]; then
+            echo "No previous candidate branch found."
             exit 0
           fi
-          [[ "$pr_count" == "1" ]] || {
-            echo "Expected one previous generated pull request, found $pr_count." >&2
+          [[ "$(wc -l <<< "$candidate_ref" | tr -d ' ')" == "1" ]] || {
+            echo "Candidate branch lookup returned multiple refs." >&2
             exit 1
           }
-          jq -e \
-            --arg branch "$branch_name" \
-            '
-              .[0].author.login == "app/github-actions" and
-              .[0].baseRefName == "main" and
-              .[0].headRefName == $branch and
-              .[0].isCrossRepository == false and
-              (.[0].headRefOid | test("^[0-9a-f]{40}$"))
-            ' \
-            "$RUNNER_TEMP/previous-binding-prs.json" >/dev/null || {
-              echo "Previous pull request identity is invalid." >&2
-              exit 1
-            }
-
-          pr_number="$(jq -r '.[0].number' "$RUNNER_TEMP/previous-binding-prs.json")"
-          pr_url="$(jq -r '.[0].url' "$RUNNER_TEMP/previous-binding-prs.json")"
-          pr_head="$(jq -r '.[0].headRefOid' "$RUNNER_TEMP/previous-binding-prs.json")"
-          git fetch --no-tags origin "$pr_head"
-          [[ "$(git rev-parse FETCH_HEAD)" == "$pr_head" ]]
-          pr_parent="$(git rev-parse "$pr_head^")"
+          read -r candidate_head candidate_ref_name <<< "$candidate_ref"
+          [[ "$candidate_head" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$candidate_ref_name" == "refs/heads/$branch_name" ]]
+          git fetch --no-tags origin "$candidate_head"
+          [[ "$(git rev-parse FETCH_HEAD)" == "$candidate_head" ]]
+          candidate_parent="$(git rev-parse "$candidate_head^")"
           binding_root="src/platform/bindings/$APP_VERSION"
-          git diff --name-only "$pr_parent" "$pr_head" \
+          git diff --name-only "$candidate_parent" "$candidate_head" \
             > "$RUNNER_TEMP/previous-binding-paths.txt"
           while IFS= read -r changed_path; do
             case "$changed_path" in
               "$binding_root"/* | src/platform/bindings/manifest.json | updates/latest.json)
                 ;;
               *)
-                echo "Previous generated pull request changed a forbidden path: $changed_path" >&2
+                echo "Previous candidate branch changed a forbidden path: $changed_path" >&2
                 exit 1
                 ;;
             esac
           done < "$RUNNER_TEMP/previous-binding-paths.txt"
-          git diff --binary "$pr_parent" "$pr_head" -- \
+          git diff --binary "$candidate_parent" "$candidate_head" -- \
             "$binding_root" \
             src/platform/bindings/manifest.json \
             updates/latest.json \
@@ -392,7 +372,7 @@ jobs:
           git apply --3way "$RUNNER_TEMP/previous-binding.patch"
           git diff --check "$BASE_SHA"
           [[ -f "$binding_root/manifest.json" ]] || {
-            echo "Previous pull request did not seed the target binding." >&2
+            echo "Previous candidate branch did not seed the target binding." >&2
             exit 1
           }
 
@@ -413,7 +393,7 @@ jobs:
             failed_job_id="$(
               gh api \
                 "repos/$GITHUB_REPOSITORY/actions/runs/$previous_run_id/jobs?filter=latest&per_page=100" \
-                --jq '[.jobs[] | select(.name == "validate-pull-request / end-to-end" and .conclusion == "failure")][0].id // empty'
+                --jq '[.jobs[] | select(.name == "validate-candidate / end-to-end" and .conclusion == "failure")][0].id // empty'
             )"
             if [[ -n "$failed_job_id" ]]; then
               failure_log="$RUNNER_TEMP/previous-validation.log"
@@ -429,11 +409,10 @@ jobs:
 
           {
             echo "available=true"
-            echo "pr-number=$pr_number"
-            echo "pr-url=$pr_url"
+            echo "candidate-sha=$candidate_head"
             echo "failure-log=$failure_log"
           } >> "$GITHUB_OUTPUT"
-          echo "Seeded retry from previous generated pull request $pr_url."
+          echo "Seeded retry from previous candidate $candidate_head."
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -613,7 +592,7 @@ jobs:
           CHATGPT_RESEARCH_DIR: ${{ steps.research-app.outputs.extract-dir }}
           CHATGPT_ELECTRON_VERSION: ${{ steps.research-app.outputs.electron-version }}
           CHATGPT_ASAR_SHA256: ${{ steps.research-app.outputs.asar-sha256 }}
-          PREVIOUS_BINDING_PR: ${{ steps.previous-attempt.outputs.pr-url }}
+          PREVIOUS_CANDIDATE_SHA: ${{ steps.previous-attempt.outputs.candidate-sha }}
           PREVIOUS_VALIDATION_LOG: ${{ steps.previous-attempt.outputs.failure-log }}
           AGENT_CODEX_HOME: ${{ steps.authentication.outputs.agent-home }}
           AUTH_ROOT: ${{ steps.authentication.outputs.auth-root }}
@@ -643,8 +622,8 @@ jobs:
             final_test="CHATGPT_APP_PATH=\"$CHATGPT_APP_PATH\" scripts/run-local-ci.sh \"$AUTH_ROOT/primary.json\" \"$AUTH_ROOT/secondary.json\""
             authentication_scope="Complete every gate, including profile-dependent gates and account switching."
           fi
-          if [[ -n "$PREVIOUS_BINDING_PR" ]]; then
-            retry_context="This is a correction attempt for a generated binding that did not complete validation. The workflow seeded the worktree from $PREVIOUS_BINDING_PR. Preserve its useful derivation and implementation work. Treat its validation failure as unresolved."
+          if [[ -n "$PREVIOUS_CANDIDATE_SHA" ]]; then
+            retry_context="This is a correction attempt for a generated binding that did not complete validation. The workflow seeded the worktree from candidate $PREVIOUS_CANDIDATE_SHA. Preserve its useful derivation and implementation work. Treat its validation failure as unresolved."
             if [[ -n "$PREVIOUS_VALIDATION_LOG" ]]; then
               retry_context="$retry_context Read the exact prior validation log at $PREVIOUS_VALIDATION_LOG before you edit or test. Diagnose and correct the reported behavior. Do not dismiss it as transient or only rerun the same test."
             fi
@@ -916,7 +895,7 @@ jobs:
           fi
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
-  open-pull-request:
+  prepare-candidate:
     needs: generate
     if: >-
       needs.generate.result == 'success' &&
@@ -926,11 +905,8 @@ jobs:
     environment: codex-agent
     permissions:
       contents: write
-      pull-requests: write
     outputs:
       head-sha: ${{ steps.binding-final.outputs.head-sha }}
-      pr-number: ${{ steps.pull-request.outputs.number }}
-      pr-url: ${{ steps.pull-request.outputs.url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1087,7 +1063,7 @@ jobs:
             "$RUNNER_TEMP/rebase-resolver.jsonl" \
             "$RUNNER_TEMP/rebase-resolver-final.txt"
 
-      - name: Validate and push binding
+      - name: Validate and push candidate
         if: always() && steps.binding.outcome == 'success'
         id: binding-final
         env:
@@ -1230,157 +1206,69 @@ jobs:
           "$RUNNER_TEMP/rebase-resolver.jsonl"
           "$RUNNER_TEMP/rebase-resolver-final.txt"
 
-      - name: Open pull request
-        id: pull-request
-        env:
-          APP_VERSION: ${{ needs.generate.outputs.version }}
-          BINDING_MODE: ${{ needs.generate.outputs.binding-mode }}
-          EXPECTED_HEAD_SHA: ${{ steps.binding-final.outputs.head-sha }}
-          ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
-          if [[ "$BINDING_MODE" == "correction" ]]; then
-            title="Update bindings for ChatGPT $APP_VERSION"
-          else
-            title="Create bindings for ChatGPT $APP_VERSION"
-          fi
-          body="Generated by the ChatGPT rebinding workflow. The shared CI workflow must pass before automatic merge.
-
-          Tracks #$ISSUE_NUMBER."
-          existing_pr="$(
-            gh pr list \
-              --head "$branch_name" \
-              --state open \
-              --json number \
-              --jq '.[0].number // empty'
-          )"
-          if [[ -n "$existing_pr" ]]; then
-            gh pr edit "$existing_pr" --title "$title" --body "$body"
-            pr_url="$(
-              gh pr view "$existing_pr" \
-                --json url \
-                --jq .url
-            )"
-          else
-            pr_url="$(
-              gh pr create \
-                --base main \
-                --head "$branch_name" \
-                --title "$title" \
-                --body "$body"
-            )"
-          fi
-          gh pr view "$pr_url" \
-            --json headRefOid,number,url \
-            > "$RUNNER_TEMP/pull-request.json"
-          jq -e \
-            --arg headSha "$EXPECTED_HEAD_SHA" \
-            '.headRefOid == $headSha' \
-            "$RUNNER_TEMP/pull-request.json" >/dev/null
-          {
-            echo "number=$(jq -r .number "$RUNNER_TEMP/pull-request.json")"
-            echo "url=$(jq -r .url "$RUNNER_TEMP/pull-request.json")"
-          } >> "$GITHUB_OUTPUT"
-
-  validate-pull-request:
-    needs: open-pull-request
+  validate-candidate:
+    needs: prepare-candidate
     permissions:
       contents: read
     uses: ./.github/workflows/test.yml
     with:
-      ref: ${{ needs.open-pull-request.outputs.head-sha }}
+      ref: ${{ needs.prepare-candidate.outputs.head-sha }}
       refresh-auth: false
     secrets: inherit
 
-  merge-pull-request:
+  land-candidate:
     needs:
       - generate
-      - open-pull-request
-      - validate-pull-request
+      - prepare-candidate
+      - validate-candidate
     runs-on: ubuntu-latest
     permissions:
       actions: write
       contents: write
-      pull-requests: write
     steps:
       - name: Check out tested binding
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.open-pull-request.outputs.head-sha }}
+          ref: ${{ needs.prepare-candidate.outputs.head-sha }}
           fetch-depth: 0
-
-      - name: Validate generated pull request
-        env:
-          APP_VERSION: ${{ needs.generate.outputs.version }}
-          BINDING_MODE: ${{ needs.generate.outputs.binding-mode }}
-          EXPECTED_HEAD_SHA: ${{ needs.open-pull-request.outputs.head-sha }}
-          ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ needs.open-pull-request.outputs.pr-number }}
-          PR_URL: ${{ needs.open-pull-request.outputs.pr-url }}
-        run: |
-          gh pr view "$PR_URL" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json number,state,title,author,baseRefName,headRefName,headRefOid,isCrossRepository \
-            > "$RUNNER_TEMP/pull-request.json"
-          if [[ "$BINDING_MODE" == "correction" ]]; then
-            title="Update bindings for ChatGPT $APP_VERSION"
-          else
-            title="Create bindings for ChatGPT $APP_VERSION"
-          fi
-          jq -e \
-            --arg title "$title" \
-            --arg branch "codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER" \
-            --arg headSha "$EXPECTED_HEAD_SHA" \
-            --argjson number "$PR_NUMBER" \
-            '
-              .state == "OPEN" and
-              .number == $number and
-              .title == $title and
-              .author.login == "app/github-actions" and
-              .baseRefName == "main" and
-              .headRefName == $branch and
-              .headRefOid == $headSha and
-              .isCrossRepository == false
-            ' "$RUNNER_TEMP/pull-request.json" >/dev/null
 
       - name: Fast-forward tested binding and test main
         env:
           APP_VERSION: ${{ needs.generate.outputs.version }}
-          EXPECTED_HEAD_SHA: ${{ needs.open-pull-request.outputs.head-sha }}
+          EXPECTED_HEAD_SHA: ${{ needs.prepare-candidate.outputs.head-sha }}
           ISSUE_NUMBER: ${{ needs.generate.outputs.issue-number }}
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ needs.open-pull-request.outputs.pr-number }}
         run: |
           [[ "$(git rev-parse HEAD)" == "$EXPECTED_HEAD_SHA" ]]
-          git push origin "$EXPECTED_HEAD_SHA:refs/heads/main"
-
-          merged_sha="$(
-            deadline=$((SECONDS + 60))
-            while (( SECONDS < deadline )); do
-              candidate="$(
-                gh pr view "$PR_NUMBER" \
-                  --repo "$GITHUB_REPOSITORY" \
-                  --json mergeCommit,state \
-                  --jq 'select(.state == "MERGED") | .mergeCommit.oid'
-              )"
-              if [[ -n "$candidate" ]]; then
-                echo "$candidate"
-                break
-              fi
-              sleep 2
-            done
+          branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
+          candidate_sha="$(
+            git ls-remote --heads origin "refs/heads/$branch_name" |
+              awk 'NR == 1 { print $1 }'
           )"
-          [[ "$merged_sha" == "$EXPECTED_HEAD_SHA" ]] || {
-            echo "GitHub did not mark the exact tested commit as merged" >&2
+          [[ "$candidate_sha" == "$EXPECTED_HEAD_SHA" ]] || {
+            echo "Candidate branch no longer points to the tested commit." >&2
             exit 1
           }
-          branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
-          git push origin --delete "$branch_name"
 
           release_base_sha="$(git rev-parse "$EXPECTED_HEAD_SHA^")"
           [[ "$release_base_sha" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin main
+          current_main_sha="$(git rev-parse FETCH_HEAD)"
+          if [[ "$current_main_sha" == "$release_base_sha" ]]; then
+            git push origin "$EXPECTED_HEAD_SHA:refs/heads/main"
+          elif [[ "$current_main_sha" != "$EXPECTED_HEAD_SHA" ]]; then
+            echo "Main changed after candidate validation; refusing to land stale code." >&2
+            exit 1
+          fi
+          landed_sha="$(
+            git ls-remote --heads origin refs/heads/main |
+              awk 'NR == 1 { print $1 }'
+          )"
+          [[ "$landed_sha" == "$EXPECTED_HEAD_SHA" ]] || {
+            echo "Main does not point to the tested commit after landing." >&2
+            exit 1
+          }
+
           validation_id="rebind-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           validation_title="CI ($validation_id)"
           gh workflow run ci.yml \
@@ -1404,7 +1292,7 @@ jobs:
               > "$RUNNER_TEMP/main-ci-runs.json"
             run_id="$(
               jq -r \
-                --arg headSha "$merged_sha" \
+                --arg headSha "$landed_sha" \
                 --arg title "$validation_title" \
                 '[.[] | select(.headSha == $headSha and .displayTitle == $title)][0].databaseId // empty' \
                 "$RUNNER_TEMP/main-ci-runs.json"
@@ -1413,13 +1301,14 @@ jobs:
             sleep 2
           done
           [[ -n "$run_id" ]] || {
-            echo "Post-merge CI run did not appear for $merged_sha" >&2
+            echo "Post-merge CI run did not appear for $landed_sha" >&2
             exit 1
           }
 
           gh run watch "$run_id" \
             --repo "$GITHUB_REPOSITORY" \
             --exit-status
+          git push origin --delete "$branch_name"
 
   finalize-issue:
     if: >-
@@ -1429,9 +1318,9 @@ jobs:
       - request
       - mark-issue-in-progress
       - generate
-      - open-pull-request
-      - validate-pull-request
-      - merge-pull-request
+      - prepare-candidate
+      - validate-candidate
+      - land-candidate
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -1449,10 +1338,9 @@ jobs:
           MARK_RESULT: ${{ needs.mark-issue-in-progress.result }}
           GENERATE_RESULT: ${{ needs.generate.result }}
           APP_VALIDATION_ERROR: ${{ needs.generate.outputs.app-validation-error }}
-          PR_RESULT: ${{ needs.open-pull-request.result }}
-          PR_URL: ${{ needs.open-pull-request.outputs.pr-url }}
-          VALIDATION_RESULT: ${{ needs.validate-pull-request.result }}
-          MERGE_RESULT: ${{ needs.merge-pull-request.result }}
+          PREPARE_RESULT: ${{ needs.prepare-candidate.result }}
+          VALIDATION_RESULT: ${{ needs.validate-candidate.result }}
+          LAND_RESULT: ${{ needs.land-candidate.result }}
         run: |
           issue_number="$REQUEST_ISSUE_NUMBER"
           if [[ -z "$issue_number" ]]; then
@@ -1498,20 +1386,18 @@ jobs:
             "$REQUEST_RESULT" == "success" &&
             "$MARK_RESULT" == "success" &&
             "$GENERATE_RESULT" == "success" &&
-            "$PR_RESULT" == "success" &&
+            "$PREPARE_RESULT" == "success" &&
             "$VALIDATION_RESULT" == "success" &&
-            "$MERGE_RESULT" == "success"
+            "$LAND_RESULT" == "success"
           ]]; then
             gh issue edit "$issue_number" \
               --repo "$GITHUB_REPOSITORY" \
               --add-label success
             success_body="$(
               printf \
-                'Binding generation succeeded: [workflow run #%s](%s).\n\nPull request: [%s](%s)' \
+                'Binding generation succeeded: [workflow run #%s](%s).' \
                 "$GITHUB_RUN_NUMBER" \
-                "$run_url" \
-                "$PR_URL" \
-                "$PR_URL"
+                "$run_url"
             )"
             gh issue comment "$issue_number" \
               --repo "$GITHUB_REPOSITORY" \

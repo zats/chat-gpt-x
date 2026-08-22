@@ -50,7 +50,7 @@ Run the complete production issue flow from the repository root:
 scripts/trigger-chatgpt-rebind.mjs
 ```
 
-The script uses the latest Sparkle item and reads the repository default branch through GitHub. It stops when the binding or an exact version issue exists. Otherwise, it creates the same metadata issue as the Worker and applies `pending`. The existing issue workflow then reports progress, creates and validates the binding pull request, merges it, runs post-merge CI, publishes releases, and updates the issue.
+The script uses the latest Sparkle item and reads the repository default branch through GitHub. It stops when the binding or an exact version issue exists. Otherwise, it creates the same metadata issue as the Worker and applies `pending`. The existing issue workflow then reports progress, creates and validates a temporary candidate branch, fast-forwards its exact tested commit to `main`, runs post-merge CI, publishes releases, and updates the issue.
 
 Force a fresh run even when the issue or binding exists:
 

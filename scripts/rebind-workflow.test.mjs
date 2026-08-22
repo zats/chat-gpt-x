@@ -41,7 +41,7 @@ test("the workflow prepares the exact research tree before the agent", () => {
 
 test("issue retries seed the prior generated patch and failure evidence", () => {
   const seed = workflow.indexOf(
-    "- name: Seed retry from previous generated pull request",
+    "- name: Seed retry from previous candidate branch",
   );
   const agent = workflow.indexOf("- name: Run Codex rebind agent");
 
@@ -49,7 +49,7 @@ test("issue retries seed the prior generated patch and failure evidence", () => 
   assert.ok(seed < agent);
   assert.match(
     workflow.slice(seed, agent),
-    /git diff --binary "\$pr_parent" "\$pr_head"/,
+    /git diff --binary "\$candidate_parent" "\$candidate_head"/,
   );
   assert.match(
     workflow.slice(seed, agent),
@@ -63,6 +63,30 @@ test("issue retries seed the prior generated patch and failure evidence", () => 
     workflow.slice(agent),
     /Do not dismiss it as transient or only rerun the same test/,
   );
+});
+
+test("the workflow validates a candidate branch without a pull request", () => {
+  assert.match(workflow, /prepare-candidate:/);
+  assert.match(workflow, /validate-candidate:/);
+  assert.match(workflow, /land-candidate:/);
+  assert.match(
+    workflow,
+    /ref: \$\{\{ needs\.prepare-candidate\.outputs\.head-sha \}\}/,
+  );
+  assert.match(
+    workflow,
+    /git push origin "\$EXPECTED_HEAD_SHA:refs\/heads\/main"/,
+  );
+  assert.match(
+    workflow,
+    /"\$candidate_sha" == "\$EXPECTED_HEAD_SHA"/,
+  );
+  assert.match(
+    workflow,
+    /"\$current_main_sha" == "\$release_base_sha"/,
+  );
+  assert.doesNotMatch(workflow, /gh pr (create|view|edit|list)/);
+  assert.doesNotMatch(workflow, /open-pull-request:/);
 });
 
 test("the agent receives the prepared identity and cannot acquire apps", () => {
