@@ -126,11 +126,24 @@ MANIFEST="$BINDING_DIR/manifest.json"
   exit 1
 }
 EXPECTED_ASAR="$(jq -er '.asarSha256' "$MANIFEST")"
-ACTUAL_ASAR="$(shasum -a 256 "$ASAR" | awk '{print $1}')"
-[[ "$ACTUAL_ASAR" == "$EXPECTED_ASAR" ]] || {
-  echo "ChatGPT $APP_VERSION app.asar does not match its binding manifest" >&2
-  exit 1
+
+validate_app_build() {
+  local phase="$1"
+  local actual_version
+  local actual_asar
+  actual_version="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$PLIST")"
+  [[ "$actual_version" == "$APP_VERSION" ]] || {
+    echo "ChatGPT changed during $phase: expected version $APP_VERSION, found $actual_version" >&2
+    return 1
+  }
+  actual_asar="$(shasum -a 256 "$ASAR" | awk '{print $1}')"
+  [[ "$actual_asar" == "$EXPECTED_ASAR" ]] || {
+    echo "ChatGPT changed during $phase: $APP_VERSION app.asar hash does not match its binding manifest" >&2
+    return 1
+  }
 }
+
+validate_app_build startup
 
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "port $PORT is already in use" >&2
@@ -315,6 +328,7 @@ launch_app() {
   local name="$1"
   local mode="${2:-normal}"
   local started_at="$SECONDS"
+  validate_app_build "$name launch"
   progress "launching ChatGPT for $name"
   if [[ "$mode" == "api-test" ]]; then
     env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
@@ -325,6 +339,7 @@ launch_app() {
       "--chatgpt-app=$APP_PATH" \
       "--user-data-dir=$PROFILE_ROOT" \
       "--remote-debugging-port=$PORT" \
+      -SUEnableAutomaticChecks NO \
       >"$LOG_ROOT/$name.stdout.log" 2>"$LOG_ROOT/$name.stderr.log" &
     local launcher_pid=$!
     local launcher_exit_code=0
@@ -399,6 +414,7 @@ launch_app() {
       "$APP_BIN" \
       --user-data-dir="$PROFILE_ROOT" \
       --remote-debugging-port="$PORT" \
+      -SUEnableAutomaticChecks NO \
       >"$LOG_ROOT/$name.stdout.log" 2>"$LOG_ROOT/$name.stderr.log" &
     APP_PID=$!
   fi
