@@ -4,6 +4,8 @@ import { pathToFileURL } from "node:url";
 
 const LOST_COMMUNICATION_MESSAGE =
   "The hosted runner lost communication with the server.";
+const COLOR_PICKER_TIMEOUT_MESSAGE =
+  "Timed out waiting for native UI state during color-picker:";
 const STATUS_LABELS = new Set(["pending", "in-progress", "failed", "success"]);
 
 function requirePositiveInteger(value, name) {
@@ -22,18 +24,40 @@ export function isRetryableRunnerAnnotation(annotation) {
   );
 }
 
-export async function findRetryableRunnerFailures({
+export function isRetryableNativeUiLog(log) {
+  return (
+    typeof log === "string" &&
+    log.includes("passed public-api") &&
+    log.includes("starting native-ui") &&
+    log.includes("native-ui failed; complete captured output follows:") &&
+    log.includes(COLOR_PICKER_TIMEOUT_MESSAGE) &&
+    log.includes("[data-thread-colors-indicator]") &&
+    log.includes("=== null")
+  );
+}
+
+export async function findRetryableFailures({
   github,
   repository,
   runId,
   runAttempt,
 }) {
-  const jobs = await github.get(
+  const response = await github.get(
     `/repos/${repository}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
   );
+  const jobs = response.jobs ?? [];
   const failures = [];
+  const bindingPassedEarlierTests =
+    jobs.some(
+      (job) => job.name === "generate" && job.conclusion === "success",
+    ) &&
+    jobs.some(
+      (job) =>
+        job.name === "validate-pull-request / static" &&
+        job.conclusion === "success",
+    );
 
-  for (const job of jobs.jobs ?? []) {
+  for (const job of jobs) {
     if (job.conclusion !== "failure") continue;
     const annotations = await github.get(
       `/repos/${repository}/check-runs/${job.id}/annotations?per_page=100`,
@@ -41,11 +65,31 @@ export async function findRetryableRunnerFailures({
     for (const annotation of annotations) {
       if (isRetryableRunnerAnnotation(annotation)) {
         failures.push({
+          kind: "runner-lost-communication",
           jobId: job.id,
           jobName: job.name,
           message: annotation.message,
         });
       }
+    }
+
+    if (
+      failures.some((failure) => failure.jobId === job.id) ||
+      !bindingPassedEarlierTests ||
+      job.name !== "validate-pull-request / end-to-end"
+    ) {
+      continue;
+    }
+    const log = await github.getText(
+      `/repos/${repository}/actions/jobs/${job.id}/logs`,
+    );
+    if (isRetryableNativeUiLog(log)) {
+      failures.push({
+        kind: "native-ui-color-picker-timeout",
+        jobId: job.id,
+        jobName: job.name,
+        message: COLOR_PICKER_TIMEOUT_MESSAGE,
+      });
     }
   }
 
@@ -76,7 +120,15 @@ export async function findRunIssue({ github, repository, runId, serverUrl }) {
   return null;
 }
 
-export async function retryRunnerInfrastructureFailure({
+function retryReason(failures) {
+  const kinds = new Set(failures.map((failure) => failure.kind));
+  if (kinds.has("runner-lost-communication")) {
+    return "GitHub reported that the hosted runner lost communication";
+  }
+  return "The binding passed its earlier agent tests, but PR validation hit the known native-UI color-picker timing failure";
+}
+
+export async function retryTransientRebindFailure({
   github,
   repository,
   runId,
@@ -84,24 +136,25 @@ export async function retryRunnerInfrastructureFailure({
   serverUrl = "https://github.com",
   maxRunAttempts = 2,
 }) {
-  const failures = await findRetryableRunnerFailures({
+  const failures = await findRetryableFailures({
     github,
     repository,
     runId,
     runAttempt,
   });
   if (failures.length === 0) {
-    return { outcome: "not-infrastructure", failures };
+    return { outcome: "not-transient", failures };
   }
 
   const issue = await findRunIssue({ github, repository, runId, serverUrl });
   const runUrl = `${serverUrl}/${repository}/actions/runs/${runId}`;
+  const reason = retryReason(failures);
   if (runAttempt >= maxRunAttempts) {
     if (issue) {
       await github.post(
         `/repos/${repository}/issues/${issue.number}/comments`,
         {
-          body: `GitHub again reported that the hosted runner lost communication. The automatic retry limit of ${maxRunAttempts} attempts is reached. The issue remains failed: [workflow run](${runUrl}).`,
+          body: `${reason} again. The automatic retry limit of ${maxRunAttempts} attempts is reached. The issue remains failed: [workflow run](${runUrl}).`,
         },
       );
     }
@@ -126,7 +179,7 @@ export async function retryRunnerInfrastructureFailure({
     await github.post(
       `/repos/${repository}/issues/${issue.number}/comments`,
       {
-        body: `GitHub reported that the hosted runner lost communication. Automatically rerunning failed jobs as attempt ${runAttempt + 1} of ${maxRunAttempts}: [workflow run](${runUrl}).`,
+        body: `${reason}. Automatically rerunning failed jobs as attempt ${runAttempt + 1} of ${maxRunAttempts}: [workflow run](${runUrl}).`,
       },
     );
   }
@@ -137,13 +190,13 @@ export async function retryRunnerInfrastructureFailure({
 export function createGitHubClient({ token }) {
   if (!token) throw new Error("GH_TOKEN is required");
 
-  async function request(method, path, body) {
+  async function request(method, path, body, parseJson = true) {
     const response = await fetch(`https://api.github.com${path}`, {
       method,
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
-        "User-Agent": "chatgptx-runner-failure-retry",
+        "User-Agent": "chatgptx-transient-rebind-retry",
         "X-GitHub-Api-Version": "2022-11-28",
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -155,11 +208,13 @@ export function createGitHubClient({ token }) {
       );
     }
     const responseBody = await response.text();
+    if (!parseJson) return responseBody;
     return responseBody === "" ? null : JSON.parse(responseBody);
   }
 
   return {
     get: (path) => request("GET", path),
+    getText: (path) => request("GET", path, undefined, false),
     patch: (path, body) => request("PATCH", path, body),
     post: (path, body) => request("POST", path, body),
   };
@@ -178,7 +233,7 @@ async function main() {
     process.env.SOURCE_RUN_ATTEMPT,
     "SOURCE_RUN_ATTEMPT",
   );
-  const result = await retryRunnerInfrastructureFailure({
+  const result = await retryTransientRebindFailure({
     github: createGitHubClient({ token: process.env.GH_TOKEN }),
     repository,
     runId,
@@ -186,13 +241,13 @@ async function main() {
     serverUrl: process.env.GITHUB_SERVER_URL || "https://github.com",
   });
 
-  if (result.outcome === "not-infrastructure") {
-    console.log("No retryable hosted-runner infrastructure failure was found.");
+  if (result.outcome === "not-transient") {
+    console.log("No retryable transient rebind failure was found.");
     return;
   }
   if (result.outcome === "retry-limit-reached") {
     console.error(
-      `Hosted-runner infrastructure failure found, but run attempt ${runAttempt} reached the automatic retry limit.`,
+      `Retryable transient failure found, but run attempt ${runAttempt} reached the automatic retry limit.`,
     );
     process.exitCode = 1;
     return;

@@ -1,4 +1,4 @@
-name: Retry runner infrastructure failure
+name: Retry transient rebind failure
 
 on:
   workflow_run:
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: retry-runner-infrastructure-${{ github.event.workflow_run.id }}
+  group: retry-transient-rebind-${{ github.event.workflow_run.id }}
   cancel-in-progress: false
 
 jobs:
@@ -35,9 +35,9 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - name: Retry hosted-runner communication failure
+      - name: Retry recognized transient failure
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
           SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
-        run: node scripts/retry-runner-infrastructure-failure.mjs
+        run: node scripts/retry-transient-rebind-failure.mjs

@@ -271,14 +271,15 @@ This starts the same full binding flow again. The workflow publishes the tested
 binding, updates the issue to `success`, and closes the issue only after all
 required jobs pass.
 
-The `Retry runner infrastructure failure` workflow handles one GitHub-hosted
-runner failure that is outside the binding logic. It requires GitHub's exact
-"hosted runner lost communication" failure annotation. It reruns only the
-failed jobs and their dependent jobs, restores the version issue to
-`in-progress`, and adds a comment with the new attempt. It permits one automatic
-retry, for a maximum of two attempts. A second runner communication failure
-leaves the issue failed. Test failures, agent failures, timeouts, cancellations,
-and other errors do not start an automatic retry.
+The `Retry transient rebind failure` workflow handles two exact transient
+signatures: GitHub's "hosted runner lost communication" failure annotation and
+the known native-UI color-picker timing failure after the same binding passed
+its earlier agent and static tests. It reruns only the failed jobs and their
+dependent jobs, restores the version issue to `in-progress`, and adds a comment
+with the new attempt. It permits one automatic retry, for a maximum of two
+attempts. A repeated transient failure leaves the issue failed. Other test
+failures, agent failures, timeouts, and cancellations do not start an automatic
+retry.
 
 ## Publication
 

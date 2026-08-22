@@ -14,7 +14,7 @@ const skill = readFileSync(
 );
 const retryWorkflow = readFileSync(
   new URL(
-    "../.github/workflows/retry-runner-infrastructure-failure.yml",
+    "../.github/workflows/retry-transient-rebind-failure.yml",
     import.meta.url,
   ),
   "utf8",
@@ -61,12 +61,12 @@ test("the rebind skill honors prepared research inputs", () => {
   assert.match(skill, /Never download a ChatGPT app during an agent-driven rebind\./);
 });
 
-test("runner infrastructure retries are isolated and limited", () => {
+test("transient rebind retries are isolated and limited", () => {
   assert.match(retryWorkflow, /workflows:\s*\n\s*- Rebind ChatGPT/);
   assert.match(retryWorkflow, /workflow_run\.conclusion == 'failure'/);
   assert.match(retryWorkflow, /actions: write/);
   assert.match(
     retryWorkflow,
-    /node scripts\/retry-runner-infrastructure-failure\.mjs/,
+    /node scripts\/retry-transient-rebind-failure\.mjs/,
   );
 });
