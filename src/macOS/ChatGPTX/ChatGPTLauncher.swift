@@ -24,6 +24,34 @@ struct ChatGPTLauncher {
     private static let quitTimeout: TimeInterval = 10
     private static let asarHashCache = ChatGPTAsarHashCache()
 
+    nonisolated static func diagnosticDescription(
+        for error: any Error
+    ) -> String {
+        var descriptions: [String] = []
+        var current: NSError? = error as NSError
+        var depth = 0
+
+        while let error = current, depth < 4 {
+            var description =
+                "\(error.localizedDescription) [\(error.domain) \(error.code)]"
+            if let reason = error.localizedFailureReason,
+                !description.contains(reason)
+            {
+                description += " Reason: \(reason)"
+            }
+            if let suggestion = error.localizedRecoverySuggestion,
+                !description.contains(suggestion)
+            {
+                description += " Recovery: \(suggestion)"
+            }
+            descriptions.append(description)
+            current = error.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+
+        return descriptions.joined(separator: " Underlying error: ")
+    }
+
     let componentStore: PreparedComponentStore
     private let launchReservationStore = ChatGPTLaunchReservationStore()
 
@@ -896,15 +924,15 @@ private enum LaunchError: LocalizedError {
         case .launchAlreadyInProgress:
             "Another ChatGPTX launch is already in progress."
         case .launchCoordinationFailed(let error):
-            "ChatGPT launch coordination failed: \(error.localizedDescription)"
+            "ChatGPT launch coordination failed: \(ChatGPTLauncher.diagnosticDescription(for: error))"
         case .launchCoordinationCleanupFailed(let binding, let cleanup):
-            "ChatGPT launch coordination failed: \(binding.localizedDescription). The uncoordinated ChatGPT process could not be stopped: \(cleanup.localizedDescription)"
+            "ChatGPT launch coordination failed: \(ChatGPTLauncher.diagnosticDescription(for: binding)). The uncoordinated ChatGPT process could not be stopped: \(ChatGPTLauncher.diagnosticDescription(for: cleanup))"
         case .chatGPTWouldNotQuit:
             "The running ChatGPT app declined to quit."
         case .chatGPTQuitTimedOut:
             "The running ChatGPT app did not quit within 10 seconds."
         case .applicationLaunchFailed(let error):
-            "ChatGPT could not be started: \(error.localizedDescription)"
+            "ChatGPT could not be started: \(ChatGPTLauncher.diagnosticDescription(for: error))"
         }
     }
 }
