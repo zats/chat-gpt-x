@@ -120,6 +120,7 @@ extensions/
     bindings/<chatgpt-version>/<binding-version>/.chatgptx-integrity.json
     extensions/<extension-id>/<extension-version>/.chatgptx-integrity.json
   state/<extension-id>/
+  prefetched-versions-lock.json
   versions-lock.json
   settings.json
 ```
@@ -133,6 +134,12 @@ because released runtimes already read this lock contract. The launcher writes
 the complete lock only after all selected packages pass validation. Each
 component receipt records the verified archive SHA-256 and the SHA-256 of every
 extracted file. The launcher rejects a changed, missing, or extra file.
+
+`prefetched-versions-lock.json` selects the newest published component set for
+a newer supported ChatGPT build. The launcher downloads and validates this set
+during an update check, but it does not change the active runtime. It promotes
+the prefetched set only when the installed ChatGPT version and `app.asar` hash
+match it exactly.
 
 `settings.json` maps extension IDs to extensible settings objects:
 
@@ -169,7 +176,8 @@ flowchart TD
     G --> H["Verify SHA-256, manifest identity, and archive layout"]
     H --> I["Reconcile saved enablement"]
     I --> J["Atomically replace versions-lock.json"]
-    J --> K["Use the new set on next ChatGPT launch"]
+    J --> K["Prefetch the newest supported build without activating it"]
+    K --> L["Use the active set on next ChatGPT launch"]
 ```
 
 The exact binding check happens before the index-generation rollback check.
@@ -181,7 +189,9 @@ same-generation catalog can select another exact binding during an app update.
 ```mermaid
 flowchart TD
     A["ChatGPT auto-updates"] --> B["Launcher reads new version and app.asar hash"]
-    B --> C{"Exact new-build binding is published?"}
+    B --> P{"Exact prefetched set matches locally?"}
+    P -- "Yes" --> M["Atomically activate the prefetched component lock"]
+    P -- "No" --> C{"Exact new-build binding is published?"}
     C -- "No" --> D["Open stock ChatGPT; show unsupported state"]
     C -- "Yes" --> E["Install new binding even if some extensions are incompatible"]
     E --> F{"Binding selects cached API/runtime?"}
@@ -198,10 +208,14 @@ flowchart TD
 On startup, the launcher first checks for an exact cached lock. If it exists,
 the launcher can inject it without network access. The launcher then checks for
 updates in the background. While it remains open, it checks again every ten
-minutes. A running ChatGPT build without a matching installed binding triggers
-an immediate background check. ChatGPT continues without extensions, and the
-launcher shows a notification that the runtime is not supported until an exact
-binding is available.
+minutes. Each successful check also downloads and validates the newest
+published component set for a newer supported ChatGPT build. The launcher keeps
+that set inactive until the installed app has its exact version and hash. A
+running ChatGPT build without a matching active binding triggers an immediate
+background check. The check can promote an exact prefetched set without network
+access. ChatGPT continues without extensions, and the launcher shows a
+notification that the runtime is not supported until an exact binding is
+available.
 
 On a clean installation, the launcher downloads the exact remote set. If the
 network is unavailable or the ChatGPT build has no exact binding, the launcher

@@ -403,6 +403,163 @@ final class ComponentUpdatesTests: XCTestCase {
     }
 
     @MainActor
+    func testUpdatePrefetchesNewestSupportedBuildWithoutActivatingIt()
+        async throws
+    {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let currentBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let nextBinding = try makeBindingArchive(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash
+        )
+        var index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(currentBinding)
+        )
+        var bindings = try XCTUnwrap(index["bindings"] as? [String: Any])
+        bindings[Self.nextChatgptVersion] = bindingEntry(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash,
+            hash: digest(nextBinding)
+        )
+        index["bindings"] = bindings
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": currentBinding,
+                "binding-\(Self.nextChatgptVersion)-v1.0.0": nextBinding,
+            ]
+        )
+        var activatedBuilds = [(String, String)]()
+
+        _ = try await makeService { version, asarSHA256 in
+            activatedBuilds.append((version, asarSHA256))
+        }.update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        XCTAssertEqual(activatedBuilds.count, 1)
+        XCTAssertEqual(activatedBuilds.first?.0, Self.chatgptVersion)
+        XCTAssertEqual(activatedBuilds.first?.1, Self.asarHash)
+        let active = try XCTUnwrap(
+            try ComponentStore(
+                environment: ["CODEX_HOME": codexHomeURL.path]
+            ).activeVersions()
+        )
+        XCTAssertEqual(active.binding.chatgpt, Self.chatgptVersion)
+        let prefetchedURL = codexHomeURL.appendingPathComponent(
+            "extensions/prefetched-versions-lock.json"
+        )
+        let prefetched = try JSONDecoder().decode(
+            PrefetchedComponentSet.self,
+            from: Data(contentsOf: prefetchedURL)
+        )
+        XCTAssertEqual(
+            prefetched.versions.binding.chatgpt,
+            Self.nextChatgptVersion
+        )
+        XCTAssertEqual(
+            prefetched.versions.binding.asarSha256,
+            Self.nextAsarHash
+        )
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [
+                Self.indexURL,
+                releaseURL("chatgpt-api-v1.1.0"),
+                releaseURL(
+                    "binding-\(Self.chatgptVersion)-v1.0.0"
+                ),
+                releaseURL(
+                    "binding-\(Self.nextChatgptVersion)-v1.0.0"
+                ),
+            ]
+        )
+    }
+
+    @MainActor
+    func testPrefetchedBuildActivatesWithoutNetworkAccess() async throws {
+        let api = try makeAPIArchive(version: "1.1.0")
+        let currentBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let nextBinding = try makeBindingArchive(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash
+        )
+        var index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(currentBinding)
+        )
+        var bindings = try XCTUnwrap(index["bindings"] as? [String: Any])
+        bindings[Self.nextChatgptVersion] = bindingEntry(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash,
+            hash: digest(nextBinding)
+        )
+        index["bindings"] = bindings
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": currentBinding,
+                "binding-\(Self.nextChatgptVersion)-v1.0.0": nextBinding,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+        ComponentUpdateURLProtocol.responses = [:]
+        ComponentUpdateURLProtocol.requestedURLs = []
+        var activatedBuilds = [(String, String)]()
+
+        let outcome = try await makeService { version, asarSHA256 in
+            activatedBuilds.append((version, asarSHA256))
+        }.update(
+            for: Self.nextChatgptVersion,
+            chatgptAsarSHA256: Self.nextAsarHash
+        )
+
+        guard case .installed(let prepared) = outcome.result else {
+            return XCTFail("The prefetched build must activate locally.")
+        }
+        XCTAssertEqual(activatedBuilds.count, 1)
+        XCTAssertEqual(activatedBuilds.first?.0, Self.nextChatgptVersion)
+        XCTAssertEqual(activatedBuilds.first?.1, Self.nextAsarHash)
+        XCTAssertEqual(
+            prepared.versions.binding.chatgpt,
+            Self.nextChatgptVersion
+        )
+        XCTAssertEqual(ComponentUpdateURLProtocol.requestedURLs, [])
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: codexHomeURL.appendingPathComponent(
+                    "extensions/prefetched-versions-lock.json"
+                ).path
+            )
+        )
+    }
+
+    @MainActor
     func testChangedChatGPTBuildCannotReplaceActiveSameGenerationLock()
         async throws
     {

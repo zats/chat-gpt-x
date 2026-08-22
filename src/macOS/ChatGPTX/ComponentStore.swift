@@ -44,6 +44,17 @@ struct ComponentVersionsLock: Codable, Equatable {
     let extensions: [StoredExtension]
 }
 
+struct PrefetchedComponentSet: Codable, Equatable {
+    let schemaVersion: Int
+    let minimumLauncherVersion: String
+    let versions: ComponentVersionsLock
+}
+
+struct PrefetchedComponentActivation {
+    let preparedStore: PreparedComponentStore
+    let componentsChanged: Bool
+}
+
 struct ExtensionSetting {
     var enabled: Bool
     var additionalValues: [String: Any] = [:]
@@ -78,6 +89,8 @@ struct PreparedExtensionSettings {
 struct ComponentStore {
     private static let schemaVersion = 1
     private static let mutationLockFileName = "update.lock"
+    private static let prefetchedLockFileName =
+        "prefetched-versions-lock.json"
     static let integrityReceiptFileName = ".chatgptx-integrity.json"
 
     let fileManager: FileManager
@@ -272,6 +285,160 @@ struct ComponentStore {
         }
         try validate(versions)
         return versions
+    }
+
+    func storePrefetchedComponents(
+        _ versions: ComponentVersionsLock,
+        minimumLauncherVersion: String
+    ) throws {
+        try withExclusiveMutationLock {
+            guard isVersion(minimumLauncherVersion) else {
+                throw ComponentStoreError.invalidPrefetchedVersionsLock
+            }
+            try validate(versions)
+            try validateInstalledComponents(versions)
+            if let activeMetadata = try? activeVersionsMetadata(),
+                versions.generation < activeMetadata.generation
+            {
+                throw ComponentStoreError.invalidPrefetchedVersionsLock
+            }
+
+            let prefetched = PrefetchedComponentSet(
+                schemaVersion: Self.schemaVersion,
+                minimumLauncherVersion: minimumLauncherVersion,
+                versions: versions
+            )
+            let data = try encode(prefetched)
+            let url = rootURL.appendingPathComponent(
+                Self.prefetchedLockFileName
+            )
+            if fileManager.fileExists(atPath: url.path) {
+                let existingData = try Data(contentsOf: url)
+                if existingData == data {
+                    return
+                }
+                if let existing = try? JSONDecoder().decode(
+                    PrefetchedComponentSet.self,
+                    from: existingData
+                ), existing.schemaVersion == Self.schemaVersion,
+                    existing.versions.generation > versions.generation
+                        || existing.versions.generation == versions.generation
+                        && existing.versions.binding.chatgpt.compare(
+                            versions.binding.chatgpt,
+                            options: .numeric
+                        ) == .orderedDescending
+                {
+                    return
+                }
+            }
+            try atomicWrite(data, to: url)
+        }
+    }
+
+    func activatePrefetchedComponents(
+        for chatgptVersion: String,
+        chatgptAsarSHA256: String,
+        validateLauncher: (String) throws -> Void,
+        beforeActivation: () throws -> Void
+    ) throws -> PrefetchedComponentActivation? {
+        try withExclusiveMutationLock {
+            let prefetchedURL = rootURL.appendingPathComponent(
+                Self.prefetchedLockFileName
+            )
+            guard fileManager.fileExists(atPath: prefetchedURL.path) else {
+                return nil
+            }
+
+            let prefetched: PrefetchedComponentSet
+            do {
+                prefetched = try JSONDecoder().decode(
+                    PrefetchedComponentSet.self,
+                    from: Data(contentsOf: prefetchedURL)
+                )
+                guard prefetched.schemaVersion == Self.schemaVersion,
+                    isVersion(prefetched.minimumLauncherVersion)
+                else {
+                    throw ComponentStoreError.invalidPrefetchedVersionsLock
+                }
+                try validate(prefetched.versions)
+                try validateInstalledComponents(prefetched.versions)
+            } catch {
+                try? fileManager.removeItem(at: prefetchedURL)
+                return nil
+            }
+
+            guard prefetched.versions.binding.chatgpt == chatgptVersion,
+                prefetched.versions.binding.asarSha256
+                    == chatgptAsarSHA256
+            else {
+                return nil
+            }
+            try validateLauncher(prefetched.minimumLauncherVersion)
+
+            if let activeMetadata = try? activeVersionsMetadata(),
+                prefetched.versions.generation < activeMetadata.generation
+            {
+                try? fileManager.removeItem(at: prefetchedURL)
+                return nil
+            }
+
+            let preparedSettings = try prepareExtensionSettings(
+                for: prefetched.versions.extensions,
+                recoverInvalidSettings: true
+            )
+            let versions = ComponentVersionsLock(
+                schemaVersion: prefetched.versions.schemaVersion,
+                generation: prefetched.versions.generation,
+                chatgptApi: prefetched.versions.chatgptApi,
+                binding: prefetched.versions.binding,
+                extensions: preparedSettings.extensions
+            )
+            try validate(versions)
+            try validateInstalledComponents(versions)
+            let currentVersions = try? activeVersions()
+            let componentsChanged = versions != currentVersions
+            let previousVersionsLock = try activeVersionsLockData()
+            let versionsLockURL = rootURL.appendingPathComponent(
+                "versions-lock.json"
+            )
+
+            try beforeActivation()
+            do {
+                if componentsChanged {
+                    try atomicWrite(
+                        try encode(versions),
+                        to: versionsLockURL
+                    )
+                }
+                try commitExtensionSettings(preparedSettings)
+            } catch {
+                do {
+                    try restoreVersionsLock(previousVersionsLock)
+                } catch {
+                    throw ComponentStoreError.installationStateInvalid
+                }
+                throw error
+            }
+            try? fileManager.removeItem(at: prefetchedURL)
+            return PrefetchedComponentActivation(
+                preparedStore: PreparedComponentStore(
+                    rootURL: rootURL,
+                    versions: versions,
+                    extensions: preparedSettings.extensions
+                ),
+                componentsChanged: componentsChanged
+            )
+        }
+    }
+
+    func clearPrefetchedComponents() throws {
+        try withExclusiveMutationLock {
+            let url = rootURL.appendingPathComponent(
+                Self.prefetchedLockFileName
+            )
+            guard fileManager.fileExists(atPath: url.path) else { return }
+            try fileManager.removeItem(at: url)
+        }
     }
 
     func withExclusiveMutationLock<Result>(
@@ -832,6 +999,8 @@ private struct ComponentIntegrityReceipt: Codable {
 
 private enum ComponentStoreError: LocalizedError {
     case invalidVersionsLock
+    case invalidPrefetchedVersionsLock
+    case installationStateInvalid
     case invalidSettings
     case invalidPath(String)
     case invalidJSON(URL, any Error)
@@ -844,6 +1013,10 @@ private enum ComponentStoreError: LocalizedError {
         switch self {
         case .invalidVersionsLock:
             "The component versions lock is invalid."
+        case .invalidPrefetchedVersionsLock:
+            "The prefetched component versions lock is invalid."
+        case .installationStateInvalid:
+            "The installed component state is invalid."
         case .invalidSettings:
             "The extension settings are invalid."
         case .invalidPath(let path):

@@ -15,6 +15,12 @@ struct ComponentUpdateIndex: Decodable {
     let bindings: [String: BindingUpdate]
     let extensions: [String: ExtensionUpdateCatalog]
 
+    var latestBindingVersion: String? {
+        bindings.keys.max {
+            $0.compare($1, options: .numeric) == .orderedAscending
+        }
+    }
+
     static func decodeStrict(_ data: Data) throws -> Self {
         let value: Any
         do {
@@ -531,6 +537,30 @@ final class ComponentUpdateService {
         planned: @escaping ComponentUpdatePlanHandler = { _ in },
         progress: @escaping ComponentUpdateProgressHandler = { _ in }
     ) async throws -> ComponentUpdateOutcome {
+        if let prefetched = try componentStore.activatePrefetchedComponents(
+            for: chatgptVersion,
+            chatgptAsarSHA256: chatgptAsarSHA256,
+            validateLauncher: { minimumVersion in
+                try validateLauncher(minimumVersion: minimumVersion)
+            },
+            beforeActivation: {
+                try beforeActivation(
+                    chatgptVersion,
+                    chatgptAsarSHA256
+                )
+            }
+        ) {
+            let result: ComponentUpdateResult = prefetched.componentsChanged
+                ? .installed(prefetched.preparedStore)
+                : .upToDate(prefetched.preparedStore)
+            return ComponentUpdateOutcome(
+                summary: ComponentUpdateSummary(
+                    installed: prefetched.preparedStore
+                ),
+                result: result
+            )
+        }
+
         let index = try await fetchIndex()
         try validateLauncher(for: index)
         let current = try? componentStore.prepareInstalled()
@@ -550,6 +580,12 @@ final class ComponentUpdateService {
                     chatgptAsarSHA256
                 )
             },
+            progress: progress
+        )
+        await prefetchLatestSupportedComponents(
+            from: index,
+            installedChatGPTVersion: chatgptVersion,
+            current: result.preparedStore,
             progress: progress
         )
         return ComponentUpdateOutcome(
@@ -573,12 +609,18 @@ final class ComponentUpdateService {
     }
 
     private func validateLauncher(for index: ComponentUpdateIndex) throws {
+        try validateLauncher(
+            minimumVersion: index.minimumLauncherVersion
+        )
+    }
+
+    private func validateLauncher(minimumVersion: String) throws {
         guard let installed = SemanticVersion(launcherVersion) else {
             throw ComponentUpdateError.launcherVersionInvalid(
                 launcherVersion
             )
         }
-        guard let minimum = SemanticVersion(index.minimumLauncherVersion)
+        guard let minimum = SemanticVersion(minimumVersion)
         else {
             throw ComponentUpdateError.indexInvalid(
                 "minimumLauncherVersion"
@@ -587,8 +629,43 @@ final class ComponentUpdateService {
         guard installed >= minimum else {
             throw ComponentUpdateError.launcherTooOld(
                 installed: launcherVersion,
-                minimum: index.minimumLauncherVersion
+                minimum: minimumVersion
             )
+        }
+    }
+
+    private func prefetchLatestSupportedComponents(
+        from index: ComponentUpdateIndex,
+        installedChatGPTVersion: String,
+        current: PreparedComponentStore,
+        progress: @escaping ComponentUpdateProgressHandler
+    ) async {
+        guard let latestVersion = index.latestBindingVersion,
+            latestVersion.compare(
+            installedChatGPTVersion,
+            options: .numeric
+        ) == .orderedDescending,
+            let latestBinding = index.bindings[latestVersion]
+        else {
+            try? componentStore.clearPrefetchedComponents()
+            return
+        }
+
+        do {
+            let plan = try componentStore.planUpdate(
+                index,
+                chatgptVersion: latestVersion,
+                chatgptAsarSHA256: latestBinding.asarSha256,
+                current: current
+            )
+            try await componentStore.prefetch(
+                plan,
+                session: session,
+                progress: progress
+            )
+        } catch {
+            // Prefetch is an optimization. The active exact build remains
+            // usable, and the next automatic check retries the prefetch.
         }
     }
 
@@ -692,11 +769,106 @@ private extension ComponentStore {
         beforeActivation: () throws -> Void,
         progress: @escaping ComponentUpdateProgressHandler = { _ in }
     ) async throws -> ComponentUpdateResult {
+        let downloadedVersions = try await installVersions(
+            for: plan,
+            session: session,
+            progress: progress
+        )
+
+        return try withExclusiveMutationLock {
+            () throws -> ComponentUpdateResult in
+            let preparedSettings = try prepareExtensionSettings(
+                for: downloadedVersions.extensions,
+                recoverInvalidSettings: true
+            )
+            let effectiveExtensions = preparedSettings.extensions
+            let versions = ComponentVersionsLock(
+                schemaVersion: downloadedVersions.schemaVersion,
+                generation: downloadedVersions.generation,
+                chatgptApi: downloadedVersions.chatgptApi,
+                binding: downloadedVersions.binding,
+                extensions: effectiveExtensions
+            )
+            try validate(versions)
+            try validateInstalledComponents(versions)
+
+            let prepared = PreparedComponentStore(
+                rootURL: rootURL,
+                versions: versions,
+                extensions: effectiveExtensions
+            )
+            let componentsChanged = plan.current.map {
+                versions.chatgptApi != $0.versions.chatgptApi
+                    || versions.binding != $0.versions.binding
+                    || versions.extensions != $0.extensions
+            } ?? true
+
+            let activeMetadata = try? activeVersionsMetadata()
+            if let activeMetadata,
+                plan.index.generation < activeMetadata.generation
+            {
+                throw ComponentUpdateError.olderGeneration(
+                    plan.index.generation,
+                    activeMetadata.generation
+                )
+            }
+
+            let currentVersions = try? activeVersions()
+            if versions == currentVersions {
+                try beforeActivation()
+                try commitExtensionSettings(preparedSettings)
+                return componentsChanged
+                    ? .installed(prepared)
+                    : .upToDate(prepared)
+            }
+
+            let previousVersionsLock = try activeVersionsLockData()
+            let versionsLockURL = rootURL.appendingPathComponent(
+                "versions-lock.json"
+            )
+            try beforeActivation()
+            do {
+                try atomicWrite(try encode(versions), to: versionsLockURL)
+                try commitExtensionSettings(preparedSettings)
+            } catch {
+                do {
+                    try restoreVersionsLock(previousVersionsLock)
+                } catch {
+                    throw ComponentUpdateError.installationStateInvalid
+                }
+                throw error
+            }
+            return componentsChanged
+                ? .installed(prepared)
+                : .upToDate(prepared)
+        }
+    }
+
+    func prefetch(
+        _ plan: ComponentUpdatePlan,
+        session: URLSession = .shared,
+        progress: @escaping ComponentUpdateProgressHandler = { _ in }
+    ) async throws {
+        let versions = try await installVersions(
+            for: plan,
+            session: session,
+            progress: progress
+        )
+        try storePrefetchedComponents(
+            versions,
+            minimumLauncherVersion: plan.index.minimumLauncherVersion
+        )
+    }
+
+    private func installVersions(
+        for plan: ComponentUpdatePlan,
+        session: URLSession,
+        progress: @escaping ComponentUpdateProgressHandler
+    ) async throws -> ComponentVersionsLock {
         let index = plan.index
         let chatgptVersion = plan.chatgptVersion
         let binding = plan.binding
         let api = plan.api
-
         let apiPath = "components/chatgpt-api/\(binding.chatgptApi)"
         try await installArchive(
             release: api.release,
@@ -771,86 +943,31 @@ private extension ComponentStore {
             )
         }
 
-        return try withExclusiveMutationLock {
-            () throws -> ComponentUpdateResult in
-            let preparedSettings = try prepareExtensionSettings(
-                for: storedExtensions,
-                recoverInvalidSettings: true
-            )
-            let effectiveExtensions = preparedSettings.extensions
-            let versions = ComponentVersionsLock(
-                schemaVersion: 1,
-                generation: index.generation,
-                chatgptApi: StoredChatGPTAPI(
-                    version: binding.chatgptApi,
-                    release: api.release,
-                    sha256: api.sha256,
-                    path: apiPath
-                ),
-                binding: StoredBinding(
-                    chatgpt: chatgptVersion,
-                    version: binding.version,
-                    chatgptApi: binding.chatgptApi,
-                    asarSha256: binding.asarSha256,
-                    release: binding.release,
-                    sha256: binding.sha256,
-                    path: bindingPath
-                ),
-                extensions: effectiveExtensions
-            )
+        let versions = ComponentVersionsLock(
+            schemaVersion: 1,
+            generation: index.generation,
+            chatgptApi: StoredChatGPTAPI(
+                version: binding.chatgptApi,
+                release: api.release,
+                sha256: api.sha256,
+                path: apiPath
+            ),
+            binding: StoredBinding(
+                chatgpt: chatgptVersion,
+                version: binding.version,
+                chatgptApi: binding.chatgptApi,
+                asarSha256: binding.asarSha256,
+                release: binding.release,
+                sha256: binding.sha256,
+                path: bindingPath
+            ),
+            extensions: storedExtensions
+        )
+        try withExclusiveMutationLock {
             try validate(versions)
             try validateInstalledComponents(versions)
-
-            let prepared = PreparedComponentStore(
-                rootURL: rootURL,
-                versions: versions,
-                extensions: effectiveExtensions
-            )
-            let componentsChanged = plan.current.map {
-                versions.chatgptApi != $0.versions.chatgptApi
-                    || versions.binding != $0.versions.binding
-                    || versions.extensions != $0.extensions
-            } ?? true
-
-            let activeMetadata = try? activeVersionsMetadata()
-            if let activeMetadata,
-                index.generation < activeMetadata.generation
-            {
-                throw ComponentUpdateError.olderGeneration(
-                    index.generation,
-                    activeMetadata.generation
-                )
-            }
-
-            let currentVersions = try? activeVersions()
-            if versions == currentVersions {
-                try beforeActivation()
-                try commitExtensionSettings(preparedSettings)
-                return componentsChanged
-                    ? .installed(prepared)
-                    : .upToDate(prepared)
-            }
-
-            let previousVersionsLock = try activeVersionsLockData()
-            let versionsLockURL = rootURL.appendingPathComponent(
-                "versions-lock.json"
-            )
-            try beforeActivation()
-            do {
-                try atomicWrite(try encode(versions), to: versionsLockURL)
-                try commitExtensionSettings(preparedSettings)
-            } catch {
-                do {
-                    try restoreVersionsLock(previousVersionsLock)
-                } catch {
-                    throw ComponentUpdateError.installationStateInvalid
-                }
-                throw error
-            }
-            return componentsChanged
-                ? .installed(prepared)
-                : .upToDate(prepared)
         }
+        return versions
     }
 
     private func installArchive(
