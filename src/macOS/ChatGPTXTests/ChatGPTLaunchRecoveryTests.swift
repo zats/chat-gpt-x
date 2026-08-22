@@ -324,6 +324,18 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
+    func testRuntimeReadyNotificationRequestsRestart() {
+        let text = InjectionNotificationController
+            .runtimeReadyNotificationText(for: "26.818.41509")
+
+        XCTAssertEqual(text.title, "ChatGPT Runtime Ready")
+        XCTAssertEqual(
+            text.body,
+            "Runtime support for ChatGPT 26.818.41509 is ready. Restart ChatGPT to enable extensions."
+        )
+    }
+
+    @MainActor
     func testApprovalRefreshRecoversFinishedUpdatedLaunchAndWaitsForUpdate()
         async
     {

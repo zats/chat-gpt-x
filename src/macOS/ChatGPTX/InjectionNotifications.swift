@@ -56,6 +56,31 @@ final class InjectionNotificationController: NSObject,
             content.categoryIdentifier = Self.updateCategory
         }
 
+        deliver(
+            content,
+            identifier: "chatgptx-injection-\(processIdentifier)"
+        )
+    }
+
+    func notifyRuntimeReady(chatgptVersion: String) {
+        let content = UNMutableNotificationContent()
+        let notificationText = Self.runtimeReadyNotificationText(
+            for: chatgptVersion
+        )
+        content.title = notificationText.title
+        content.body = notificationText.body
+        content.categoryIdentifier = Self.restartCategory
+
+        deliver(
+            content,
+            identifier: "chatgptx-runtime-ready-\(chatgptVersion)"
+        )
+    }
+
+    private func deliver(
+        _ content: UNNotificationContent,
+        identifier: String
+    ) {
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {
@@ -66,14 +91,14 @@ final class InjectionNotificationController: NSObject,
                     guard granted else { return }
                     Self.add(
                         content,
-                        processIdentifier: processIdentifier,
+                        identifier: identifier,
                         to: center
                     )
                 }
             case .authorized, .provisional, .ephemeral:
                 Self.add(
                     content,
-                    processIdentifier: processIdentifier,
+                    identifier: identifier,
                     to: center
                 )
             case .denied:
@@ -82,6 +107,15 @@ final class InjectionNotificationController: NSObject,
                 break
             }
         }
+    }
+
+    static func runtimeReadyNotificationText(
+        for chatgptVersion: String
+    ) -> (title: String, body: String) {
+        (
+            title: "ChatGPT Runtime Ready",
+            body: "Runtime support for ChatGPT \(chatgptVersion) is ready. Restart ChatGPT to enable extensions."
+        )
     }
 
     static func notificationText(
@@ -103,12 +137,12 @@ final class InjectionNotificationController: NSObject,
 
     private nonisolated static func add(
         _ content: UNNotificationContent,
-        processIdentifier: pid_t,
+        identifier: String,
         to center: UNUserNotificationCenter
     ) {
         center.add(
             UNNotificationRequest(
-                identifier: "chatgptx-injection-\(processIdentifier)",
+                identifier: identifier,
                 content: content,
                 trigger: nil
             )

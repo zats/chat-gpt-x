@@ -54,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var automaticUpdateTask: Task<Void, Never>?
     private var checkForUpdatesAfterLaunch = false
     private var runtimeSupportCheckPending = false
+    private var runtimeReadyNotificationPending = false
     private var windowController: LauncherWindowController?
     private var systemMenuController: SystemMenuController?
     private var launchRecoveryMonitor: ChatGPTLaunchRecoveryMonitor?
@@ -575,6 +576,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 preparedComponents = result.preparedStore
                 runtimeSupportCheckPending = false
+                let notifyRuntimeReady = runtimeReadyNotificationPending
+                runtimeReadyNotificationPending = false
                 windowController?.showUpdateSummary(outcome.summary)
                 let installed: Bool
                 switch result {
@@ -589,7 +592,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     installed: installed,
                     restartRequired: restartRequired
                 )
-                showUpdateResult(result)
+                if notifyRuntimeReady {
+                    notificationController?.notifyRuntimeReady(
+                        chatgptVersion: chatgptVersion
+                    )
+                } else {
+                    showUpdateResult(result)
+                }
             } catch {
                 windowController?.showUpdateFailure(error)
             }
@@ -609,6 +618,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func requestRuntimeSupportCheck() {
         runtimeSupportCheckPending = true
+        runtimeReadyNotificationPending = true
         runPendingRuntimeSupportCheck()
     }
 
