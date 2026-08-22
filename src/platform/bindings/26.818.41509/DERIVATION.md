@@ -8,7 +8,7 @@ Pinned build:
 - Electron: `151.0.7922.170`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.818.41509.zip`
 - Binding date: `2026-08-22`
-- Binding version: `1.0.0`
+- Binding version: `1.0.1`
 - ChatGPT API version: `1.1.2`
 - Version-watcher issue: `#46`
 
@@ -18,11 +18,14 @@ and app.asar hash matched the values above before and after validation. The
 stock application, prepared research tree, authentication source, and user
 state were not changed.
 
-No generated binding existed for this issue. This new binding starts from the
-API-development implementation in `26.818.41705` and preserves its ChatGPTX
-API version. The public API, extensions, extension manifests, and all existing
-bindings are unchanged. Current ESM imports, semantic callers, export maps,
-and live behavior were checked before retaining any short export name.
+No generated binding existed when issue `#46` was opened. The original
+`1.0.0` implementation started from the API-development implementation in
+`26.818.41705`. This `1.0.1` correction retains its verified module map and
+fixes the current generic thread-menu adapter losing its pointer-open state
+when unrelated extension surfaces changed. The public API, extensions,
+extension manifests, and all other bindings are unchanged. Current ESM
+imports, semantic callers, export maps, and live behavior were checked before
+retaining any short export name.
 
 ## Verified module map
 
@@ -81,9 +84,14 @@ Additional semantic anchors:
 The binding wraps the shared JSX runtime and transforms native Profile and
 thread menu trees without replacing their owning Radix roots. Stateful stock
 submenu owners remain mounted. Extension rows use the exact current `K0`
-components. Thread transformations pass effective raw descriptors to a real,
-keyed `k1` element, retaining native hooks, open state, shortcuts, and
-`onBeforeOpen` behavior.
+components. Thread transformations pass effective raw descriptors to a real
+`k1` element keyed only by its owning thread id. The effective model continues
+to refresh through `getItems`. A dedicated thread-menu change signal updates
+the boundary only for thread-transform registration, disposal, or dynamic
+native-item capture; profile, Settings, color-picker, and thread-list changes
+cannot remount the native Radix owner during pointer-down and discard its
+pending or open state. Native hooks, shortcuts, `onBeforeOpen` behavior, and
+the adapter's stock await mode remain unchanged.
 
 The Profile boundary remains below the providers that own application scope.
 It calls `IVt(VFt)` at a stable hook position and retains the live result for
@@ -183,8 +191,9 @@ outside the API-key gate.
   moved.
 - Empty or reordered thread model: the generic menu export, raw message
   descriptors, action ids, or source-position reinsertion changed.
-- A connected thread trigger remains closed after pointer-down: native
-  dropdown ownership or the activation contract changed.
+- A connected thread trigger remains closed after pointer-down: the generic
+  adapter identity or its dedicated thread-menu change signal regressed, or
+  native dropdown ownership changed.
 - Bound thread trigger with no menu: the `k1` owner, initial item seed, or
   native activation sequence changed.
 - Native Settings loading or control failure: page, group, rows, row, or

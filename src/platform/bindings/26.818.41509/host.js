@@ -253,6 +253,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const extensions = new Map();
   const safeHandlers = new WeakSet();
   const renderListeners = new Set();
+  const threadMenuRenderListeners = new Set();
   const mountedThreadListRows = new WeakMap();
   const builtInSettingsCategories = new Map();
   const settingsNavigationRows = new Map();
@@ -273,6 +274,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const settingsNativeItemContent = new WeakMap();
   const debugSettingsSnapshotRequests = new Map();
   let renderVersion = 0;
+  let threadMenuRenderVersion = 0;
   let builtInCache = Object.freeze([]);
   let builtInViews = new Map();
   const threadModels = new Map();
@@ -345,6 +347,16 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     renderVersion += 1;
     for (const listener of [...renderListeners]) listener();
     if (native) queueMicrotask(refreshThreadListRows);
+  }
+
+  function subscribeThreadMenu(listener) {
+    threadMenuRenderListeners.add(listener);
+    return () => threadMenuRenderListeners.delete(listener);
+  }
+
+  function emitThreadMenuChange() {
+    threadMenuRenderVersion += 1;
+    for (const listener of [...threadMenuRenderListeners]) listener();
   }
 
   function emitAuthenticationChange() {
@@ -2395,7 +2407,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       }
       model.opaqueCache = nextCache;
     }
-    if (changed) emitChange();
+    if (changed) emitThreadMenuChange();
     return changed;
   }
 
@@ -3929,7 +3941,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         shortcuts,
         children,
       },
-      `${context.threadId}:${renderVersion}`,
+      context.threadId,
     );
   }
 
@@ -4519,9 +4531,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       threadMenuBoundaryRenderCount += 1;
       const intl = native.useIntl();
       React.useSyncExternalStore(
-        subscribe,
-        () => renderVersion,
-        () => renderVersion,
+        subscribeThreadMenu,
+        () => threadMenuRenderVersion,
+        () => threadMenuRenderVersion,
       );
       const context = threadContextForMenuProps(child.props);
       React.useLayoutEffect(() => {
@@ -5108,7 +5120,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         }
         const entry = { extId, transform };
         threadTransformers.push(entry);
-        emitChange();
+        emitThreadMenuChange();
         let disposed = false;
         return Object.freeze({
           dispose() {
@@ -5116,7 +5128,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
             disposed = true;
             const index = threadTransformers.indexOf(entry);
             if (index >= 0) threadTransformers.splice(index, 1);
-            emitChange();
+            emitThreadMenuChange();
           },
         });
       },
