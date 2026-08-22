@@ -43,17 +43,16 @@ final class InjectionNotificationController: NSObject,
 
     func notify(_ failure: ChatGPTInjectionFailure) {
         let content = UNMutableNotificationContent()
+        let notificationText = Self.notificationText(for: failure)
+        content.title = notificationText.title
+        content.body = notificationText.body
         let processIdentifier: pid_t
         switch failure {
         case .extensionsDisabled(let pid):
             processIdentifier = pid
-            content.title = "ChatGPT Extensions Disabled"
-            content.body = "Restart ChatGPT to enable extensions."
             content.categoryIdentifier = Self.restartCategory
         case .bindingMissing(let pid):
             processIdentifier = pid
-            content.title = "ChatGPT Update Needs Components"
-            content.body = "Check for updates to install a matching binding."
             content.categoryIdentifier = Self.updateCategory
         }
 
@@ -82,6 +81,23 @@ final class InjectionNotificationController: NSObject,
             @unknown default:
                 break
             }
+        }
+    }
+
+    static func notificationText(
+        for failure: ChatGPTInjectionFailure
+    ) -> (title: String, body: String) {
+        switch failure {
+        case .extensionsDisabled:
+            (
+                title: "ChatGPT Extensions Disabled",
+                body: "Restart ChatGPT to enable extensions."
+            )
+        case .bindingMissing:
+            (
+                title: "ChatGPT Runtime Not Supported",
+                body: "No matching runtime is installed for this ChatGPT build. ChatGPT will run without extensions while ChatGPTX checks for support."
+            )
         }
     }
 

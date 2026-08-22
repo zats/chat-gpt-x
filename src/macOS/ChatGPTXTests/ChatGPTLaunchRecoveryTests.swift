@@ -301,6 +301,29 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
+    func testOnlyMissingBindingRequestsRuntimeSupportCheck() {
+        XCTAssertTrue(AppDelegate.runtimeSupportCheckRequired(
+            after: .bindingMissing(123)
+        ))
+        XCTAssertFalse(AppDelegate.runtimeSupportCheckRequired(
+            after: .extensionsDisabled(123)
+        ))
+    }
+
+    @MainActor
+    func testMissingBindingNotificationReportsUnsupportedRuntime() {
+        let text = InjectionNotificationController.notificationText(
+            for: .bindingMissing(123)
+        )
+
+        XCTAssertEqual(text.title, "ChatGPT Runtime Not Supported")
+        XCTAssertEqual(
+            text.body,
+            "No matching runtime is installed for this ChatGPT build. ChatGPT will run without extensions while ChatGPTX checks for support."
+        )
+    }
+
+    @MainActor
     func testApprovalRefreshAndUpdateWaitRecoverInactiveLaunches() async {
         let approvalSource = MockLifecycleSource()
         let approvalDirect = MockApplication(pid: 15, url: applicationURL)

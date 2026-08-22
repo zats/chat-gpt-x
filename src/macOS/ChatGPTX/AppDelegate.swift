@@ -53,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var updateTask: Task<Void, Never>?
     private var automaticUpdateTask: Task<Void, Never>?
     private var checkForUpdatesAfterLaunch = false
+    private var runtimeSupportCheckPending = false
     private var windowController: LauncherWindowController?
     private var systemMenuController: SystemMenuController?
     private var launchRecoveryMonitor: ChatGPTLaunchRecoveryMonitor?
@@ -230,8 +231,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             expectedBinding: { [weak self] in
                 self?.preparedComponents?.versions.binding
             },
-            failureHandler: { [weak notificationController] failure in
+            failureHandler: {
+                [weak self, weak notificationController] failure in
                 notificationController?.notify(failure)
+                if Self.runtimeSupportCheckRequired(after: failure) {
+                    self?.requestRuntimeSupportCheck()
+                }
             }
         )
         self.injectionMonitor = injectionMonitor
@@ -339,6 +344,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if checkForUpdatesAfterLaunch {
                     checkForUpdatesAfterLaunch = false
                     checkForUpdates()
+                } else {
+                    runPendingRuntimeSupportCheck()
                 }
             }
 
@@ -537,6 +544,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     windowController?.setCheckingForUpdates(false)
                     systemMenuController?.setCheckingForUpdates(false)
                 }
+                runPendingRuntimeSupportCheck()
             }
 
             do {
@@ -566,6 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     throw UpdateUIError.chatGPTChangedDuringUpdate
                 }
                 preparedComponents = result.preparedStore
+                runtimeSupportCheckPending = false
                 windowController?.showUpdateSummary(outcome.summary)
                 let installed: Bool
                 switch result {
@@ -585,6 +594,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 windowController?.showUpdateFailure(error)
             }
         }
+    }
+
+    static func runtimeSupportCheckRequired(
+        after failure: ChatGPTInjectionFailure
+    ) -> Bool {
+        switch failure {
+        case .bindingMissing:
+            true
+        case .extensionsDisabled:
+            false
+        }
+    }
+
+    private func requestRuntimeSupportCheck() {
+        runtimeSupportCheckPending = true
+        runPendingRuntimeSupportCheck()
+    }
+
+    private func runPendingRuntimeSupportCheck() {
+        guard runtimeSupportCheckPending,
+            updateTask == nil,
+            launchTask == nil,
+            launchRecoveryMonitor?.isAutomaticRecoveryActive != true
+        else {
+            return
+        }
+        runtimeSupportCheckPending = false
+        checkForUpdates(inBackground: true)
     }
 
     private func startAutomaticUpdates(checkImmediately: Bool = true) {

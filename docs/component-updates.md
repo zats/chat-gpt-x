@@ -197,7 +197,11 @@ flowchart TD
 
 On startup, the launcher first checks for an exact cached lock. If it exists,
 the launcher can inject it without network access. The launcher then checks for
-updates in the background.
+updates in the background. While it remains open, it checks again every ten
+minutes. A running ChatGPT build without a matching installed binding triggers
+an immediate background check. ChatGPT continues without extensions, and the
+launcher shows a notification that the runtime is not supported until an exact
+binding is available.
 
 On a clean installation, the launcher downloads the exact remote set. If the
 network is unavailable or the ChatGPT build has no exact binding, the launcher
