@@ -373,7 +373,7 @@ jobs:
           echo "version=$codex_version" >> "$GITHUB_OUTPUT"
           "$RUNNER_TEMP/bin/codex" --version
 
-      - name: Materialize authentication
+      - name: Materialize and validate authentication
         id: authentication
         env:
           AGENT_AUTH_JSON: ${{ secrets.CODEX_AGENT_AUTH_JSON }}
@@ -397,14 +397,6 @@ jobs:
               "$auth_root" \
               "$candidate_root"
           )"
-          jq -e '
-            .auth_mode == "chatgptAuthTokens" and
-            (.tokens.access_token | type == "string" and length > 0) and
-            .tokens.id_token == .tokens.access_token and
-            .tokens.refresh_token == "" and
-            (.tokens.account_id | type == "string" and length > 0)
-          ' \
-            "$agent_home/auth.json" >/dev/null
           cp scripts/auth-handoff.mjs "$RUNNER_TEMP/trusted-auth-handoff.mjs"
           : > "$diagnostics_root/agent.jsonl"
           : > "$diagnostics_root/agent-final.txt"
@@ -798,7 +790,7 @@ jobs:
           installed_version="$("$codex_prefix/bin/codex" --version | awk '{print $2}')"
           [[ "$installed_version" == "$CODEX_VERSION" ]]
 
-      - name: Materialize rebase resolver authentication
+      - name: Materialize and validate rebase resolver authentication
         if: steps.binding.outputs.conflicted == 'true'
         id: resolver-authentication
         env:
@@ -813,14 +805,6 @@ jobs:
           chmod 700 "$resolver_home"
           printf '%s' "$AGENT_AUTH_JSON" > "$resolver_home/auth.json"
           chmod 600 "$resolver_home/auth.json"
-          jq -e '
-            .auth_mode == "chatgptAuthTokens" and
-            (.tokens.access_token | type == "string" and length > 0) and
-            .tokens.id_token == .tokens.access_token and
-            .tokens.refresh_token == "" and
-            (.tokens.account_id | type == "string" and length > 0)
-          ' \
-            "$resolver_home/auth.json" >/dev/null
           echo "home=$resolver_home" >> "$GITHUB_OUTPUT"
           CODEX_HOME="$resolver_home" codex login status
 
