@@ -1,6 +1,6 @@
 # Codex Version Watch Cloudflare Worker
 
-This Worker checks the Codex Sparkle feed every five minutes and opens one issue for each app version that does not have bindings. Applying the `pending` label starts the binding workflow.
+This Worker checks the Codex Sparkle feed every five minutes and opens one issue for each app version that does not have bindings. Applying the `pending` label starts the binding workflow. If the workflow fails, an authorized repository collaborator can comment `retry` on the failed issue to start the same workflow again from the current `main` branch.
 
 ## What It Does
 
@@ -10,6 +10,8 @@ This Worker checks the Codex Sparkle feed every five minutes and opens one issue
 4. Stops when an issue named `ChatGPT <version> available` already exists.
 5. Opens an issue with versioned JSON metadata and applies `pending`.
 6. GitHub starts `Rebind ChatGPT` when `pending` is applied.
+7. On failure, GitHub leaves the issue open with `failed`. An owner, member, or collaborator can comment exactly `retry` after the fix is on `main`.
+8. The same workflow removes `failed`, applies `in-progress`, creates and validates the binding, merges it, publishes its releases, applies `success`, and closes the issue.
 
 The binding folder and issue are the durable deduplication records.
 Repository CI enforces the same manifest and folder invariant.

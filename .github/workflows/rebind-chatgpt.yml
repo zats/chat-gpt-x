@@ -4,6 +4,9 @@ on:
   issues:
     types:
       - labeled
+  issue_comment:
+    types:
+      - created
   workflow_dispatch:
     inputs:
       version:
@@ -34,14 +37,33 @@ concurrency:
 jobs:
   request:
     if: >-
-      github.event_name != 'issues' ||
       (
+        github.event_name != 'issues' &&
+        github.event_name != 'issue_comment'
+      ) ||
+      (
+        github.event_name == 'issues' &&
         github.event.label.name == 'pending' &&
+        startsWith(github.event.issue.title, 'ChatGPT ') &&
+        endsWith(github.event.issue.title, ' available')
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.comment.body == 'retry' &&
+        contains(
+          fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'),
+          github.event.comment.author_association
+        ) &&
+        github.event.issue.pull_request == null &&
+        contains(github.event.issue.labels.*.name, 'failed') &&
         startsWith(github.event.issue.title, 'ChatGPT ') &&
         endsWith(github.event.issue.title, ' available')
       )
     runs-on: ubuntu-latest
+    permissions:
+      issues: read
     outputs:
+      active: ${{ steps.request.outputs.active }}
       version: ${{ steps.request.outputs.version }}
       download-url: ${{ steps.request.outputs.download-url }}
       issue-number: ${{ steps.request.outputs.issue-number }}
@@ -63,6 +85,7 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           invalid() {
             echo "valid=false" >> "$GITHUB_OUTPUT"
@@ -70,7 +93,25 @@ jobs:
             exit 0
           }
 
-          if [[ "$EVENT_NAME" == "issues" ]]; then
+          if [[ "$EVENT_NAME" == "issue_comment" ]]; then
+            current_labels="$(
+              gh issue view "$EVENT_ISSUE_NUMBER" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json labels \
+                --jq '.labels[].name'
+            )"
+            if ! grep -Fxq failed <<< "$current_labels"; then
+              {
+                echo "active=false"
+                echo "valid=true"
+              } >> "$GITHUB_OUTPUT"
+              echo "Retry skipped because the issue no longer has the failed label."
+              exit 0
+            fi
+          fi
+          echo "active=true" >> "$GITHUB_OUTPUT"
+
+          if [[ "$EVENT_NAME" == "issues" || "$EVENT_NAME" == "issue_comment" ]]; then
             [[ "$ISSUE_TITLE" =~ ^ChatGPT\ ([0-9]+(\.[0-9]+)+)\ available$ ]] ||
               invalid "Issue title must match: ChatGPT <numeric version> available."
             title_version="${BASH_REMATCH[1]}"
@@ -147,6 +188,7 @@ jobs:
 
   mark-issue-in-progress:
     needs: request
+    if: needs.request.outputs.active == 'true'
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -573,11 +615,11 @@ jobs:
                 tail -n 1 |
                 cut -c 1-1000
             )"
-            next_action="Open the failed Codex step and the failure diagnostics artifact."
+            next_action="Open the failed Codex step and the failure diagnostics artifact. After the fix is on main, comment retry on the version issue."
             if rg -q 'token_revoked|invalidated oauth token' \
               "$DIAGNOSTICS_ROOT/agent.jsonl"; then
               failure_cause="Codex authentication failed because CODEX_AGENT_AUTH_JSON contains a revoked OAuth token (token_revoked)."
-              next_action="Refresh the CI Codex authentication secret, then rerun this workflow."
+              next_action="Refresh the CI Codex authentication secret, then comment retry on the version issue."
             elif [[ -z "$failure_cause" ]]; then
               failure_cause="Codex exited with status $AGENT_EXIT_CODE without a final error message."
             fi
@@ -1179,14 +1221,7 @@ jobs:
   finalize-issue:
     if: >-
       always() &&
-      (
-        github.event_name != 'issues' ||
-        (
-          github.event.label.name == 'pending' &&
-          startsWith(github.event.issue.title, 'ChatGPT ') &&
-          endsWith(github.event.issue.title, ' available')
-        )
-      )
+      needs.request.outputs.active == 'true'
     needs:
       - request
       - mark-issue-in-progress
@@ -1327,7 +1362,7 @@ jobs:
             --add-label failed
           failure_body="$(
             printf \
-              'Binding generation failed: [workflow run #%s](%s).\n\n%s' \
+              'Binding generation failed: [workflow run #%s](%s).\n\n%s\n\nAfter the fix is on main, comment retry on this issue.' \
               "$GITHUB_RUN_NUMBER" \
               "$run_url" \
               "$failure_details"

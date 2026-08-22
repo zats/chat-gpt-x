@@ -29,7 +29,8 @@ jobs:
           (
             github.event.workflow_run.event == 'workflow_dispatch' ||
             github.event.workflow_run.event == 'repository_dispatch' ||
-            github.event.workflow_run.event == 'issues'
+            github.event.workflow_run.event == 'issues' ||
+            github.event.workflow_run.event == 'issue_comment'
           )
         )
       )
