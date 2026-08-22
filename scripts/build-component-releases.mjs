@@ -21,7 +21,7 @@ const repositoryRoot = path.resolve(
   "..",
 );
 const normalizedTimestamp = new Date("1980-01-01T00:00:00Z");
-const requiredBunVersion = "1.3.14";
+const requiredBunVersion = "1.4.0";
 
 function run() {
   const [

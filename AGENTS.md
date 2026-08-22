@@ -66,6 +66,14 @@ the current components into an isolated versioned store and passes its local
 `api-test-suite` through `--extension`. Additional arguments are forwarded to
 ChatGPT in test mode for isolated profiles and CDP.
 
+To start a stock ChatGPT instance with separate Electron and Codex data,
+optional product UI suppression, and no ChatGPTX injection, use
+`scripts/launch-isolated-chatgpt.mjs` and follow
+[`docs/launching_isolated.md`](docs/launching_isolated.md).
+
+For the global Computer Use forbidden-target policy and override, follow
+[`docs/computer_use.md`](docs/computer_use.md).
+
 ## Invariants for any change
 
 1. Product code, tests, documentation, and defaults must work for arbitrary users and machines. Never hard-code a developer identity, account data, home directory, app installation path, or authenticated state. Use synthetic fixtures, OS discovery, configurable paths, and isolated seeded test profiles.

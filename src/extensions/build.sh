@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANONICAL_MAIN="contents/main.js"
-REQUIRED_BUN_VERSION="1.3.14"
+REQUIRED_BUN_VERSION="1.4.0"
 
 command -v bun >/dev/null || {
   echo "bun is required: brew install oven-sh/bun/bun" >&2
