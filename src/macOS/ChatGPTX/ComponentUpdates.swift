@@ -564,7 +564,7 @@ final class ComponentUpdateService {
         let index = try await fetchIndex()
         try validateLauncher(for: index)
         let current = try? componentStore.prepareInstalled()
-        await prefetchSupportedComponents(
+        await prefetchLatestSupportedComponents(
             from: index,
             installedChatGPTVersion: chatgptVersion,
             installedChatGPTAsarSHA256: chatgptAsarSHA256,
@@ -635,7 +635,7 @@ final class ComponentUpdateService {
         }
     }
 
-    private func prefetchSupportedComponents(
+    private func prefetchLatestSupportedComponents(
         from index: ComponentUpdateIndex,
         installedChatGPTVersion: String,
         installedChatGPTAsarSHA256: String,
@@ -647,47 +647,40 @@ final class ComponentUpdateService {
             return
         }
 
-        var targetVersions = index.bindings.keys.filter {
-            $0.compare(
-                installedChatGPTVersion,
-                options: .numeric
-            ) == .orderedDescending
+        guard let latestBinding = index.bindings[latestVersion] else {
+            try? componentStore.clearPrefetchedComponents()
+            return
         }
         let installedExactBinding = index.bindings[
             installedChatGPTVersion
         ].map {
             $0.asarSha256 == installedChatGPTAsarSHA256
         } ?? false
-        if targetVersions.isEmpty && !installedExactBinding {
-            targetVersions = [latestVersion]
+        let latestIsNewer = latestVersion.compare(
+            installedChatGPTVersion,
+            options: .numeric
+        ) == .orderedDescending
+        guard latestIsNewer || !installedExactBinding else {
+            try? componentStore.clearPrefetchedComponents()
+            return
         }
-        targetVersions.sort {
-            $0.compare($1, options: .numeric) == .orderedAscending
-        }
-        try? componentStore.retainPrefetchedComponents(
-            for: Set(targetVersions)
-        )
+        try? componentStore.retainPrefetchedComponents(for: [latestVersion])
 
-        for targetVersion in targetVersions {
-            guard let binding = index.bindings[targetVersion] else {
-                continue
-            }
-            do {
-                let plan = try componentStore.planUpdate(
-                    index,
-                    chatgptVersion: targetVersion,
-                    chatgptAsarSHA256: binding.asarSha256,
-                    current: current
-                )
-                try await componentStore.prefetch(
-                    plan,
-                    session: session,
-                    progress: progress
-                )
-            } catch {
-                // Each target is independent. Keep valid cached targets and
-                // retry this target during the next automatic check.
-            }
+        do {
+            let plan = try componentStore.planUpdate(
+                index,
+                chatgptVersion: latestVersion,
+                chatgptAsarSHA256: latestBinding.asarSha256,
+                current: current
+            )
+            try await componentStore.prefetch(
+                plan,
+                session: session,
+                progress: progress
+            )
+        } catch {
+            // Prefetch is an optimization. The next automatic check retries
+            // the latest supported build.
         }
     }
 

@@ -489,7 +489,7 @@ final class ComponentUpdatesTests: XCTestCase {
     }
 
     @MainActor
-    func testPrefetchKeepsStagedBuildWhenANewerBindingExists()
+    func testPrefetchKeepsOnlyNewestSupportedBuild()
         async throws
     {
         let newestVersion = "26.900.10002"
@@ -548,30 +548,29 @@ final class ComponentUpdatesTests: XCTestCase {
             chatgptAsarSHA256: Self.asarHash
         )
 
-        for (version, asarHash) in [
-            (Self.nextChatgptVersion, Self.nextAsarHash),
-            (newestVersion, newestAsarHash),
-        ] {
-            let prefetched = try JSONDecoder().decode(
-                PrefetchedComponentSet.self,
-                from: Data(contentsOf: codexHomeURL.appendingPathComponent(
-                    "extensions/prefetched/\(version).json"
-                ))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: codexHomeURL.appendingPathComponent(
+                    "extensions/prefetched/\(Self.nextChatgptVersion).json"
+                ).path
             )
-            XCTAssertEqual(prefetched.versions.binding.chatgpt, version)
-            XCTAssertEqual(
-                prefetched.versions.binding.asarSha256,
-                asarHash
-            )
-        }
+        )
+        let prefetched = try JSONDecoder().decode(
+            PrefetchedComponentSet.self,
+            from: Data(contentsOf: codexHomeURL.appendingPathComponent(
+                "extensions/prefetched/\(newestVersion).json"
+            ))
+        )
+        XCTAssertEqual(prefetched.versions.binding.chatgpt, newestVersion)
+        XCTAssertEqual(
+            prefetched.versions.binding.asarSha256,
+            newestAsarHash
+        )
         XCTAssertEqual(
             ComponentUpdateURLProtocol.requestedURLs,
             [
                 Self.indexURL,
                 releaseURL("chatgpt-api-v1.1.0"),
-                releaseURL(
-                    "binding-\(Self.nextChatgptVersion)-v1.0.0"
-                ),
                 releaseURL("binding-\(newestVersion)-v1.0.0"),
                 releaseURL(
                     "binding-\(Self.chatgptVersion)-v1.0.0"

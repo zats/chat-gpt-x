@@ -139,6 +139,21 @@ jobs:
             request_download_url="$(jq -r .download_url <<< "$metadata")"
             request_issue_number="$EVENT_ISSUE_NUMBER"
             request_force="$(jq -r '.force // false' <<< "$metadata")"
+            latest_known_version="$(
+              gh api --paginate \
+                "repos/$GITHUB_REPOSITORY/issues?state=all&per_page=100" \
+                --jq '
+                  .[] |
+                  select(.pull_request == null) |
+                  .title |
+                  select(test("^ChatGPT [0-9]+(\\.[0-9]+)+ available$")) |
+                  capture("^ChatGPT (?<version>[0-9]+(\\.[0-9]+)+) available$").version
+                ' |
+                sort -V |
+                tail -n 1
+            )"
+            [[ -z "$latest_known_version" || "$request_version" == "$latest_known_version" ]] ||
+              invalid "ChatGPT $request_version is superseded by the latest known version $latest_known_version."
           elif [[ "$EVENT_NAME" == "repository_dispatch" ]]; then
             request_version="$PAYLOAD_VERSION"
             request_download_url="$PAYLOAD_DOWNLOAD_URL"

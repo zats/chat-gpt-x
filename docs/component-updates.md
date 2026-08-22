@@ -135,15 +135,13 @@ the complete lock only after all selected packages pass validation. Each
 component receipt records the verified archive SHA-256 and the SHA-256 of every
 extracted file. The launcher rejects a changed, missing, or extra file.
 
-Each `prefetched/<chatgpt-version>.json` file selects a published component set
-for one supported ChatGPT build that is newer than the installed build. The
-launcher downloads and validates all such sets during an update check, but it
-does not change the active runtime. This supports an update that Sparkle staged
-before a newer catalog build appeared. If the installed build is unsupported
-and is newer than the catalog, the launcher retains the newest supported set as
-a fallback. Prefetch does not otherwise depend on support for the currently
-installed build. The launcher promotes only the file whose ChatGPT version and
-`app.asar` hash match the installed app exactly.
+`prefetched/<chatgpt-version>.json` selects the newest published supported
+component set. The launcher downloads and validates this set during an update
+check, but it does not change the active runtime. If the installed build is
+unsupported or is newer than the catalog, the launcher still retains the
+newest supported set. Prefetch does not otherwise depend on support for the
+currently installed build. The launcher promotes the file only when its
+ChatGPT version and `app.asar` hash match the installed app exactly.
 
 `settings.json` maps extension IDs to extensible settings objects:
 
@@ -171,7 +169,7 @@ load them.
 ```mermaid
 flowchart TD
     A["Read installed ChatGPT version and app.asar hash"] --> B["Fetch and strictly validate schema-3 index"]
-    B --> P["Download and validate each newer supported component set"]
+    B --> P["Download and validate the newest supported component set"]
     P --> C{"Exact binding identity exists for the installed build?"}
     C -- "No" --> U["Show unsupported build; do not inject"]
     C -- "Yes" --> D["Select binding and its API/runtime"]
@@ -215,9 +213,9 @@ flowchart TD
 On startup, the launcher first checks for an exact cached lock. If it exists,
 the launcher can inject it without network access. The launcher then checks for
 updates in the background. While it remains open, it checks again every ten
-minutes. Each valid catalog check downloads and validates every newer supported
+minutes. Each valid catalog check downloads and validates the newest supported
 component set before it checks support for the installed build. Thus an
-unsupported installed build cannot block prefetch. The launcher keeps each set
+unsupported installed build cannot block prefetch. The launcher keeps the set
 inactive until the installed app has its exact version and hash. A running
 ChatGPT build without a matching active binding triggers an immediate
 background check. The check can promote an exact prefetched set without network
