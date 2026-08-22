@@ -459,7 +459,7 @@ final class ComponentUpdatesTests: XCTestCase {
         )
         XCTAssertEqual(active.binding.chatgpt, Self.chatgptVersion)
         let prefetchedURL = codexHomeURL.appendingPathComponent(
-            "extensions/prefetched-versions-lock.json"
+            "extensions/prefetched/\(Self.nextChatgptVersion).json"
         )
         let prefetched = try JSONDecoder().decode(
             PrefetchedComponentSet.self,
@@ -479,8 +479,177 @@ final class ComponentUpdatesTests: XCTestCase {
                 Self.indexURL,
                 releaseURL("chatgpt-api-v1.1.0"),
                 releaseURL(
+                    "binding-\(Self.nextChatgptVersion)-v1.0.0"
+                ),
+                releaseURL(
                     "binding-\(Self.chatgptVersion)-v1.0.0"
                 ),
+            ]
+        )
+    }
+
+    @MainActor
+    func testPrefetchKeepsStagedBuildWhenANewerBindingExists()
+        async throws
+    {
+        let newestVersion = "26.900.10002"
+        let newestAsarHash = String(repeating: "d", count: 64)
+        let api = try makeAPIArchive(version: "1.1.0")
+        let currentBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let stagedBinding = try makeBindingArchive(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash
+        )
+        let newestBinding = try makeBindingArchive(
+            chatgpt: newestVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: newestAsarHash
+        )
+        var index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(currentBinding)
+        )
+        var bindings = try XCTUnwrap(index["bindings"] as? [String: Any])
+        bindings[Self.nextChatgptVersion] = bindingEntry(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash,
+            hash: digest(stagedBinding)
+        )
+        bindings[newestVersion] = bindingEntry(
+            chatgpt: newestVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: newestAsarHash,
+            hash: digest(newestBinding)
+        )
+        index["bindings"] = bindings
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": currentBinding,
+                "binding-\(Self.nextChatgptVersion)-v1.0.0": stagedBinding,
+                "binding-\(newestVersion)-v1.0.0": newestBinding,
+            ]
+        )
+
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        for (version, asarHash) in [
+            (Self.nextChatgptVersion, Self.nextAsarHash),
+            (newestVersion, newestAsarHash),
+        ] {
+            let prefetched = try JSONDecoder().decode(
+                PrefetchedComponentSet.self,
+                from: Data(contentsOf: codexHomeURL.appendingPathComponent(
+                    "extensions/prefetched/\(version).json"
+                ))
+            )
+            XCTAssertEqual(prefetched.versions.binding.chatgpt, version)
+            XCTAssertEqual(
+                prefetched.versions.binding.asarSha256,
+                asarHash
+            )
+        }
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [
+                Self.indexURL,
+                releaseURL("chatgpt-api-v1.1.0"),
+                releaseURL(
+                    "binding-\(Self.nextChatgptVersion)-v1.0.0"
+                ),
+                releaseURL("binding-\(newestVersion)-v1.0.0"),
+                releaseURL(
+                    "binding-\(Self.chatgptVersion)-v1.0.0"
+                ),
+            ]
+        )
+    }
+
+    @MainActor
+    func testUnsupportedInstalledBuildStillPrefetchesNewestSupportedBuild()
+        async throws
+    {
+        let unsupportedVersion = "26.999.99999"
+        let unsupportedAsarHash = String(repeating: "c", count: 64)
+        let api = try makeAPIArchive(version: "1.1.0")
+        let currentBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
+        )
+        let nextBinding = try makeBindingArchive(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash
+        )
+        var index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(currentBinding)
+        )
+        var bindings = try XCTUnwrap(index["bindings"] as? [String: Any])
+        bindings[Self.nextChatgptVersion] = bindingEntry(
+            chatgpt: Self.nextChatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.nextAsarHash,
+            hash: digest(nextBinding)
+        )
+        index["bindings"] = bindings
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.nextChatgptVersion)-v1.0.0": nextBinding,
+            ]
+        )
+
+        do {
+            _ = try await makeService().update(
+                for: unsupportedVersion,
+                chatgptAsarSHA256: unsupportedAsarHash
+            )
+            XCTFail("The unsupported installed build must be rejected.")
+        } catch ComponentUpdateError.bindingUnavailable(let version) {
+            XCTAssertEqual(version, unsupportedVersion)
+        }
+
+        let prefetchedURL = codexHomeURL.appendingPathComponent(
+            "extensions/prefetched/\(Self.nextChatgptVersion).json"
+        )
+        let prefetched = try JSONDecoder().decode(
+            PrefetchedComponentSet.self,
+            from: Data(contentsOf: prefetchedURL)
+        )
+        XCTAssertEqual(
+            prefetched.versions.binding.chatgpt,
+            Self.nextChatgptVersion
+        )
+        XCTAssertEqual(
+            prefetched.versions.binding.asarSha256,
+            Self.nextAsarHash
+        )
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [
+                Self.indexURL,
+                releaseURL("chatgpt-api-v1.1.0"),
                 releaseURL(
                     "binding-\(Self.nextChatgptVersion)-v1.0.0"
                 ),
@@ -553,7 +722,7 @@ final class ComponentUpdatesTests: XCTestCase {
         XCTAssertFalse(
             FileManager.default.fileExists(
                 atPath: codexHomeURL.appendingPathComponent(
-                    "extensions/prefetched-versions-lock.json"
+                    "extensions/prefetched/\(Self.nextChatgptVersion).json"
                 ).path
             )
         )
@@ -1210,11 +1379,24 @@ final class ComponentUpdatesTests: XCTestCase {
 
     @MainActor
     func testExactBuildHashAndMinimumLauncherAreRequired() async throws {
-        let index = makeIndex(
-            apiHash: hash("api"),
-            bindingHash: hash("binding")
+        let api = try makeAPIArchive(version: "1.1.0")
+        let binding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.0",
+            api: "1.1.0",
+            asarHash: Self.asarHash
         )
-        ComponentUpdateURLProtocol.responses = [Self.indexURL: json(index)]
+        let index = makeIndex(
+            apiHash: digest(api),
+            bindingHash: digest(binding)
+        )
+        installResponses(
+            index: index,
+            archives: [
+                "chatgpt-api-v1.1.0": api,
+                "binding-\(Self.chatgptVersion)-v1.0.0": binding,
+            ]
+        )
 
         do {
             _ = try await makeService().update(
@@ -1248,9 +1430,21 @@ final class ComponentUpdatesTests: XCTestCase {
             )
         )
         XCTAssertTrue(
-            ComponentUpdateURLProtocol.requestedURLs.allSatisfy {
-                $0 == Self.indexURL
-            }
+            FileManager.default.fileExists(
+                atPath: codexHomeURL.appendingPathComponent(
+                    "extensions/prefetched/\(Self.chatgptVersion).json"
+                ).path
+            )
+        )
+        XCTAssertEqual(
+            ComponentUpdateURLProtocol.requestedURLs,
+            [
+                Self.indexURL,
+                releaseURL("chatgpt-api-v1.1.0"),
+                releaseURL(
+                    "binding-\(Self.chatgptVersion)-v1.0.0"
+                ),
+            ]
         )
     }
 

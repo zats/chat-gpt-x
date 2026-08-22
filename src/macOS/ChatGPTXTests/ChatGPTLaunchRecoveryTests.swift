@@ -324,9 +324,16 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testApprovalRefreshAndUpdateWaitRecoverInactiveLaunches() async {
+    func testApprovalRefreshRecoversFinishedUpdatedLaunchAndWaitsForUpdate()
+        async
+    {
         let approvalSource = MockLifecycleSource()
-        let approvalDirect = MockApplication(pid: 15, url: applicationURL)
+        let approvalDirect = MockApplication(
+            pid: 15,
+            url: applicationURL,
+            active: true,
+            finished: true
+        )
         let approvalInjected = MockApplication(
             pid: 16,
             url: applicationURL,
@@ -749,11 +756,41 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testActiveFinishedInjectedUnverifiedAndAmbiguousLaunchesAreIgnored() {
-        let existing = MockApplication(pid: 50, url: applicationURL)
+    func testActiveAndFinishedDirectLaunchesAreRecovered() async {
         let candidates = [
             MockApplication(pid: 51, url: applicationURL, active: true),
             MockApplication(pid: 52, url: applicationURL, finished: true),
+        ]
+
+        for candidate in candidates {
+            let source = MockLifecycleSource()
+            let injected = MockApplication(
+                pid: candidate.processIdentifier + 100,
+                url: applicationURL,
+                injected: true
+            )
+            candidate.onTerminate = { candidate.isTerminated = true }
+            var relaunchCount = 0
+            let monitor = makeMonitor(source: source) { _ in
+                relaunchCount += 1
+                source.applications = [injected]
+                return injected
+            }
+            monitor.start()
+            source.applications = [candidate]
+            source.emitLaunch(candidate)
+
+            await waitUntil { monitor.recoveryPhase == .armed }
+            XCTAssertEqual(candidate.terminateCount, 1)
+            XCTAssertEqual(relaunchCount, 1)
+            monitor.stop()
+        }
+    }
+
+    @MainActor
+    func testInjectedUnverifiedAndAmbiguousLaunchesAreIgnored() {
+        let existing = MockApplication(pid: 50, url: applicationURL)
+        let candidates = [
             MockApplication(pid: 53, url: applicationURL, injected: true),
             MockApplication(
                 pid: 54,
@@ -852,7 +889,7 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
-    func testActiveApplicationIsNotRecoveredAfterReservationEnds() async {
+    func testApplicationReservedByAnotherLauncherIsNotRecovered() async {
         let source = MockLifecycleSource()
         let external = MockApplication(pid: 67, url: applicationURL)
         var reservationState = ChatGPTLaunchReservationState.pending
@@ -872,7 +909,7 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
                 return reservationState
             }
         ) { _ in
-            XCTFail("An active application must not be recovered")
+            XCTFail("A launch reserved by another launcher must not recover")
             return nil
         }
         monitor.start()

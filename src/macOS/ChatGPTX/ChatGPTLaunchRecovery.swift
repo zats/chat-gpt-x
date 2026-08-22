@@ -609,6 +609,10 @@ final class ChatGPTLaunchRecoveryMonitor {
         guard applicationIsRunning(application), !Task.isCancelled else {
             return
         }
+        if expectedReservationTokenAtObservation == nil {
+            state.registerExternalLaunch(candidate.identity)
+            return
+        }
         classifyUnreservedLaunch(
             application,
             candidate: candidate,

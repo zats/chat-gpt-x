@@ -89,8 +89,7 @@ struct PreparedExtensionSettings {
 struct ComponentStore {
     private static let schemaVersion = 1
     private static let mutationLockFileName = "update.lock"
-    private static let prefetchedLockFileName =
-        "prefetched-versions-lock.json"
+    private static let prefetchedDirectoryName = "prefetched"
     static let integrityReceiptFileName = ".chatgptx-integrity.json"
 
     let fileManager: FileManager
@@ -143,6 +142,7 @@ struct ComponentStore {
             "components/chatgpt-api",
             "components/bindings",
             "components/extensions",
+            Self.prefetchedDirectoryName,
             "state",
         ] {
             let directoryURL = relativePath.isEmpty
@@ -309,8 +309,8 @@ struct ComponentStore {
                 versions: versions
             )
             let data = try encode(prefetched)
-            let url = rootURL.appendingPathComponent(
-                Self.prefetchedLockFileName
+            let url = try prefetchedVersionsLockURL(
+                for: versions.binding.chatgpt
             )
             if fileManager.fileExists(atPath: url.path) {
                 let existingData = try Data(contentsOf: url)
@@ -322,11 +322,6 @@ struct ComponentStore {
                     from: existingData
                 ), existing.schemaVersion == Self.schemaVersion,
                     existing.versions.generation > versions.generation
-                        || existing.versions.generation == versions.generation
-                        && existing.versions.binding.chatgpt.compare(
-                            versions.binding.chatgpt,
-                            options: .numeric
-                        ) == .orderedDescending
                 {
                     return
                 }
@@ -342,8 +337,8 @@ struct ComponentStore {
         beforeActivation: () throws -> Void
     ) throws -> PrefetchedComponentActivation? {
         try withExclusiveMutationLock {
-            let prefetchedURL = rootURL.appendingPathComponent(
-                Self.prefetchedLockFileName
+            let prefetchedURL = try prefetchedVersionsLockURL(
+                for: chatgptVersion
             )
             guard fileManager.fileExists(atPath: prefetchedURL.path) else {
                 return nil
@@ -432,13 +427,40 @@ struct ComponentStore {
     }
 
     func clearPrefetchedComponents() throws {
-        try withExclusiveMutationLock {
-            let url = rootURL.appendingPathComponent(
-                Self.prefetchedLockFileName
-            )
-            guard fileManager.fileExists(atPath: url.path) else { return }
-            try fileManager.removeItem(at: url)
+        try retainPrefetchedComponents(for: [])
+    }
+
+    func retainPrefetchedComponents(
+        for chatgptVersions: Set<String>
+    ) throws {
+        guard chatgptVersions.allSatisfy(isChatGPTVersion) else {
+            throw ComponentStoreError.invalidPrefetchedVersionsLock
         }
+        try withExclusiveMutationLock {
+            let directoryURL = rootURL.appendingPathComponent(
+                Self.prefetchedDirectoryName,
+                isDirectory: true
+            )
+            let retainedNames = Set(chatgptVersions.map { "\($0).json" })
+            for url in try fileManager.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: nil
+            ) where !retainedNames.contains(url.lastPathComponent) {
+                try fileManager.removeItem(at: url)
+            }
+        }
+    }
+
+    private func prefetchedVersionsLockURL(
+        for chatgptVersion: String
+    ) throws -> URL {
+        guard isChatGPTVersion(chatgptVersion) else {
+            throw ComponentStoreError.invalidPrefetchedVersionsLock
+        }
+        return rootURL.appendingPathComponent(
+            Self.prefetchedDirectoryName,
+            isDirectory: true
+        ).appendingPathComponent("\(chatgptVersion).json")
     }
 
     func withExclusiveMutationLock<Result>(

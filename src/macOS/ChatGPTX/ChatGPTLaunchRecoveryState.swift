@@ -117,8 +117,6 @@ struct ChatGPTLaunchRecoveryState: Equatable {
             recoveryAllowed,
             candidate.hasVerifiedBuild,
             !candidate.hasInjectedPlatform,
-            !candidate.isActive,
-            !candidate.isFinishedLaunching,
             liveApplications.subtracting([identity]).isEmpty
         else {
             return .ignore
