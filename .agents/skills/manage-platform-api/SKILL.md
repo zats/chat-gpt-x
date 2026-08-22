@@ -63,7 +63,9 @@ The suite fails closed: it must be impossible for it to pass without a working b
 
 ### 4. Locate and extract the pinned app version
 
-The API-development app version and stock download URL live in `src/platform/bindings/manifest.json`; that exact version must have a versioned binding directory and use the current ChatGPT API. It does not have to be the numerically newest binding because later app builds can remain on an older API. Verify that exact version is installed on this machine and extract it to a temp dir:
+The API-development app version and stock download URL live in `src/platform/bindings/manifest.json`; that exact version must have a versioned binding directory and use the current ChatGPT API. It does not have to be the numerically newest binding because later app builds can remain on an older API.
+
+When orchestration supplies an exact stock app path and prepared `app.asar` research tree, use only those inputs and confirm their supplied identity. Do not download, discover, or extract another app. Otherwise, verify that the exact version is installed on this machine and extract it to a temp dir:
 
 ```bash
 scripts/extract-app.sh --expect-version <version>
@@ -71,7 +73,7 @@ scripts/extract-app.sh --expect-version <version>
 
 (relative to this skill's directory)
 
-The script prints JSON with `extractDir`. If the version/hash mismatches, stop and report to the user — do not bind against the wrong build. Delete the temp dir when the work finishes.
+The script prints JSON with `extractDir`. If the version or supplied identity mismatches, stop and report to the user — do not bind against the wrong build. Delete the temp dir when the work finishes.
 
 ### 5. Research the extracted build and implement the binding
 

@@ -72,6 +72,7 @@ jobs:
           node --test scripts/build-component-releases.test.mjs
           node --test scripts/component-releases.test.mjs
           node --test scripts/materialize-ci-auth.test.mjs
+          node --test scripts/rebind-workflow.test.mjs
           node --test scripts/trigger-chatgpt-rebind.test.mjs
           node --test scripts/validate-rebind-binding.test.mjs
           node --test src/platform/runtime/extension-launch-config.test.cjs

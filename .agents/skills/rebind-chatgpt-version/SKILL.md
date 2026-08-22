@@ -30,15 +30,17 @@ If the current build makes the API impossible to implement, report that fact ins
 
 ## Fast workflow
 
-### 1. Pin the exact installed build
+### 1. Pin the exact build
 
 1. Inspect repository status and preserve unrelated work.
-2. Read `CFBundleShortVersionString`, the Electron version, and the SHA-256 of the installed `app.asar`.
-3. Identify the target binding for correction mode or the API-development binding named by `src/platform/bindings/manifest.json` for new mode.
-4. Run the extraction script from `manage-platform-api` with `--expect-version <new-version>`. Work only in the returned temp directory.
+2. Identify the target binding for correction mode or the API-development binding named by `src/platform/bindings/manifest.json` for new mode.
+3. When orchestration supplies an exact stock app path and prepared `app.asar` research tree, use only those inputs. Confirm their supplied version, Electron version, and SHA-256, but do not download, discover, or extract an app.
+4. Otherwise, locate the exact installed app, read its `CFBundleShortVersionString`, Electron version, and `app.asar` SHA-256, then run the extraction script from `manage-platform-api` with `--expect-version <new-version>`.
 5. Stop if the version or hash changes during the task.
 
 Record the version, hash, exact Sparkle enclosure URL, and current ChatGPT API version immediately. They define the target directory, binding manifest identity, and current CI pin.
+
+Never download a ChatGPT app during an agent-driven rebind. Use the prior binding source and its `DERIVATION.md` as the research record. Do not fetch or extract the prior stock build unless the user explicitly supplies it for that task.
 
 ### 2. Prepare the target binding
 

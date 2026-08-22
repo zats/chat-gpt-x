@@ -352,6 +352,54 @@ jobs:
             exit 1
           }
 
+      - name: Extract and pin requested ChatGPT research tree
+        id: research-app
+        env:
+          APP_VERSION: ${{ needs.request.outputs.version }}
+          CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
+        run: |
+          metadata_path="$RUNNER_TEMP/chatgpt-research-app.json"
+          .agents/skills/manage-platform-api/scripts/extract-app.sh \
+            --app "$CHATGPT_APP_PATH" \
+            --expect-version "$APP_VERSION" \
+            > "$metadata_path"
+          jq -e \
+            --arg app_path "$CHATGPT_APP_PATH" \
+            --arg version "$APP_VERSION" \
+            '
+              .expectationsMet == true and
+              .appPath == $app_path and
+              .appVersion == $version and
+              (.electronVersion | type) == "string" and
+              .electronVersion != "unknown" and
+              (.extractDir | type) == "string" and
+              (.extractDir | length) > 0
+            ' \
+            "$metadata_path" >/dev/null || {
+              echo "prepared ChatGPT research identity does not match the requested app" >&2
+              exit 1
+            }
+          extract_dir="$(jq -er .extractDir "$metadata_path")"
+          electron_version="$(jq -er .electronVersion "$metadata_path")"
+          [[ -d "$extract_dir/webview/assets" ]] || {
+            echo "prepared ChatGPT research tree has no webview assets" >&2
+            exit 1
+          }
+          asar_sha256="$(
+            shasum -a 256 \
+              "$CHATGPT_APP_PATH/Contents/Resources/app.asar" |
+              awk '{print $1}'
+          )"
+          [[ "$asar_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "prepared ChatGPT app.asar has an invalid SHA-256" >&2
+            exit 1
+          }
+          {
+            echo "extract-dir=$extract_dir"
+            echo "electron-version=$electron_version"
+            echo "asar-sha256=$asar_sha256"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Install bundled Codex toolchain
         id: codex
         env:
@@ -423,11 +471,20 @@ jobs:
           BINDING_MODE: ${{ steps.binding-mode.outputs.mode }}
           AUTH_MODE: ${{ steps.authentication.outputs.auth-mode }}
           CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
+          CHATGPT_RESEARCH_DIR: ${{ steps.research-app.outputs.extract-dir }}
+          CHATGPT_ELECTRON_VERSION: ${{ steps.research-app.outputs.electron-version }}
+          CHATGPT_ASAR_SHA256: ${{ steps.research-app.outputs.asar-sha256 }}
           AGENT_CODEX_HOME: ${{ steps.authentication.outputs.agent-home }}
           AUTH_ROOT: ${{ steps.authentication.outputs.auth-root }}
           DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
         run: |
           prompt_path="$RUNNER_TEMP/rebind-prompt.md"
+          reference_version="$(jq -er .chatgpt src/platform/bindings/manifest.json)"
+          reference_binding="src/platform/bindings/$reference_version"
+          [[ -f "$reference_binding/DERIVATION.md" ]] || {
+            echo "API-development binding has no derivation: $reference_binding" >&2
+            exit 1
+          }
           if [[ "$BINDING_MODE" == "correction" ]]; then
             task="correct the existing binding for ChatGPT $APP_VERSION"
             binding_instructions="Edit src/platform/bindings/$APP_VERSION and increment its binding patch version by exactly one. Preserve its chatgpt and chatgptApi values. Keep every other binding directory, src/platform/types.d.ts, extension source, and extension manifests unchanged. Update src/platform/bindings/manifest.json only if needed to pin the exact version and URL. Increment updates/latest.json generation once and replace this build's schema-3 binding entry, including its exact asarSha256. Preserve every other API, binding, and extension entry and all extension version history. Set the changed binding sha256 to 64 zeroes; the workflow replaces it with the deterministic archive hash before validation."
@@ -449,8 +506,13 @@ jobs:
           Use \$rebind-chatgpt-version and $task.
 
           Exact stock app: $CHATGPT_APP_PATH
+          Prepared app.asar research tree: $CHATGPT_RESEARCH_DIR
+          Exact app.asar SHA-256: $CHATGPT_ASAR_SHA256
+          Exact Electron version: $CHATGPT_ELECTRON_VERSION
           Exact Sparkle URL: $DOWNLOAD_URL
           Version-watcher issue: #$ISSUE_NUMBER
+
+          The workflow already downloaded, signature-checked, version-checked, hashed, and extracted the exact target app. Use only the supplied app and research tree. Do not download or extract any ChatGPT app. Do not run download-chatgpt-version.sh, download-pinned-chatgpt.sh, or extract-app.sh. Do not fetch the prior stock app. Use $reference_binding and its DERIVATION.md as the prior implementation and research record. Do not modify or remove the supplied app or research tree.
 
           Follow the skill's completion gate for $BINDING_MODE mode. $binding_instructions
 
@@ -661,14 +723,20 @@ jobs:
 
       - name: Remove sensitive files
         if: always()
-        run: >-
-          rm -rf
-          "$RUNNER_TEMP/codex-agent-home"
-          "$RUNNER_TEMP/chatgptx-auth"
-          "$RUNNER_TEMP/chatgptx-refreshed-auth"
-          "$RUNNER_TEMP/chatgptx-auth-handoff"
-          "$RUNNER_TEMP/trusted-auth-handoff.mjs"
-          "$RUNNER_TEMP/chatgpt-app"
+        env:
+          CHATGPT_RESEARCH_DIR: ${{ steps.research-app.outputs.extract-dir }}
+        run: |
+          cleanup_paths=(
+            "$RUNNER_TEMP/codex-agent-home"
+            "$RUNNER_TEMP/chatgptx-auth"
+            "$RUNNER_TEMP/chatgptx-refreshed-auth"
+            "$RUNNER_TEMP/chatgptx-auth-handoff"
+            "$RUNNER_TEMP/trusted-auth-handoff.mjs"
+            "$RUNNER_TEMP/chatgpt-app"
+            "$RUNNER_TEMP/chatgpt-research-app.json"
+          )
+          [[ -z "$CHATGPT_RESEARCH_DIR" ]] || cleanup_paths+=("$CHATGPT_RESEARCH_DIR")
+          rm -rf "${cleanup_paths[@]}"
 
       - name: Require successful binding
         id: result
