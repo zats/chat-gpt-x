@@ -39,6 +39,32 @@ test("the workflow prepares the exact research tree before the agent", () => {
   );
 });
 
+test("issue retries seed the prior generated patch and failure evidence", () => {
+  const seed = workflow.indexOf(
+    "- name: Seed retry from previous generated pull request",
+  );
+  const agent = workflow.indexOf("- name: Run Codex rebind agent");
+
+  assert.notEqual(seed, -1);
+  assert.ok(seed < agent);
+  assert.match(
+    workflow.slice(seed, agent),
+    /git diff --binary "\$pr_parent" "\$pr_head"/,
+  );
+  assert.match(
+    workflow.slice(seed, agent),
+    /actions\/jobs\/\$failed_job_id\/logs/,
+  );
+  assert.match(
+    workflow.slice(agent),
+    /Read the exact prior validation log at \$PREVIOUS_VALIDATION_LOG/,
+  );
+  assert.match(
+    workflow.slice(agent),
+    /Do not dismiss it as transient or only rerun the same test/,
+  );
+});
+
 test("the agent receives the prepared identity and cannot acquire apps", () => {
   const agent = workflow.indexOf("- name: Run Codex rebind agent");
   const finalize = workflow.indexOf("- name: Finalize update index hashes");

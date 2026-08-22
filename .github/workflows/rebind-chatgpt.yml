@@ -253,7 +253,10 @@ jobs:
     timeout-minutes: 360
     environment: codex-agent
     permissions:
+      actions: read
       contents: read
+      issues: read
+      pull-requests: read
     outputs:
       version: ${{ needs.request.outputs.version }}
       download-url: ${{ needs.request.outputs.download-url }}
@@ -280,6 +283,12 @@ jobs:
           APP_VERSION: ${{ needs.request.outputs.version }}
           FORCE: ${{ needs.request.outputs.force }}
         run: |
+          reference_version="$(jq -er .chatgpt src/platform/bindings/manifest.json)"
+          [[ -d "src/platform/bindings/$reference_version" ]] || {
+            echo "API-development binding is missing: $reference_version" >&2
+            exit 1
+          }
+          echo "reference-version=$reference_version" >> "$GITHUB_OUTPUT"
           binding_root="src/platform/bindings/$APP_VERSION"
           if git cat-file -e "HEAD:$binding_root" 2>/dev/null; then
             [[ "$FORCE" == "true" ]] || {
@@ -296,6 +305,120 @@ jobs:
           else
             echo "mode=new" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Seed retry from previous generated pull request
+        id: previous-attempt
+        env:
+          APP_VERSION: ${{ needs.request.outputs.version }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.request.outputs.issue-number }}
+        run: |
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
+          gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --head "$branch_name" \
+            --base main \
+            --state open \
+            --json number,url,author,baseRefName,headRefName,headRefOid,isCrossRepository \
+            > "$RUNNER_TEMP/previous-binding-prs.json"
+          pr_count="$(jq length "$RUNNER_TEMP/previous-binding-prs.json")"
+          if [[ "$pr_count" == "0" ]]; then
+            echo "No previous generated pull request found."
+            exit 0
+          fi
+          [[ "$pr_count" == "1" ]] || {
+            echo "Expected one previous generated pull request, found $pr_count." >&2
+            exit 1
+          }
+          jq -e \
+            --arg branch "$branch_name" \
+            '
+              .[0].author.login == "app/github-actions" and
+              .[0].baseRefName == "main" and
+              .[0].headRefName == $branch and
+              .[0].isCrossRepository == false and
+              (.[0].headRefOid | test("^[0-9a-f]{40}$"))
+            ' \
+            "$RUNNER_TEMP/previous-binding-prs.json" >/dev/null || {
+              echo "Previous pull request identity is invalid." >&2
+              exit 1
+            }
+
+          pr_number="$(jq -r '.[0].number' "$RUNNER_TEMP/previous-binding-prs.json")"
+          pr_url="$(jq -r '.[0].url' "$RUNNER_TEMP/previous-binding-prs.json")"
+          pr_head="$(jq -r '.[0].headRefOid' "$RUNNER_TEMP/previous-binding-prs.json")"
+          git fetch --no-tags origin "$pr_head"
+          [[ "$(git rev-parse FETCH_HEAD)" == "$pr_head" ]]
+          pr_parent="$(git rev-parse "$pr_head^")"
+          binding_root="src/platform/bindings/$APP_VERSION"
+          git diff --name-only "$pr_parent" "$pr_head" \
+            > "$RUNNER_TEMP/previous-binding-paths.txt"
+          while IFS= read -r changed_path; do
+            case "$changed_path" in
+              "$binding_root"/* | src/platform/bindings/manifest.json | updates/latest.json)
+                ;;
+              *)
+                echo "Previous generated pull request changed a forbidden path: $changed_path" >&2
+                exit 1
+                ;;
+            esac
+          done < "$RUNNER_TEMP/previous-binding-paths.txt"
+          git diff --binary "$pr_parent" "$pr_head" -- \
+            "$binding_root" \
+            src/platform/bindings/manifest.json \
+            updates/latest.json \
+            > "$RUNNER_TEMP/previous-binding.patch"
+          [[ -s "$RUNNER_TEMP/previous-binding.patch" ]] || {
+            echo "Previous generated binding patch is empty." >&2
+            exit 1
+          }
+          git apply --3way "$RUNNER_TEMP/previous-binding.patch"
+          git diff --check "$BASE_SHA"
+          [[ -f "$binding_root/manifest.json" ]] || {
+            echo "Previous pull request did not seed the target binding." >&2
+            exit 1
+          }
+
+          failure_comment="$(
+            gh issue view "$ISSUE_NUMBER" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json comments \
+              --jq '[.comments[].body | select(startswith("Binding generation failed:"))][-1] // ""'
+          )"
+          failure_log=""
+          previous_run_id="$(
+            sed -nE \
+              's#.*https://github.com/[^/]+/[^/]+/actions/runs/([0-9]+).*#\1#p' \
+              <<< "$failure_comment" |
+              head -n 1
+          )"
+          if [[ -n "$previous_run_id" ]]; then
+            failed_job_id="$(
+              gh api \
+                "repos/$GITHUB_REPOSITORY/actions/runs/$previous_run_id/jobs?filter=latest&per_page=100" \
+                --jq '[.jobs[] | select(.name == "validate-pull-request / end-to-end" and .conclusion == "failure")][0].id // empty'
+            )"
+            if [[ -n "$failed_job_id" ]]; then
+              failure_log="$RUNNER_TEMP/previous-validation.log"
+              gh api \
+                "repos/$GITHUB_REPOSITORY/actions/jobs/$failed_job_id/logs" \
+                > "$failure_log"
+              [[ -s "$failure_log" ]] || {
+                echo "Previous validation log is empty." >&2
+                exit 1
+              }
+            fi
+          fi
+
+          {
+            echo "available=true"
+            echo "pr-number=$pr_number"
+            echo "pr-url=$pr_url"
+            echo "failure-log=$failure_log"
+          } >> "$GITHUB_OUTPUT"
+          echo "Seeded retry from previous generated pull request $pr_url."
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -469,17 +592,20 @@ jobs:
           DOWNLOAD_URL: ${{ needs.request.outputs.download-url }}
           ISSUE_NUMBER: ${{ needs.request.outputs.issue-number }}
           BINDING_MODE: ${{ steps.binding-mode.outputs.mode }}
+          REFERENCE_VERSION: ${{ steps.binding-mode.outputs.reference-version }}
           AUTH_MODE: ${{ steps.authentication.outputs.auth-mode }}
           CHATGPT_APP_PATH: ${{ steps.chatgpt.outputs.path }}
           CHATGPT_RESEARCH_DIR: ${{ steps.research-app.outputs.extract-dir }}
           CHATGPT_ELECTRON_VERSION: ${{ steps.research-app.outputs.electron-version }}
           CHATGPT_ASAR_SHA256: ${{ steps.research-app.outputs.asar-sha256 }}
+          PREVIOUS_BINDING_PR: ${{ steps.previous-attempt.outputs.pr-url }}
+          PREVIOUS_VALIDATION_LOG: ${{ steps.previous-attempt.outputs.failure-log }}
           AGENT_CODEX_HOME: ${{ steps.authentication.outputs.agent-home }}
           AUTH_ROOT: ${{ steps.authentication.outputs.auth-root }}
           DIAGNOSTICS_ROOT: ${{ steps.authentication.outputs.diagnostics-root }}
         run: |
           prompt_path="$RUNNER_TEMP/rebind-prompt.md"
-          reference_version="$(jq -er .chatgpt src/platform/bindings/manifest.json)"
+          reference_version="$REFERENCE_VERSION"
           reference_binding="src/platform/bindings/$reference_version"
           [[ -f "$reference_binding/DERIVATION.md" ]] || {
             echo "API-development binding has no derivation: $reference_binding" >&2
@@ -502,6 +628,14 @@ jobs:
             final_test="CHATGPT_APP_PATH=\"$CHATGPT_APP_PATH\" scripts/run-local-ci.sh \"$AUTH_ROOT/primary.json\" \"$AUTH_ROOT/secondary.json\""
             authentication_scope="Complete every gate, including profile-dependent gates and account switching."
           fi
+          if [[ -n "$PREVIOUS_BINDING_PR" ]]; then
+            retry_context="This is a correction attempt for a generated binding that did not complete validation. The workflow seeded the worktree from $PREVIOUS_BINDING_PR. Preserve its useful derivation and implementation work. Treat its validation failure as unresolved."
+            if [[ -n "$PREVIOUS_VALIDATION_LOG" ]]; then
+              retry_context="$retry_context Read the exact prior validation log at $PREVIOUS_VALIDATION_LOG before you edit or test. Diagnose and correct the reported behavior. Do not dismiss it as transient or only rerun the same test."
+            fi
+          else
+            retry_context="No previous generated binding was available for this issue."
+          fi
           cat > "$prompt_path" <<PROMPT
           Use \$rebind-chatgpt-version and $task.
 
@@ -511,6 +645,8 @@ jobs:
           Exact Electron version: $CHATGPT_ELECTRON_VERSION
           Exact Sparkle URL: $DOWNLOAD_URL
           Version-watcher issue: #$ISSUE_NUMBER
+
+          $retry_context
 
           The workflow already downloaded, signature-checked, version-checked, hashed, and extracted the exact target app. Use only the supplied app and research tree. Do not download or extract any ChatGPT app. Do not run download-chatgpt-version.sh, download-pinned-chatgpt.sh, or extract-app.sh. Do not fetch the prior stock app. Use $reference_binding and its DERIVATION.md as the prior implementation and research record. Do not modify or remove the supplied app or research tree.
 
