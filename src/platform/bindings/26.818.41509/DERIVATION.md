@@ -8,8 +8,8 @@ Pinned build:
 - Electron: `151.0.7922.170`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.818.41509.zip`
 - Binding date: `2026-08-22`
-- Binding version: `1.1.0`
-- ChatGPT API version: `1.2.0`
+- Binding version: `1.2.0`
+- ChatGPT API version: `1.3.0`
 - Version-watcher issue: `#46`
 
 Research used only the supplied exact stock application and its supplied
@@ -21,11 +21,13 @@ state were not changed.
 No generated binding existed when issue `#46` was opened. The original
 `1.0.0` implementation started from the API-development implementation in
 `26.818.41705`. Version `1.0.1` fixed generic thread-menu ownership. Version
-`1.1.0` adds the `menus.assistantSelection` public API. It transforms the
-native toolbar shown for selected assistant text and keeps ChatGPT's current
-container and action components. Current ESM imports, semantic callers,
-export maps, and live behavior were checked before any short export name was
-retained.
+`1.1.0` added the `menus.assistantSelection` public API. `1.2.0` adds its
+in-place child-action page, selection-scoped native response-annotation
+creation, and the compatible `labelScale: 2` and `verticalPadding: 4` action
+presentation. It transforms the native toolbar shown for selected assistant
+text and keeps ChatGPT's current container, action, annotation, and composer
+components. Current ESM imports, semantic callers, export maps, and live
+behavior were checked before any short export name was retained.
 
 ## Verified module map
 
@@ -109,10 +111,35 @@ The assistant-selection boundary calls the current `pR` component inside the
 same provider tree. It captures the native `QGa` container and `mU` action
 wrapper, then applies extension transformers in registration order. Built-in
 replacement items inherit omitted fields and handlers. Extension items use
-the native action wrapper. Activation clears the browser selection before it
-calls the selected handler. The boundary is limited to assistant responses:
-it requires selected text, at least one assistant action handler, and no edit
-or comment handler.
+the native action wrapper. A parent action retains the browser selection and
+replaces the native container's children with its one-level child page. A
+leaf action clears the browser selection before it calls the selected
+handler. Native clicks copy only the event's `metaKey` state into the frozen
+public activation value. Programmatic activation reports `metaKey: false`.
+The boundary is limited to assistant responses: it requires selected text,
+at least one assistant action handler, and no edit or comment handler.
+
+The `labelScale: 2` presentation still renders the exact native `mU` action.
+The binding wraps only its label child in an inline `2em` span with unit line
+height. The current `composerSm` button is `28` points high in Electron, and
+its normal action text is `13` points. The optional `verticalPadding: 4`
+presentation passes `height: auto` and `padding-block: 4px` to that same
+native action. The `26`-point emoji line makes the button `36` points high,
+including its native border, and the native `QGa` container grows to `38`
+points. Native separators continue to self-stretch. No replacement control
+or fixed height is used.
+
+The annotation path starts from the captured native
+`selectedTextOverlay.addToCodex` handler. That handler retains the exact DOM
+range and produces the app's `{id, text, anchor}` response annotation through
+the same callback as **Add to chat**. The JSX hook then identifies the native
+annotation layer by its complete create-mode callback contract. Standard
+creation first closes the native editor state, then invokes
+`onUpdateAnnotation(id, annotation)`. The completed response annotation stays
+in the composer. Direct creation invokes `onDirectSubmit(id, annotation)`;
+the app updates the annotation and calls its normal composer submit function.
+ChatGPT continues to own anchor construction, annotation storage, prompt
+serialization, composer validation, and message submission.
 
 The Settings boundary captures native categories, panes, groups, rows,
 localized messages, and controls. Contributions render with the current page
@@ -189,16 +216,17 @@ CHATGPT_APP_PATH="/path/to/ChatGPT.app" \
   scripts/run-local-ci.sh /path/to/api-key-auth.json
 ```
 
-The exact build passed `36` extension and utility unit checks, `33/33`
+The exact build passed `38` extension and utility unit checks, `33/33`
 applicable public API checks with a matching fresh renderer result, and
-`39/39` native UI and shipped-extension composition checks. The Release
+`45/45` native UI and shipped-extension composition checks. The Release
 launcher built and signed successfully and contained no bundled platform
 components.
 
-With the API test extension absent, a separate normal-flow launch loaded only
-the three staged shipped extensions. The binding reached native-ready with no
-error; `thread-colors` contributed its native thread-menu item; and the
-required extension manager rendered its native pane, group, and three
+With the API test extension absent, a separate normal-flow launch loaded all
+four staged shipped extensions. The binding reached native-ready with no
+error; `reactions` registered its assistant-selection transformer;
+`thread-colors` contributed its native thread-menu item; and the required
+extension manager rendered its native pane, group, and four
 installed-extension rows. `multiple-accounts` is profile-dependent and was
 outside the API-key gate.
 
@@ -215,6 +243,17 @@ outside the API-key gate.
 - Assistant-selection action with non-native layout or no activation: the
   native container or action ownership changed, or browser-selection dismissal
   regressed.
+- Assistant-selection scaled label is not twice the native font size: the
+  native action's child inheritance or its `composerSm` size token changed.
+- Assistant-selection padded action does not add `4` points above and below
+  or does not grow by `8` points: the native action stopped forwarding style,
+  its fixed-height token changed, or the container stopped growing with it.
+- Assistant-selection child page closes immediately: parent activation entered
+  the leaf dismissal path or the dedicated selection-boundary refresh signal
+  no longer preserves the boundary model.
+- Response-annotation creation times out: the Add to chat handler no longer
+  creates a native annotation editor, or the create-mode annotation-layer
+  update/direct-submit callback contract changed.
 - A connected thread trigger remains closed after pointer-down: the generic
   adapter identity or its dedicated thread-menu change signal regressed, or
   native dropdown ownership changed.

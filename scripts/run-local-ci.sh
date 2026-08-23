@@ -682,6 +682,7 @@ SQL
 run_logged unit-tests bun test \
   "$REPO_ROOT/src/extensions/extensions/extensions.test.ts" \
   "$REPO_ROOT/src/extensions/multiple-accounts/multiple-accounts.test.ts" \
+  "$REPO_ROOT/src/extensions/reactions/reactions.test.ts" \
   "$REPO_ROOT/src/extensions/thread-colors/thread-colors.test.ts" \
   "$REPO_ROOT/src/platform/utilities/extension-management.test.ts" \
   "$REPO_ROOT/src/platform/utilities/extension-storage.test.ts"

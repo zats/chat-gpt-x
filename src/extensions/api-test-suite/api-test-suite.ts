@@ -154,6 +154,8 @@ const ASSISTANT_SELECTION_BASIC_ID = `${EXT_ID}.assistant-selection-basic`;
 const ASSISTANT_SELECTION_CHAIN_A_ID = `${EXT_ID}.assistant-selection-chain-a`;
 const ASSISTANT_SELECTION_CHAIN_B_ID = `${EXT_ID}.assistant-selection-chain-b`;
 const ASSISTANT_SELECTION_DISABLED_ID = `${EXT_ID}.assistant-selection-disabled`;
+const ASSISTANT_SELECTION_PARENT_ID = `${EXT_ID}.assistant-selection-parent`;
+const ASSISTANT_SELECTION_CHILD_ID = `${EXT_ID}.assistant-selection-child`;
 
 test("assistant-selection-menu: exposes selected text and native actions", () => {
   assert(observedAssistantSelectionContext, "selection context was observed");
@@ -164,6 +166,11 @@ test("assistant-selection-menu: exposes selected text and native actions", () =>
   assert(
     Object.isFrozen(observedAssistantSelectionContext),
     "selection context is immutable",
+  );
+  assert(
+    typeof observedAssistantSelectionContext.createResponseAnnotation ===
+      "function",
+    "selection context exposes native response annotation creation",
   );
   const builtIns = assistantSelectionItems().filter(
     (item) => item.origin === "app",
@@ -206,11 +213,48 @@ test("assistant-selection-menu: contributes an action and dispose removes it", (
       kind: "action",
       id: ASSISTANT_SELECTION_BASIC_ID,
       label: "Selection Basic",
+      labelScale: 2,
+      verticalPadding: 4,
     },
   ]);
   assert(
     assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID)?.origin === EXT_ID,
     "selection contribution is effective and attributed",
+  );
+  assert(
+    assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID)?.labelScale === 2,
+    "selection contribution uses doubled label scale",
+  );
+  assert(
+    assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID)?.verticalPadding ===
+      4,
+    "selection contribution uses 4 px vertical padding",
+  );
+  const nativeScale = registerAssistantSelection((items) =>
+    items.map((item) =>
+      item.id === ASSISTANT_SELECTION_BASIC_ID
+        ? { ...item, labelScale: 1, verticalPadding: 0 }
+        : item,
+    ),
+  );
+  assert(
+    assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID)?.labelScale === 1,
+    "later selection transformer restores native label scale",
+  );
+  assert(
+    assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID)?.verticalPadding ===
+      0,
+    "later selection transformer restores native vertical padding",
+  );
+  nativeScale.dispose();
+  assert(
+    assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID)?.labelScale === 2,
+    "disposing later selection transformer restores doubled label scale",
+  );
+  assert(
+    assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID)?.verticalPadding ===
+      4,
+    "disposing later selection transformer restores 4 px vertical padding",
   );
   registration.dispose();
   assert(
@@ -344,43 +388,88 @@ test("assistant-selection-menu: built-in replacement inherits native activation"
   );
 });
 
-test("assistant-selection-menu: activates enabled actions only", () => {
+test("assistant-selection-menu: expands children and creates a response annotation", async () => {
   let clicks = 0;
   let clickedText = "";
+  let clickedWithCommand = true;
+  let annotationCreation: Promise<void> | undefined;
   registerAssistantSelection((items, context) => [
     ...items,
     {
       kind: "action",
-      id: ASSISTANT_SELECTION_DISABLED_ID,
-      label: "Selection Disabled",
-      disabled: true,
+      id: ASSISTANT_SELECTION_PARENT_ID,
+      label: "Selection Parent",
       onClick: () => {
         clicks += 100;
       },
-    },
-    {
-      kind: "action",
-      id: ASSISTANT_SELECTION_BASIC_ID,
-      label: "Selection Click",
-      onClick: () => {
-        clicks += 1;
-        clickedText = context.selectedText;
-      },
+      items: [
+        {
+          kind: "action",
+          id: ASSISTANT_SELECTION_DISABLED_ID,
+          label: "Selection Disabled",
+          disabled: true,
+          onClick: () => {
+            clicks += 100;
+          },
+        },
+        {
+          kind: "action",
+          id: ASSISTANT_SELECTION_CHILD_ID,
+          label: "👍",
+          labelScale: 2,
+          verticalPadding: 4,
+          onClick: (activation) => {
+            clicks += 1;
+            clickedText = context.selectedText;
+            clickedWithCommand = activation.metaKey;
+            annotationCreation = context.createResponseAnnotation(
+              "User reacted with 👍",
+            );
+          },
+        },
+      ],
     },
   ]);
   assert(
+    api.menus.assistantSelection.activateItem(ASSISTANT_SELECTION_PARENT_ID),
+    "parent selection action expands",
+  );
+  assert(clicks === 0, "parent expansion does not invoke onClick");
+  assert(
+    !assistantSelectionById(ASSISTANT_SELECTION_PARENT_ID),
+    "expanded parent is replaced by its child page",
+  );
+  const child = assistantSelectionById(ASSISTANT_SELECTION_CHILD_ID);
+  assert(child?.origin === EXT_ID, "selection child is effective and attributed");
+  assert(Object.isFrozen(child), "selection child descriptor is immutable");
+  assert(child?.labelScale === 2, "selection child retains 2× label scale");
+  assert(
+    child?.verticalPadding === 4,
+    "selection child retains 4 px vertical padding",
+  );
+  assert(
     !api.menus.assistantSelection.activateItem(ASSISTANT_SELECTION_DISABLED_ID),
-    "disabled selection action is rejected",
+    "disabled selection child is rejected",
   );
   assert(
     !api.menus.assistantSelection.activateItem("missing.selection-action"),
     "unknown selection action is rejected",
   );
+  let emptyAnnotationRejected = false;
+  try {
+    await observedAssistantSelectionContext!.createResponseAnnotation("  ");
+  } catch {
+    emptyAnnotationRejected = true;
+  }
+  assert(emptyAnnotationRejected, "empty response annotations are rejected");
   assert(
-    api.menus.assistantSelection.activateItem(ASSISTANT_SELECTION_BASIC_ID),
-    "enabled selection action activates",
+    api.menus.assistantSelection.activateItem(ASSISTANT_SELECTION_CHILD_ID),
+    "enabled selection child activates",
   );
+  assert(annotationCreation, "selection child requested annotation creation");
+  await annotationCreation;
   assert(Number(clicks) === 1, "selection action runs once");
+  assert(!clickedWithCommand, "programmatic activation has no Command modifier");
   assert(
     clickedText === observedAssistantSelectionContext?.selectedText,
     "selection action retains its selected-text context",
@@ -2317,6 +2406,7 @@ let threadListVisualFixture: Disposable | undefined;
 let assistantSelectionReadiness: Disposable | undefined;
 
 const ASSISTANT_SELECTION_VISUAL_ID = `${EXT_ID}.assistant-selection-visual`;
+const ASSISTANT_SELECTION_VISUAL_CHILD_ID = `${ASSISTANT_SELECTION_VISUAL_ID}-child`;
 
 function removeThreadListVisualFixture(): void {
   threadListVisualFixture?.dispose();
@@ -2415,17 +2505,67 @@ function installVisualFixture(): void {
   });
   visualFixtures.push(threadListVisualFixture);
   visualFixtures.push(
-    api.menus.assistantSelection.transformItems((current) => [
+    api.menus.assistantSelection.transformItems((current, context) => [
       ...current,
       {
         kind: "action",
         id: ASSISTANT_SELECTION_VISUAL_ID,
-        label: "Binding Selection Item",
+        label: "React",
         onClick: () => {
           const fixture = globalThis as Record<string, unknown>;
-          fixture.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ =
-            Number(fixture.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ ?? 0) + 1;
+          fixture.__CGPTX_ASSISTANT_SELECTION_PARENT_CLICK_COUNT__ =
+            Number(
+              fixture.__CGPTX_ASSISTANT_SELECTION_PARENT_CLICK_COUNT__ ?? 0,
+            ) + 1;
         },
+        items: [
+          {
+            kind: "action",
+            id: ASSISTANT_SELECTION_VISUAL_CHILD_ID,
+            label: "👍",
+            labelScale: 2,
+            verticalPadding: 4,
+            onClick: (activation) => {
+              const fixture = globalThis as Record<string, unknown>;
+              fixture.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ =
+                Number(
+                  fixture.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ ?? 0,
+                ) + 1;
+              fixture.__CGPTX_ASSISTANT_SELECTION_META_KEY__ =
+                activation.metaKey;
+              fixture.__CGPTX_ASSISTANT_SELECTION_ANNOTATION_PROMISE__ =
+                context
+                  .createResponseAnnotation("User reacted with 👍", {
+                    submit: activation.metaKey,
+                  })
+                  .catch((error: unknown) => {
+                    fixture.__CGPTX_ASSISTANT_SELECTION_ANNOTATION_ERROR__ =
+                      String(error);
+                  });
+            },
+          },
+          {
+            kind: "action",
+            id: `${ASSISTANT_SELECTION_VISUAL_ID}-down`,
+            label: "👎",
+            labelScale: 2,
+            verticalPadding: 4,
+          },
+          {
+            kind: "action",
+            id: `${ASSISTANT_SELECTION_VISUAL_ID}-unsure`,
+            label: "🤷",
+            labelScale: 2,
+            verticalPadding: 4,
+          },
+          {
+            kind: "action",
+            id: `${ASSISTANT_SELECTION_VISUAL_ID}-angry`,
+            label: "🤬",
+            labelScale: 2,
+            verticalPadding: 4,
+          },
+        ],
       },
     ]),
   );

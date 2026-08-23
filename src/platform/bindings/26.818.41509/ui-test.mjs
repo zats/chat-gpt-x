@@ -169,7 +169,9 @@ async function selectAssistantResponseText() {
     await waitFor(
       `globalThis.__CGPTX_HOST__?._debug
         .computeEffectiveAssistantSelectionItems()
-        .some((item) => item.origin === "app")`,
+        .some((item) => item.origin === "app") ||
+       globalThis.__CGPTX_HOST__?._debug
+        .responseAnnotationCreationCount() > 0`,
       20000,
     );
   } catch (error) {
@@ -241,6 +243,15 @@ async function validateUi(
     );
   };
   markProgress('assistant-selection menu');
+  await waitUntil(() =>
+    Array.from(
+      document.querySelectorAll('[data-cgptx-assistant-selection-action]'),
+    ).some(
+      (action) =>
+        action.getAttribute('data-cgptx-id') ===
+        'api-test-suite.assistant-selection-visual',
+    ),
+  );
   const assistantSelectionActions = Array.from(
     document.querySelectorAll('[data-cgptx-assistant-selection-action]'),
   );
@@ -265,6 +276,11 @@ async function validateUi(
       action.getAttribute('data-cgptx-id') ===
       'api-test-suite.assistant-selection-visual',
   );
+  const assistantSelectionBuiltInFontSize = assistantSelectionBuiltIn
+    ? Number.parseFloat(getComputedStyle(assistantSelectionBuiltIn).fontSize)
+    : Number.NaN;
+  const assistantSelectionBuiltInHeight =
+    assistantSelectionBuiltIn?.getBoundingClientRect().height ?? Number.NaN;
   check(
     Boolean(assistantSelectionExtension),
     'assistant selection renders an extension action',
@@ -293,16 +309,137 @@ async function validateUi(
   const assistantSelectionClickCount = Number(
     globalThis.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ ?? 0,
   );
+  const standardAnnotationCreation =
+    globalThis.__CGPTX_HOST__._debug.lastResponseAnnotationCreation();
+  check(
+    standardAnnotationCreation?.submit === false &&
+      document.querySelector('[data-response-text-annotation-id]') != null,
+    'normal response annotation creation stays in the composer',
+    standardAnnotationCreation,
+  );
+  const assistantSelectionParentClickCount = Number(
+    globalThis.__CGPTX_ASSISTANT_SELECTION_PARENT_CLICK_COUNT__ ?? 0,
+  );
   assistantSelectionExtension?.click();
+  await waitUntil(
+    () =>
+      Array.from(
+        document.querySelectorAll(
+          '[data-cgptx-assistant-selection-action]',
+        ),
+      ).some(
+        (action) =>
+          action.getAttribute('data-cgptx-id') ===
+          'api-test-suite.assistant-selection-visual-child',
+      ),
+  );
+  check(
+    Number(
+      globalThis.__CGPTX_ASSISTANT_SELECTION_PARENT_CLICK_COUNT__ ?? 0,
+    ) === assistantSelectionParentClickCount &&
+      window.getSelection()?.isCollapsed === false,
+    'assistant selection parent replaces the toolbar without activation or dismissal',
+  );
+  const assistantSelectionChildren = Array.from(
+    document.querySelectorAll('[data-cgptx-assistant-selection-action]'),
+  );
+  const assistantSelectionChildLabels = assistantSelectionChildren.map(
+    (action) => action.textContent?.trim(),
+  );
+  check(
+    ['👍', '👎', '🤷', '🤬'].every((label) =>
+      assistantSelectionChildLabels.includes(label),
+    ),
+    'assistant selection parent shows its replacement action page',
+    { labels: assistantSelectionChildLabels },
+  );
+  const assistantSelectionChild = assistantSelectionChildren.find(
+    (action) =>
+      action.getAttribute('data-cgptx-id') ===
+      'api-test-suite.assistant-selection-visual-child',
+  );
+  const assistantSelectionScaledChildren = assistantSelectionChildren.filter(
+    (action) =>
+      action.getAttribute('data-cgptx-id')?.startsWith(
+        'api-test-suite.assistant-selection-visual-',
+      ),
+  );
+  const assistantSelectionScaledFontSizes =
+    assistantSelectionScaledChildren.map((action) => {
+      const label = action.querySelector('[data-cgptx-label-scale="2"]');
+      return label
+        ? Number.parseFloat(getComputedStyle(label).fontSize)
+        : Number.NaN;
+    });
+  const assistantSelectionPaddedMetrics = assistantSelectionScaledChildren.map(
+    (action) => {
+      const style = getComputedStyle(action);
+      return {
+        height: action.getBoundingClientRect().height,
+        paddingTop: Number.parseFloat(style.paddingTop),
+        paddingBottom: Number.parseFloat(style.paddingBottom),
+      };
+    },
+  );
+  check(
+    Number.isFinite(assistantSelectionBuiltInFontSize) &&
+      assistantSelectionScaledChildren.length === 4 &&
+      assistantSelectionScaledFontSizes.every(
+        (fontSize) =>
+          Math.abs(fontSize - assistantSelectionBuiltInFontSize * 2) < 0.01,
+      ),
+    'assistant selection scaled labels use twice the native font size',
+    {
+      nativeFontSize: assistantSelectionBuiltInFontSize,
+      scaledFontSizes: assistantSelectionScaledFontSizes,
+    },
+  );
+  check(
+    Number.isFinite(assistantSelectionBuiltInHeight) &&
+      assistantSelectionScaledChildren.length === 4 &&
+      assistantSelectionPaddedMetrics.every(
+        ({ height, paddingTop, paddingBottom }) =>
+          Math.abs(paddingTop - 4) < 0.01 &&
+          Math.abs(paddingBottom - 4) < 0.01 &&
+          Math.abs(height - (assistantSelectionBuiltInHeight + 8)) < 0.01,
+      ),
+    'assistant selection padded actions add 4 px above and below the label',
+    {
+      nativeHeight: assistantSelectionBuiltInHeight,
+      paddedMetrics: assistantSelectionPaddedMetrics,
+    },
+  );
+  check(
+    assistantSelectionBuiltIn?.tagName === assistantSelectionChild?.tagName &&
+      assistantSelectionBuiltIn?.className === assistantSelectionChild?.className,
+    'assistant selection child reuses the native button component',
+  );
+  const responseAnnotationCreationCount =
+    globalThis.__CGPTX_HOST__._debug.responseAnnotationCreationCount();
+  assistantSelectionChild?.dispatchEvent(
+    new MouseEvent('click', { bubbles: true, metaKey: true }),
+  );
   await waitUntil(
     () =>
       Number(globalThis.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ ?? 0) ===
         assistantSelectionClickCount + 1 &&
-      window.getSelection()?.isCollapsed === true,
+      window.getSelection()?.isCollapsed === true &&
+      globalThis.__CGPTX_HOST__._debug.responseAnnotationCreationCount() ===
+        responseAnnotationCreationCount + 1,
   );
   check(
-    true,
-    'assistant selection action activates once and dismisses the selection',
+    globalThis.__CGPTX_ASSISTANT_SELECTION_META_KEY__ === true &&
+      globalThis.__CGPTX_ASSISTANT_SELECTION_ANNOTATION_ERROR__ == null &&
+      globalThis.__CGPTX_HOST__._debug.lastResponseAnnotationCreation()
+        ?.submit === true,
+    'Command-click activates once, dismisses the selection, and directly submits',
+    {
+      metaKey: globalThis.__CGPTX_ASSISTANT_SELECTION_META_KEY__,
+      annotationError:
+        globalThis.__CGPTX_ASSISTANT_SELECTION_ANNOTATION_ERROR__ ?? null,
+      annotation:
+        globalThis.__CGPTX_HOST__._debug.lastResponseAnnotationCreation(),
+    },
   );
   const waitForNativeAccount = async (email, timeoutMs = 20000) => {
     const deadline = Date.now() + timeoutMs;

@@ -1110,9 +1110,10 @@ export interface AssistantSelectionMenuApi {
   transformItems(transform: AssistantSelectionMenuTransform): Disposable;
 
   /**
-   * Return the active toolbar's effective action list with every registered
-   * transform applied in final display order. Returns an empty list when no
-   * assistant-text selection toolbar is mounted.
+   * Return the active toolbar page's effective action list in display order.
+   * The root page includes every registered transform. After a parent action
+   * expands, this returns that parent's child actions. Returns an empty list
+   * when no assistant-text selection toolbar is mounted.
    *
    * The snapshot updates when the selected text, native actions, or active
    * transformers change. It includes all extensions' contributions.
@@ -1122,9 +1123,11 @@ export interface AssistantSelectionMenuApi {
   /**
    * Programmatically activate an effective toolbar action.
    *
-   * Activation invokes the action's isolated `onClick` and dismisses the
-   * browser selection like a click on ChatGPT's native buttons. Unknown,
-   * disabled, non-activatable, or inactive-toolbar actions return `false`.
+   * A parent action replaces the toolbar page with its children without
+   * dismissing the browser selection or invoking `onClick`. A leaf action
+   * invokes its isolated `onClick` and dismisses the browser selection like a
+   * click on ChatGPT's native buttons. Unknown, disabled, non-activatable, or
+   * inactive-toolbar actions return `false`.
    *
    * @param id stable built-in id or extension-namespaced action id
    * @returns whether the active action was accepted
@@ -1150,6 +1153,52 @@ export type AssistantSelectionMenuTransform = (
 export interface AssistantSelectionContext {
   /** Exact plain text selected by the user. */
   readonly selectedText: string;
+
+  /**
+   * Create a native response annotation for the selected assistant text.
+   *
+   * The selected text and its exact response anchor are implicit in this
+   * context. ChatGPT creates the same response-annotation attachment as its
+   * built-in **Add to chat** action and stores `annotation` as the
+   * attachment's user comment. By default, the attachment remains in the
+   * composer for the user to review and submit. Set `options.submit` to
+   * `true` to use ChatGPT's native direct-submit path; this also submits all
+   * existing composer text and attachments.
+   *
+   * Call this method synchronously from an action handler created by the same
+   * transformer invocation. The returned promise resolves after ChatGPT
+   * accepts the native annotation update or direct-submit request. It does not
+   * wait for an assistant response. It rejects when the annotation is empty,
+   * the selection is stale, ChatGPT cannot create the annotation, or another
+   * annotation request for the same selection is already pending.
+   *
+   * Multi-consumer: all transformers receive the same immutable method for a
+   * selection. The first accepted request owns that selection; concurrent
+   * requests reject without affecting the accepted request.
+   *
+   * @param annotation non-empty user annotation stored with the selected text
+   * @param options optional direct-submit behavior; omitted means create only
+   * @example
+   * void selection.createResponseAnnotation("User reacted with 👍");
+   * void selection.createResponseAnnotation("User reacted with 👍", {
+   *   submit: true,
+   * });
+   */
+  createResponseAnnotation(
+    annotation: string,
+    options?: AssistantResponseAnnotationOptions,
+  ): Promise<void>;
+}
+
+/**
+ * Controls whether a response annotation stays in the composer or uses
+ * ChatGPT's native direct-submit action.
+ *
+ * @group Menus
+ */
+export interface AssistantResponseAnnotationOptions {
+  /** Submit the whole composer after creating the annotation. Default: false. */
+  readonly submit?: boolean;
 }
 
 /**
@@ -1178,18 +1227,65 @@ export interface AssistantSelectionMenuActionItem {
   /** Visible action label. */
   readonly label: string;
 
+  /**
+   * Scale the visible label relative to ChatGPT's native action-text size.
+   *
+   * The action keeps ChatGPT's native button, focus behavior, hit target, and
+   * accessibility. Only the label size changes. Use `1` for the native size
+   * and `2` for twice that size. Omitted values inherit during action
+   * replacement and otherwise use the native size. The doubled size is
+   * suitable for compact glyph labels such as an emoji; long text can exceed
+   * the compact toolbar.
+   */
+  readonly labelScale?: 1 | 2;
+
+  /**
+   * Vertical padding in device-independent pixels.
+   *
+   * Use `0` for ChatGPT's native compact padding or `4` for 4 px above and
+   * below the label. Nonzero padding releases the native fixed compact height
+   * so the native button grows to fit its label. Omitted values inherit during
+   * action replacement and otherwise use the native padding.
+   */
+  readonly verticalPadding?: 0 | 4;
+
   /** Disable activation while retaining ChatGPT's native disabled state. */
   readonly disabled?: boolean;
 
   /**
-   * Handler invoked after user or programmatic activation dismisses the text
-   * selection. Built-ins expose their native handler for wrapping. Throwing
-   * handlers are isolated and logged.
+   * Handler invoked after user or programmatic leaf activation dismisses the
+   * text selection. Built-ins expose their native handler for wrapping.
+   * Throwing handlers are isolated and logged. Ignored when {@link items} is
+   * set. Programmatic activation reports `metaKey: false`.
    */
-  readonly onClick?: () => void;
+  readonly onClick?: (activation: AssistantSelectionActionActivation) => void;
+
+  /**
+   * Child actions shown as a replacement toolbar page when this action is
+   * activated. ChatGPTX keeps the assistant-text selection active and renders
+   * every child through ChatGPT's native selected-text action component.
+   *
+   * One level of nesting is supported. Child actions cannot contain further
+   * children. Child ids follow the same ownership and uniqueness rules as
+   * root actions.
+   */
+  readonly items?: readonly AssistantSelectionMenuActionItem[];
 
   /** Contributor id, assigned by the platform; `"app"` denotes ChatGPT. */
   readonly origin?: "app" | string;
+}
+
+/**
+ * Stable modifier state for one assistant-selection action activation.
+ *
+ * The platform copies this state from ChatGPT's native click event. It does
+ * not expose the app's React or DOM event to extensions.
+ *
+ * @group Menus
+ */
+export interface AssistantSelectionActionActivation {
+  /** Whether the macOS Command key was down for the activation. */
+  readonly metaKey: boolean;
 }
 
 /**

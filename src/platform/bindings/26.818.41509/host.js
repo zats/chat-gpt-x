@@ -20,6 +20,7 @@
   const SETTINGS_VISIBILITY_MODULE =
     "./assets/use-visible-settings-sections-BZAGLkjZ.js";
   const AUTHENTICATION_RESTART_TIMEOUT_MS = 20_000;
+  const RESPONSE_ANNOTATION_CREATION_TIMEOUT_MS = 10_000;
   const HEADER_BACKGROUND_PROPERTY = "--header-background-color";
   const HEADER_FOREGROUND_PROPERTY = "--header-foreground-color";
   const HEADER_PROPERTIES = Object.freeze([
@@ -275,12 +276,16 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const settingsNativeGroupViews = new WeakMap();
   const settingsNativeItemContent = new WeakMap();
   const debugSettingsSnapshotRequests = new Map();
+  const assistantSelectionSafeHandlers = new WeakSet();
   let renderVersion = 0;
   let assistantSelectionRenderVersion = 0;
   let threadMenuRenderVersion = 0;
   let builtInCache = Object.freeze([]);
   let builtInViews = new Map();
   let activeAssistantSelectionModel = null;
+  let pendingResponseAnnotationCreation = null;
+  let responseAnnotationCreationCount = 0;
+  let lastResponseAnnotationCreation = null;
   const threadModels = new Map();
   let currentThread = undefined;
   let currentThreadClearGeneration = 0;
@@ -656,6 +661,24 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return wrapped;
   }
 
+  function safeAssistantSelectionHandler(handler, id) {
+    if (
+      typeof handler !== "function" ||
+      assistantSelectionSafeHandlers.has(handler)
+    ) {
+      return handler;
+    }
+    const wrapped = (activation) => {
+      try {
+        handler(activation);
+      } catch (error) {
+        warn("assistant-selection onClick of " + id + " threw", error);
+      }
+    };
+    assistantSelectionSafeHandlers.add(wrapped);
+    return wrapped;
+  }
+
   function deepItemsById(items, map = new Map()) {
     for (const item of items) {
       map.set(item.id, item);
@@ -795,48 +818,81 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     rawOutput,
     extId,
   ) {
-    const previousById = new Map(previous.map((item) => [item.id, item]));
-    const builtInsById = new Map(
-      model.builtInCache.map((item) => [item.id, item]),
-    );
+    const previousById = deepItemsById(previous);
+    const builtInsById = deepItemsById(model.builtInCache);
+    const moved = nestedIds(rawOutput);
     const seen = new Set();
-    const items = [];
-    for (const raw of rawOutput) {
-      if (!raw || typeof raw !== "object" || raw.kind !== "action") continue;
-      if (typeof raw.id !== "string" || raw.id.length === 0) continue;
-      if (seen.has(raw.id)) {
-        warn("dropping duplicate assistant-selection id: " + raw.id);
-        continue;
+
+    function normalizeList(rawItems, depth) {
+      const items = [];
+      for (const raw of rawItems) {
+        if (!raw || typeof raw !== "object" || raw.kind !== "action") continue;
+        if (typeof raw.id !== "string" || raw.id.length === 0) continue;
+        if (depth === 0 && moved.has(raw.id) && builtInsById.has(raw.id)) {
+          continue;
+        }
+        if (seen.has(raw.id)) {
+          warn("dropping duplicate assistant-selection id: " + raw.id);
+          continue;
+        }
+        const existing =
+          builtInsById.get(raw.id) ?? previousById.get(raw.id) ?? null;
+        if (!existing && !raw.id.startsWith(extId + ".")) {
+          warn(
+            "dropping assistant-selection action with foreign-namespace id: " +
+              raw.id,
+          );
+          continue;
+        }
+        seen.add(raw.id);
+        const item = existing
+          ? mergeDescriptor(existing, raw)
+          : { ...raw, origin: extId };
+        if (typeof item.label !== "string") continue;
+        if (
+          item.disabled !== undefined &&
+          typeof item.disabled !== "boolean"
+        ) {
+          continue;
+        }
+        if (
+          item.labelScale !== undefined &&
+          item.labelScale !== 1 &&
+          item.labelScale !== 2
+        ) {
+          continue;
+        }
+        if (
+          item.verticalPadding !== undefined &&
+          item.verticalPadding !== 0 &&
+          item.verticalPadding !== 4
+        ) {
+          continue;
+        }
+        if (depth >= 1 && Array.isArray(item.items)) {
+          warn(
+            "dropping unsupported assistant-selection nesting from: " +
+              item.id,
+          );
+          delete item.items;
+        } else if (Array.isArray(item.items)) {
+          item.items = normalizeList(item.items, depth + 1);
+        }
+        if (
+          typeof raw.onClick === "function" &&
+          raw.onClick !== existing?.onClick
+        ) {
+          item.onClick = safeAssistantSelectionHandler(raw.onClick, raw.id);
+        }
+        items.push(item);
       }
-      const existing =
-        builtInsById.get(raw.id) ?? previousById.get(raw.id) ?? null;
-      if (!existing && !raw.id.startsWith(extId + ".")) {
-        warn(
-          "dropping assistant-selection action with foreign-namespace id: " +
-            raw.id,
-        );
-        continue;
-      }
-      const item = existing
-        ? mergeDescriptor(existing, raw)
-        : { ...raw, origin: extId };
-      if (typeof item.label !== "string") continue;
-      if (item.disabled !== undefined && typeof item.disabled !== "boolean") {
-        continue;
-      }
-      if (
-        typeof raw.onClick === "function" &&
-        raw.onClick !== existing?.onClick
-      ) {
-        item.onClick = safeHandler(raw.onClick, raw.id);
-      }
-      items.push(Object.freeze(item));
-      seen.add(raw.id);
+      return items;
     }
-    return Object.freeze(items);
+
+    return normalizeList(rawOutput, 0);
   }
 
-  function computeEffectiveAssistantSelectionItems(model) {
+  function computeEffectiveAssistantSelectionRootItems(model) {
     let items = model.builtInCache;
     for (const { extId, transform } of assistantSelectionTransformers) {
       try {
@@ -849,11 +905,13 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           );
           continue;
         }
-        items = normalizeAssistantSelectionTransformOutput(
-          model,
-          items,
-          output,
-          extId,
+        items = freezeItems(
+          normalizeAssistantSelectionTransformOutput(
+            model,
+            items,
+            output,
+            extId,
+          ),
         );
       } catch (error) {
         warn(
@@ -865,24 +923,136 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return items;
   }
 
+  function computeEffectiveAssistantSelectionItems(model) {
+    const rootItems = computeEffectiveAssistantSelectionRootItems(model);
+    if (model.activePageId === null) return rootItems;
+    const parent = rootItems.find(
+      (item) => item.id === model.activePageId,
+    );
+    if (parent?.kind === "action" && Array.isArray(parent.items)) {
+      return parent.items;
+    }
+    model.activePageId = null;
+    return rootItems;
+  }
+
   function dismissAssistantSelection() {
     window.getSelection()?.removeAllRanges();
   }
 
-  function activateAssistantSelectionModelItem(model, id) {
+  const ASSISTANT_SELECTION_ACTIVATION = Object.freeze({ metaKey: false });
+  const ASSISTANT_SELECTION_COMMAND_ACTIVATION = Object.freeze({
+    metaKey: true,
+  });
+
+  function activateAssistantSelectionModelItem(
+    model,
+    id,
+    activation = ASSISTANT_SELECTION_ACTIVATION,
+  ) {
     const item = computeEffectiveAssistantSelectionItems(model).find(
       (candidate) => candidate.id === id,
     );
     if (!item || item.disabled === true || typeof item.onClick !== "function") {
+      if (
+        item?.disabled !== true &&
+        item?.kind === "action" &&
+        Array.isArray(item.items) &&
+        item.items.length > 0
+      ) {
+        model.activePageId = item.id;
+        emitAssistantSelectionChange();
+        return true;
+      }
       return false;
     }
+    if (Array.isArray(item.items) && item.items.length > 0) {
+      model.activePageId = item.id;
+      emitAssistantSelectionChange();
+      return true;
+    }
+    model.activatingLeaf = true;
     dismissAssistantSelection();
     try {
-      item.onClick();
+      item.onClick(activation);
     } catch (error) {
       warn("assistant-selection onClick of " + id + " threw", error);
+    } finally {
+      model.activatingLeaf = false;
     }
     return true;
+  }
+
+  function rejectResponseAnnotationCreation(request, error) {
+    if (pendingResponseAnnotationCreation === request) {
+      pendingResponseAnnotationCreation = null;
+    }
+    clearTimeout(request.timeout);
+    request.reject(error);
+  }
+
+  function createAssistantResponseAnnotation(model, annotation, options) {
+    if (typeof annotation !== "string" || annotation.trim().length === 0) {
+      return Promise.reject(
+        new TypeError("response annotation must be a non-empty string"),
+      );
+    }
+    if (
+      options !== undefined &&
+      (options === null ||
+        typeof options !== "object" ||
+        (options.submit !== undefined &&
+          typeof options.submit !== "boolean"))
+    ) {
+      return Promise.reject(
+        new TypeError("response annotation options are invalid"),
+      );
+    }
+    if (
+      activeAssistantSelectionModel !== model &&
+      model.activatingLeaf !== true
+    ) {
+      return Promise.reject(
+        new Error("assistant selection is no longer active"),
+      );
+    }
+    if (pendingResponseAnnotationCreation !== null) {
+      return Promise.reject(
+        new Error("a response annotation request is already pending"),
+      );
+    }
+    const addToChat = model.builtInCache.find(
+      (item) => item.id === "selectedTextOverlay.addToCodex",
+    );
+    if (typeof addToChat?.onClick !== "function") {
+      return Promise.reject(
+        new Error("ChatGPT Add to chat is unavailable for this selection"),
+      );
+    }
+
+    return new Promise((resolve, reject) => {
+      const request = {
+        annotation: annotation.trim(),
+        model,
+        reject,
+        resolve,
+        selectedText: model.context.selectedText,
+        submit: options?.submit === true,
+        timeout: null,
+      };
+      request.timeout = setTimeout(() => {
+        rejectResponseAnnotationCreation(
+          request,
+          new Error("ChatGPT did not create the response annotation"),
+        );
+      }, RESPONSE_ANNOTATION_CREATION_TIMEOUT_MS);
+      pendingResponseAnnotationCreation = request;
+      try {
+        addToChat.onClick();
+      } catch (error) {
+        rejectResponseAnnotationCreation(request, error);
+      }
+    });
   }
 
   // ------------------------------------------------------------------
@@ -3826,10 +3996,20 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   function updateAssistantSelectionModel(model, tree, selectedText, intl) {
-    const context =
-      model.context?.selectedText === selectedText
-        ? model.context
-        : Object.freeze({ selectedText });
+    const selectionChanged = model.context?.selectedText !== selectedText;
+    const context = selectionChanged
+      ? Object.freeze({
+          selectedText,
+          createResponseAnnotation(annotation, options) {
+            return createAssistantResponseAnnotation(
+              model,
+              annotation,
+              options,
+            );
+          },
+        })
+      : model.context;
+    if (selectionChanged) model.activePageId = null;
     const views = new Map();
     const builtIns = [];
     let actionType = null;
@@ -3850,7 +4030,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           label: intl.formatMessage(message),
           disabled: props.disabled === true,
           onClick:
-            typeof props.onClick === "function" ? props.onClick : undefined,
+            typeof props.onClick === "function"
+              ? () => props.onClick()
+              : undefined,
           origin: "app",
         });
       }
@@ -3870,19 +4052,47 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     const type = view?.type ?? model.actionType;
     if (!type) return null;
     const props = view ? { ...view.props } : {};
-    props.children =
+    const label =
       view && builtIn && item.label === builtIn.label
         ? view.props.children
         : item.label;
+    props.children =
+      item.labelScale === 2
+        ? native.jsx("span", {
+            "data-cgptx-label-scale": "2",
+            style: { fontSize: "2em", lineHeight: 1 },
+            children: label,
+          })
+        : label;
     props.disabled = item.disabled === true;
+    if (item.verticalPadding === 4) {
+      props.style = {
+        ...props.style,
+        height: "auto",
+        paddingBlock: "4px",
+      };
+      props["data-cgptx-vertical-padding"] = "4";
+    }
     props["data-cgptx-id"] = item.id;
     props["data-cgptx-origin"] = item.origin ?? "";
     props["data-cgptx-assistant-selection-action"] = "";
-    if (!(view && builtIn?.onClick === item.onClick)) {
+    if (
+      Array.isArray(item.items) ||
+      !(view && builtIn?.onClick === item.onClick)
+    ) {
       delete props.onClick;
-      if (typeof item.onClick === "function") {
-        props.onClick = () =>
-          activateAssistantSelectionModelItem(model, item.id);
+      if (
+        typeof item.onClick === "function" ||
+        (Array.isArray(item.items) && item.items.length > 0)
+      ) {
+        props.onClick = (event) =>
+          activateAssistantSelectionModelItem(
+            model,
+            item.id,
+            event?.metaKey === true
+              ? ASSISTANT_SELECTION_COMMAND_ACTIVATION
+              : ASSISTANT_SELECTION_ACTIVATION,
+          );
       }
     }
     return native.jsx(type, props, item.id);
@@ -4735,6 +4945,8 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       const modelRef = React.useRef(null);
       if (modelRef.current === null) {
         modelRef.current = {
+          activePageId: null,
+          activatingLeaf: false,
           context: null,
           builtInCache: Object.freeze([]),
           builtInViews: new Map(),
@@ -4757,6 +4969,59 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         };
       }, [model]);
       return renderAssistantSelectionTree(tree, model);
+    }
+
+    function isResponseAnnotationLayer(type, props) {
+      return (
+        pendingResponseAnnotationCreation !== null &&
+        typeof type === "function" &&
+        Array.isArray(props?.annotations) &&
+        props.editingAnnotation?.mode === "create" &&
+        typeof props.editingAnnotation.id === "string" &&
+        typeof props.onDirectSubmit === "function" &&
+        typeof props.onDiscardAnnotation === "function" &&
+        typeof props.onEditingAnnotationChange === "function" &&
+        typeof props.onRemoveAnnotation === "function" &&
+        typeof props.onUpdateAnnotation === "function"
+      );
+    }
+
+    function ResponseAnnotationCreationBoundary({ child, layerProps }) {
+      const request = pendingResponseAnnotationCreation;
+      const annotationId = layerProps.editingAnnotation?.id;
+      const createdAnnotation = layerProps.annotations.find(
+        (annotation) => annotation.id === annotationId,
+      );
+      React.useLayoutEffect(() => {
+        if (
+          request === null ||
+          pendingResponseAnnotationCreation !== request ||
+          createdAnnotation == null ||
+          createdAnnotation.text.trim() !== request.selectedText.trim()
+        ) {
+          return;
+        }
+        pendingResponseAnnotationCreation = null;
+        clearTimeout(request.timeout);
+        try {
+          layerProps.onEditingAnnotationChange(null);
+          if (request.submit) {
+            layerProps.onDirectSubmit(annotationId, request.annotation);
+          } else {
+            layerProps.onUpdateAnnotation(annotationId, request.annotation);
+          }
+          responseAnnotationCreationCount += 1;
+          lastResponseAnnotationCreation = Object.freeze({
+            annotation: request.annotation,
+            selectedText: createdAnnotation.text,
+            submit: request.submit,
+          });
+          request.resolve();
+        } catch (error) {
+          request.reject(error);
+        }
+      }, [annotationId, createdAnnotation, layerProps, request]);
+      return child;
     }
 
     function isRemoteThreadMenu(type, props) {
@@ -5049,6 +5314,16 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           props?.listRef
         ) {
           props = enhanceSettingsSearchResults(props);
+        }
+        if (isResponseAnnotationLayer(type, props)) {
+          return originalJsx(
+            ResponseAnnotationCreationBoundary,
+            {
+              child: original(type, props, key),
+              layerProps: props,
+            },
+            key,
+          );
         }
         if (isAssistantSelectionMenu(type, props)) {
           return originalJsx(
@@ -5920,6 +6195,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       applicationRootRefreshCount: () => applicationRootRefreshCount,
       assistantSelectionBoundaryRenderCount: () =>
         assistantSelectionBoundaryRenderCount,
+      responseAnnotationCreationCount: () =>
+        responseAnnotationCreationCount,
+      lastResponseAnnotationCreation: () => lastResponseAnnotationCreation,
       threadMenuBoundaryRenderCount: () => threadMenuBoundaryRenderCount,
       threadMenuAdapterRenderCount: () => threadMenuAdapterRenderCount,
       authenticationReady: () => typeof refreshAuthentication === "function",

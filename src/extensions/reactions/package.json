@@ -1,0 +1,13 @@
+{
+  "id": "reactions",
+  "name": "Reactions",
+  "version": "0.1.0",
+  "description": "Adds emoji reactions to selected assistant response text.",
+  "main": "contents/main.js",
+  "compatibility": {
+    "chatgptApi": "^1.3.0"
+  },
+  "capabilities": [
+    "menus.assistant-selection"
+  ]
+}
