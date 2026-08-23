@@ -225,8 +225,7 @@ export interface ThreadListItemRegistration extends Disposable {
  * @group Appearance
  */
 export type HeaderCssProperty =
-  | "--header-background-color"
-  | "--header-foreground-color";
+  "--header-background-color" | "--header-foreground-color";
 
 /**
  * Light and dark values for one native header CSS custom property.
@@ -1052,11 +1051,145 @@ export interface AuthenticationApi {
  * @group Menus
  */
 export interface MenusApi {
+  /** The action toolbar shown for selected assistant-response text. */
+  readonly assistantSelection: AssistantSelectionMenuApi;
+
   /** The profile menu (the dropdown opened from the avatar/profile button). */
   readonly profile: ProfileMenuApi;
 
   /** The overflow menu opened from a persisted thread's header. */
   readonly thread: ThreadMenuApi;
+}
+
+/**
+ * APIs for the native action toolbar that ChatGPT shows when the user selects
+ * text in an assistant response. ChatGPT owns the toolbar position, selection
+ * lifecycle, focus behavior, and native action buttons.
+ *
+ * @group Menus
+ */
+export interface AssistantSelectionMenuApi {
+  /**
+   * Transform the action list for selected assistant-response text.
+   *
+   * `transform` runs synchronously whenever ChatGPT renders the toolbar. It
+   * receives the complete current action list and the selected-text snapshot.
+   * Return the final list to keep, remove, reorder, replace, or add actions.
+   * The transformer must be cheap and side-effect-free.
+   *
+   * Built-in actions use ChatGPT's stable semantic message ids, including
+   * `"selectedTextOverlay.addToCodex"`,
+   * `"selectedTextOverlay.moreDetails"`, and
+   * `"selectedTextOverlay.askInSideChat"`. Returning a descriptor with a
+   * built-in id replaces that action and inherits omitted fields, including
+   * its native `onClick`. Extension-created ids must use
+   * `"<extension-id>.<name>"`; foreign and duplicate ids are dropped and
+   * logged.
+   *
+   * Multi-consumer: transformers chain in extension load and registration
+   * order. Each transformer receives the previous transformer's output for
+   * the same selection. A throwing transformer is skipped and logged without
+   * affecting ChatGPT or other extensions.
+   *
+   * Disposing the returned registration updates an open toolbar immediately.
+   *
+   * @param transform mapper from the current actions to the final actions
+   * @returns an idempotent handle that unregisters the transformer
+   *
+   * @example
+   * api.menus.assistantSelection.transformItems((items, selection) => [
+   *   ...items,
+   *   {
+   *     kind: "action",
+   *     id: "my-extension.quote",
+   *     label: "Save quote",
+   *     onClick: () => saveQuote(selection.selectedText),
+   *   },
+   * ]);
+   */
+  transformItems(transform: AssistantSelectionMenuTransform): Disposable;
+
+  /**
+   * Return the active toolbar's effective action list with every registered
+   * transform applied in final display order. Returns an empty list when no
+   * assistant-text selection toolbar is mounted.
+   *
+   * The snapshot updates when the selected text, native actions, or active
+   * transformers change. It includes all extensions' contributions.
+   */
+  getItems(): readonly AssistantSelectionMenuItem[];
+
+  /**
+   * Programmatically activate an effective toolbar action.
+   *
+   * Activation invokes the action's isolated `onClick` and dismisses the
+   * browser selection like a click on ChatGPT's native buttons. Unknown,
+   * disabled, non-activatable, or inactive-toolbar actions return `false`.
+   *
+   * @param id stable built-in id or extension-namespaced action id
+   * @returns whether the active action was accepted
+   */
+  activateItem(id: string): boolean;
+}
+
+/**
+ * Mapper from the active assistant-selection actions to their final list.
+ *
+ * @group Menus
+ */
+export type AssistantSelectionMenuTransform = (
+  items: readonly AssistantSelectionMenuItem[],
+  context: AssistantSelectionContext,
+) => readonly AssistantSelectionMenuItem[];
+
+/**
+ * The immutable assistant-text selection associated with one toolbar render.
+ *
+ * @group Menus
+ */
+export interface AssistantSelectionContext {
+  /** Exact plain text selected by the user. */
+  readonly selectedText: string;
+}
+
+/**
+ * An action in ChatGPT's assistant-text selection toolbar.
+ *
+ * @group Menus
+ */
+export type AssistantSelectionMenuItem = AssistantSelectionMenuActionItem;
+
+/**
+ * A compact action rendered through ChatGPT's own selected-text button
+ * component, with its native layout, hover state, focus behavior, and
+ * accessibility.
+ *
+ * @group Menus
+ */
+export interface AssistantSelectionMenuActionItem {
+  readonly kind: "action";
+
+  /**
+   * Unique stable identifier. New actions must use
+   * `"<extension-id>.<name>"`; built-ins use ChatGPT's semantic message ids.
+   */
+  readonly id: string;
+
+  /** Visible action label. */
+  readonly label: string;
+
+  /** Disable activation while retaining ChatGPT's native disabled state. */
+  readonly disabled?: boolean;
+
+  /**
+   * Handler invoked after user or programmatic activation dismisses the text
+   * selection. Built-ins expose their native handler for wrapping. Throwing
+   * handlers are isolated and logged.
+   */
+  readonly onClick?: () => void;
+
+  /** Contributor id, assigned by the platform; `"app"` denotes ChatGPT. */
+  readonly origin?: "app" | string;
 }
 
 /**
@@ -1124,9 +1257,7 @@ export interface ProfileMenuApi {
    *   ),
    * );
    */
-  transformItems(
-    transform: ProfileMenuTransform,
-  ): Disposable;
+  transformItems(transform: ProfileMenuTransform): Disposable;
 
   /**
    * The profile menu's current effective item list **as displayed in the
@@ -1426,9 +1557,7 @@ export interface ThreadMenuActionItem {
 
 /** Leading visual rendered through ChatGPT's native menu icon slot. */
 export type ThreadMenuIcon =
-  | ThreadMenuNativeIcon
-  | ThreadMenuColorIcon
-  | ThreadMenuSvgIcon;
+  ThreadMenuNativeIcon | ThreadMenuColorIcon | ThreadMenuSvgIcon;
 
 /** A named icon component supplied by ChatGPT. */
 export interface ThreadMenuNativeIcon {

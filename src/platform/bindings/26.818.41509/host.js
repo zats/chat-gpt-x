@@ -2,8 +2,8 @@
  * Renderer binding for ChatGPT 26.818.41509.
  *
  * The binding patches the app's shared JSX runtime and transforms native
- * profile and thread menu item trees. Items remain inside the app's existing
- * Radix roots and use the app's exported menu components.
+ * Profile, thread, and assistant-selection menu item trees. Items remain
+ * inside the app's existing native owners and use exported app components.
  * Binding revisions can update this bridge without changing the public API.
  */
 (() => {
@@ -241,6 +241,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   // ------------------------------------------------------------------
 
   const transformers = [];
+  const assistantSelectionTransformers = [];
   const threadTransformers = [];
   const threadListRegistrations = [];
   const currentThreadListeners = [];
@@ -253,6 +254,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const extensions = new Map();
   const safeHandlers = new WeakSet();
   const renderListeners = new Set();
+  const assistantSelectionRenderListeners = new Set();
   const threadMenuRenderListeners = new Set();
   const mountedThreadListRows = new WeakMap();
   const builtInSettingsCategories = new Map();
@@ -274,9 +276,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const settingsNativeItemContent = new WeakMap();
   const debugSettingsSnapshotRequests = new Map();
   let renderVersion = 0;
+  let assistantSelectionRenderVersion = 0;
   let threadMenuRenderVersion = 0;
   let builtInCache = Object.freeze([]);
   let builtInViews = new Map();
+  let activeAssistantSelectionModel = null;
   const threadModels = new Map();
   let currentThread = undefined;
   let currentThreadClearGeneration = 0;
@@ -284,6 +288,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let nativeBindingInstalled = false;
   let nativeBindingError = null;
   let applicationRootRefreshCount = 0;
+  let assistantSelectionBoundaryRenderCount = 0;
   let threadMenuBoundaryRenderCount = 0;
   let threadMenuAdapterRenderCount = 0;
   const pendingGenericThreadItems = new Map();
@@ -352,6 +357,16 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function subscribeThreadMenu(listener) {
     threadMenuRenderListeners.add(listener);
     return () => threadMenuRenderListeners.delete(listener);
+  }
+
+  function subscribeAssistantSelection(listener) {
+    assistantSelectionRenderListeners.add(listener);
+    return () => assistantSelectionRenderListeners.delete(listener);
+  }
+
+  function emitAssistantSelectionChange() {
+    assistantSelectionRenderVersion += 1;
+    for (const listener of [...assistantSelectionRenderListeners]) listener();
   }
 
   function emitThreadMenuChange() {
@@ -764,6 +779,110 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       }
     }
     return undefined;
+  }
+
+  const ASSISTANT_SELECTION_MESSAGE_IDS = Object.freeze(
+    new Set([
+      "selectedTextOverlay.addToCodex",
+      "selectedTextOverlay.moreDetails",
+      "selectedTextOverlay.askInSideChat",
+    ]),
+  );
+
+  function normalizeAssistantSelectionTransformOutput(
+    model,
+    previous,
+    rawOutput,
+    extId,
+  ) {
+    const previousById = new Map(previous.map((item) => [item.id, item]));
+    const builtInsById = new Map(
+      model.builtInCache.map((item) => [item.id, item]),
+    );
+    const seen = new Set();
+    const items = [];
+    for (const raw of rawOutput) {
+      if (!raw || typeof raw !== "object" || raw.kind !== "action") continue;
+      if (typeof raw.id !== "string" || raw.id.length === 0) continue;
+      if (seen.has(raw.id)) {
+        warn("dropping duplicate assistant-selection id: " + raw.id);
+        continue;
+      }
+      const existing =
+        builtInsById.get(raw.id) ?? previousById.get(raw.id) ?? null;
+      if (!existing && !raw.id.startsWith(extId + ".")) {
+        warn(
+          "dropping assistant-selection action with foreign-namespace id: " +
+            raw.id,
+        );
+        continue;
+      }
+      const item = existing
+        ? mergeDescriptor(existing, raw)
+        : { ...raw, origin: extId };
+      if (typeof item.label !== "string") continue;
+      if (item.disabled !== undefined && typeof item.disabled !== "boolean") {
+        continue;
+      }
+      if (
+        typeof raw.onClick === "function" &&
+        raw.onClick !== existing?.onClick
+      ) {
+        item.onClick = safeHandler(raw.onClick, raw.id);
+      }
+      items.push(Object.freeze(item));
+      seen.add(raw.id);
+    }
+    return Object.freeze(items);
+  }
+
+  function computeEffectiveAssistantSelectionItems(model) {
+    let items = model.builtInCache;
+    for (const { extId, transform } of assistantSelectionTransformers) {
+      try {
+        const output = transform(items, model.context);
+        if (!Array.isArray(output)) {
+          warn(
+            "assistant-selection transformer from " +
+              extId +
+              " returned a non-array; skipped",
+          );
+          continue;
+        }
+        items = normalizeAssistantSelectionTransformOutput(
+          model,
+          items,
+          output,
+          extId,
+        );
+      } catch (error) {
+        warn(
+          "assistant-selection transformer from " + extId + " threw; skipped",
+          error,
+        );
+      }
+    }
+    return items;
+  }
+
+  function dismissAssistantSelection() {
+    window.getSelection()?.removeAllRanges();
+  }
+
+  function activateAssistantSelectionModelItem(model, id) {
+    const item = computeEffectiveAssistantSelectionItems(model).find(
+      (candidate) => candidate.id === id,
+    );
+    if (!item || item.disabled === true || typeof item.onClick !== "function") {
+      return false;
+    }
+    dismissAssistantSelection();
+    try {
+      item.onClick();
+    } catch (error) {
+      warn("assistant-selection onClick of " + id + " threw", error);
+    }
+    return true;
   }
 
   // ------------------------------------------------------------------
@@ -3706,6 +3825,86 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return native.jsx(tree.type, props, tree.key ?? undefined);
   }
 
+  function updateAssistantSelectionModel(model, tree, selectedText, intl) {
+    const context =
+      model.context?.selectedText === selectedText
+        ? model.context
+        : Object.freeze({ selectedText });
+    const views = new Map();
+    const builtIns = [];
+    let actionType = null;
+    if (isElement(tree)) {
+      for (const child of childrenOf(tree.props?.children)) {
+        if (!isElement(child)) continue;
+        const message = messageOf(child.props?.children);
+        if (!ASSISTANT_SELECTION_MESSAGE_IDS.has(message?.id)) continue;
+        const props = child.props ?? {};
+        actionType ??= child.type;
+        views.set(message.id, {
+          props: { ...props },
+          type: child.type,
+        });
+        builtIns.push({
+          kind: "action",
+          id: message.id,
+          label: intl.formatMessage(message),
+          disabled: props.disabled === true,
+          onClick:
+            typeof props.onClick === "function" ? props.onClick : undefined,
+          origin: "app",
+        });
+      }
+    }
+    model.context = context;
+    model.builtInCache = freezeItems(builtIns);
+    model.builtInViews = views;
+    model.actionType = actionType;
+    return model;
+  }
+
+  function renderAssistantSelectionAction(model, item) {
+    const view = model.builtInViews.get(item.id);
+    const builtIn = model.builtInCache.find(
+      (candidate) => candidate.id === item.id,
+    );
+    const type = view?.type ?? model.actionType;
+    if (!type) return null;
+    const props = view ? { ...view.props } : {};
+    props.children =
+      view && builtIn && item.label === builtIn.label
+        ? view.props.children
+        : item.label;
+    props.disabled = item.disabled === true;
+    props["data-cgptx-id"] = item.id;
+    props["data-cgptx-origin"] = item.origin ?? "";
+    props["data-cgptx-assistant-selection-action"] = "";
+    if (!(view && builtIn?.onClick === item.onClick)) {
+      delete props.onClick;
+      if (typeof item.onClick === "function") {
+        props.onClick = () =>
+          activateAssistantSelectionModelItem(model, item.id);
+      }
+    }
+    return native.jsx(type, props, item.id);
+  }
+
+  function renderAssistantSelectionTree(tree, model) {
+    if (!isElement(tree)) return tree;
+    const items = computeEffectiveAssistantSelectionItems(model);
+    if (items.length === 0) return null;
+    return native.jsx(
+      tree.type,
+      {
+        ...tree.props,
+        "data-cgptx-assistant-selection-menu": "",
+        children: items
+          .map((item) => renderAssistantSelectionAction(model, item))
+          .filter(Boolean),
+      },
+      tree.key ?? undefined,
+    );
+  }
+
   function genericThreadDescriptor(raw, shortcuts, views, state, intl) {
     if (raw?.type === "separator") {
       const id = "threadHeader.separator-" + state.separatorIndex.toString();
@@ -4510,6 +4709,56 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       });
     }
 
+    function isAssistantSelectionMenu(type, props) {
+      return (
+        type === native.SelectedTextOverlay &&
+        typeof props?.selectedText === "string" &&
+        props.selectedText.length > 0 &&
+        props.onCommentSelectedText == null &&
+        props.onEditSelectedText == null &&
+        [
+          props.onAddSelectedText,
+          props.onOpenQuickChat,
+          props.onOpenSideChat,
+        ].some((handler) => typeof handler === "function")
+      );
+    }
+
+    function AssistantSelectionBoundary({ child }) {
+      assistantSelectionBoundaryRenderCount += 1;
+      const intl = native.useIntl();
+      React.useSyncExternalStore(
+        subscribeAssistantSelection,
+        () => assistantSelectionRenderVersion,
+        () => assistantSelectionRenderVersion,
+      );
+      const modelRef = React.useRef(null);
+      if (modelRef.current === null) {
+        modelRef.current = {
+          context: null,
+          builtInCache: Object.freeze([]),
+          builtInViews: new Map(),
+          actionType: null,
+        };
+      }
+      const tree = child.type(child.props);
+      const model = updateAssistantSelectionModel(
+        modelRef.current,
+        tree,
+        child.props.selectedText,
+        intl,
+      );
+      React.useLayoutEffect(() => {
+        activeAssistantSelectionModel = model;
+        return () => {
+          if (activeAssistantSelectionModel === model) {
+            activeAssistantSelectionModel = null;
+          }
+        };
+      }, [model]);
+      return renderAssistantSelectionTree(tree, model);
+    }
+
     function isRemoteThreadMenu(type, props) {
       if (
         type === native.ThreadMenu ||
@@ -4801,6 +5050,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ) {
           props = enhanceSettingsSearchResults(props);
         }
+        if (isAssistantSelectionMenu(type, props)) {
+          return originalJsx(
+            AssistantSelectionBoundary,
+            {
+              child: original(type, props, key),
+            },
+            key,
+          );
+        }
         if (
           (type === native.ThreadMenu || isRemoteThreadMenu(type, props)) &&
           typeof props?.conversationId === "string" &&
@@ -4959,6 +5217,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       SubmenuItem: appInitialModule.K0.SubmenuItem,
       FlyoutSubmenuItem: appInitialModule.K0.FlyoutSubmenuItem,
       MenuRoot: appInitialModule.W0,
+      SelectedTextOverlay: appInitialModule.pR,
       ThreadMenuAdapter: appInitialModule.k1,
       ThreadMenu: threadMenuModule.t,
       ColorPicker: appInitialModule.sc,
@@ -5049,6 +5308,48 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   // ------------------------------------------------------------------
   // Public API and extension registry
   // ------------------------------------------------------------------
+
+  function makeAssistantSelectionMenuApi(extId) {
+    return Object.freeze({
+      transformItems(transform) {
+        if (typeof transform !== "function") {
+          throw new TypeError(
+            "assistant-selection transformItems requires a function",
+          );
+        }
+        const entry = { extId, transform };
+        assistantSelectionTransformers.push(entry);
+        emitAssistantSelectionChange();
+        let disposed = false;
+        return Object.freeze({
+          dispose() {
+            if (disposed) return;
+            disposed = true;
+            const index = assistantSelectionTransformers.indexOf(entry);
+            if (index >= 0) assistantSelectionTransformers.splice(index, 1);
+            emitAssistantSelectionChange();
+          },
+        });
+      },
+
+      getItems() {
+        return activeAssistantSelectionModel
+          ? computeEffectiveAssistantSelectionItems(
+              activeAssistantSelectionModel,
+            )
+          : Object.freeze([]);
+      },
+
+      activateItem(id) {
+        return activeAssistantSelectionModel
+          ? activateAssistantSelectionModelItem(
+              activeAssistantSelectionModel,
+              id,
+            )
+          : false;
+      },
+    });
+  }
 
   function makeProfileMenuApi(extId) {
     return Object.freeze({
@@ -5569,6 +5870,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   function makeApi(extId) {
     return Object.freeze({
       menus: Object.freeze({
+        assistantSelection: makeAssistantSelectionMenuApi(extId),
         profile: makeProfileMenuApi(extId),
         thread: makeThreadMenuApi(extId),
       }),
@@ -5597,6 +5899,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     _debug: Object.freeze({
       captureBuiltInsFromOpenMenu,
       computeEffectiveItems,
+      computeEffectiveAssistantSelectionItems: () =>
+        activeAssistantSelectionModel
+          ? computeEffectiveAssistantSelectionItems(
+              activeAssistantSelectionModel,
+            )
+          : Object.freeze([]),
       visibleMenuColumn,
       warmModel,
       getCache: () => builtInCache,
@@ -5610,6 +5918,8 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       nativeReady: () => nativeBindingInstalled,
       nativeBindingError: () => nativeBindingError,
       applicationRootRefreshCount: () => applicationRootRefreshCount,
+      assistantSelectionBoundaryRenderCount: () =>
+        assistantSelectionBoundaryRenderCount,
       threadMenuBoundaryRenderCount: () => threadMenuBoundaryRenderCount,
       threadMenuAdapterRenderCount: () => threadMenuAdapterRenderCount,
       authenticationReady: () => typeof refreshAuthentication === "function",

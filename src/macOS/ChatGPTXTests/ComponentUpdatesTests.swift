@@ -284,6 +284,129 @@ final class ComponentUpdatesTests: XCTestCase {
     }
 
     @MainActor
+    func testSameChatGPTBuildInstallsPublishedComponentUpdates() async throws {
+        let originalAPI = try makeAPIArchive(version: "1.1.2")
+        let originalBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.1",
+            api: "1.1.2",
+            asarHash: Self.asarHash
+        )
+        let originalExtension = try makeExtensionArchive(
+            id: "sample",
+            version: "1.0.0",
+            apiRange: "^1.1.2"
+        )
+        let originalIndex = makeIndex(
+            apiHash: digest(originalAPI),
+            bindingHash: digest(originalBinding),
+            apiVersion: "1.1.2",
+            extensionVersions: [
+                "sample": [
+                    "1.0.0": extensionEntry(
+                        apiRange: "^1.1.2",
+                        hash: digest(originalExtension)
+                    )
+                ]
+            ]
+        )
+        var originalBindings = try XCTUnwrap(
+            originalIndex["bindings"] as? [String: Any]
+        )
+        originalBindings[Self.chatgptVersion] = bindingEntry(
+            chatgpt: Self.chatgptVersion,
+            version: "1.0.1",
+            api: "1.1.2",
+            asarHash: Self.asarHash,
+            hash: digest(originalBinding)
+        )
+        var installedIndex = originalIndex
+        installedIndex["bindings"] = originalBindings
+        try writeSettings(["sample": ["enabled": true]])
+        installResponses(
+            index: installedIndex,
+            archives: [
+                "chatgpt-api-v1.1.2": originalAPI,
+                "binding-\(Self.chatgptVersion)-v1.0.1": originalBinding,
+                "extension-sample-v1.0.0": originalExtension,
+            ]
+        )
+        _ = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        let updatedAPI = try makeAPIArchive(version: "1.2.0")
+        let updatedBinding = try makeBindingArchive(
+            chatgpt: Self.chatgptVersion,
+            version: "1.1.0",
+            api: "1.2.0",
+            asarHash: Self.asarHash
+        )
+        let updatedExtension = try makeExtensionArchive(
+            id: "sample",
+            version: "1.1.0",
+            apiRange: "^1.2.0"
+        )
+        var updatedIndex = installedIndex
+        updatedIndex["generation"] = 8
+        var updatedAPIs = try XCTUnwrap(
+            updatedIndex["chatgptApis"] as? [String: Any]
+        )
+        updatedAPIs["1.2.0"] = [
+            "release": "chatgpt-api-v1.2.0",
+            "sha256": digest(updatedAPI),
+        ]
+        updatedIndex["chatgptApis"] = updatedAPIs
+        var updatedBindings = try XCTUnwrap(
+            updatedIndex["bindings"] as? [String: Any]
+        )
+        updatedBindings[Self.chatgptVersion] = bindingEntry(
+            chatgpt: Self.chatgptVersion,
+            version: "1.1.0",
+            api: "1.2.0",
+            asarHash: Self.asarHash,
+            hash: digest(updatedBinding)
+        )
+        updatedIndex["bindings"] = updatedBindings
+        updatedIndex["extensions"] = extensionCatalogs([
+            "sample": [
+                "1.0.0": extensionEntry(
+                    apiRange: "^1.1.2",
+                    hash: digest(originalExtension)
+                ),
+                "1.1.0": extensionEntry(
+                    apiRange: "^1.2.0",
+                    hash: digest(updatedExtension)
+                ),
+            ]
+        ])
+        installResponses(
+            index: updatedIndex,
+            archives: [
+                "chatgpt-api-v1.2.0": updatedAPI,
+                "binding-\(Self.chatgptVersion)-v1.1.0": updatedBinding,
+                "extension-sample-v1.1.0": updatedExtension,
+            ]
+        )
+
+        let outcome = try await makeService().update(
+            for: Self.chatgptVersion,
+            chatgptAsarSHA256: Self.asarHash
+        )
+
+        guard case .installed(let prepared) = outcome.result else {
+            return XCTFail("Published component updates must install.")
+        }
+        XCTAssertEqual(prepared.versions.generation, 8)
+        XCTAssertEqual(prepared.versions.chatgptApi.version, "1.2.0")
+        XCTAssertEqual(prepared.versions.binding.chatgpt, Self.chatgptVersion)
+        XCTAssertEqual(prepared.versions.binding.version, "1.1.0")
+        XCTAssertEqual(prepared.versions.binding.chatgptApi, "1.2.0")
+        XCTAssertEqual(prepared.versions.extensions.map(\.version), ["1.1.0"])
+    }
+
+    @MainActor
     func testLegacyAPIArchiveDoesNotRequireManagerAuthorizationModule()
         async throws
     {

@@ -1,5 +1,6 @@
 /**
- * Binding-specific live UI validation for menus.profile and menus.thread.
+ * Binding-specific live UI validation for menus.profile, menus.thread, and
+ * menus.assistantSelection.
  *
  * This intentionally inspects version-specific renderer state. The stable
  * api-test-suite remains limited to src/platform/types.d.ts.
@@ -96,6 +97,101 @@ async function waitFor(expression, timeoutMs = 20000) {
   throw new Error('Timed out waiting for: ' + expression);
 }
 
+async function selectAssistantResponseText() {
+  const targetSelector =
+    '[data-response-annotation-target][data-response-annotation-conversation]';
+  await waitFor(
+    `Array.from(document.querySelectorAll(${JSON.stringify(targetSelector)})).some(
+      (element) =>
+        element.getBoundingClientRect().height > 0 &&
+        (element.textContent?.trim().length ?? 0) > 0
+    )`,
+    60000,
+  );
+  const selection = await evaluate(`(() => {
+    const targets = Array.from(document.querySelectorAll(${JSON.stringify(targetSelector)}))
+      .filter((element) =>
+        element.getBoundingClientRect().height > 0 &&
+        (element.textContent?.trim().length ?? 0) > 0
+      );
+    const target = targets.at(-1);
+    if (!target) throw new Error('Visible assistant response target missing');
+    const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (node.parentElement?.closest('button, [contenteditable="true"]')) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return /\\S/.test(node.data)
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT;
+      },
+    });
+    let textNode = null;
+    let candidate;
+    while ((candidate = walker.nextNode())) {
+      const parent = candidate.parentElement;
+      if (
+        !parent ||
+        parent.closest('[aria-hidden="true"]') ||
+        getComputedStyle(parent).userSelect === 'none'
+      ) {
+        continue;
+      }
+      const probe = document.createRange();
+      probe.selectNodeContents(candidate);
+      if (
+        Array.from(probe.getClientRects()).some(
+          (rect) => rect.width > 0 && rect.height > 0,
+        )
+      ) {
+        textNode = candidate;
+        break;
+      }
+    }
+    if (!textNode) throw new Error('Assistant response text node missing');
+    const start = textNode.data.search(/\\S/);
+    const end = Math.min(textNode.data.length, start + 32);
+    const range = document.createRange();
+    range.setStart(textNode, start);
+    range.setEnd(textNode, end);
+    const browserSelection = window.getSelection();
+    browserSelection.removeAllRanges();
+    browserSelection.addRange(range);
+    document.dispatchEvent(new Event('selectionchange', { bubbles: true }));
+    return { selectedText: browserSelection.toString(), targetText: target.textContent };
+  })()`);
+  if (!selection?.selectedText) {
+    throw new Error(
+      'Assistant response selection was empty: ' + JSON.stringify(selection),
+    );
+  }
+  try {
+    await waitFor(
+      `globalThis.__CGPTX_HOST__?._debug
+        .computeEffectiveAssistantSelectionItems()
+        .some((item) => item.origin === "app")`,
+      20000,
+    );
+  } catch (error) {
+    const state = await evaluate(`({
+      boundaryRenders:
+        globalThis.__CGPTX_HOST__?._debug
+          .assistantSelectionBoundaryRenderCount(),
+      nativeBindingError:
+        globalThis.__CGPTX_HOST__?._debug.nativeBindingError(),
+      selectedText: window.getSelection()?.toString(),
+      visibleButtons: Array.from(document.querySelectorAll('button'))
+        .filter((button) => button.getBoundingClientRect().height > 0)
+        .map((button) => button.textContent?.trim())
+        .filter(Boolean),
+    })`);
+    throw new Error(
+      `${error.message}; assistant selection state: ${JSON.stringify(state)}`,
+    );
+  }
+  return selection.selectedText;
+}
+
 function findSettingsBackLink() {
   const hasMessageId = (value) =>
     Array.isArray(value)
@@ -144,6 +240,70 @@ async function validateUi(
       `Timed out waiting for native UI state during ${globalThis.__CGPTX_UI_TEST_PROGRESS__}: ${condition.toString().replace(/\s+/g, ' ')}`,
     );
   };
+  markProgress('assistant-selection menu');
+  const assistantSelectionActions = Array.from(
+    document.querySelectorAll('[data-cgptx-assistant-selection-action]'),
+  );
+  const assistantSelectionLabels = assistantSelectionActions.map((action) =>
+    action.textContent?.trim(),
+  );
+  const expectedAssistantSelectionLabels = noProfile
+    ? ['Add to chat']
+    : ['Add to chat', 'More details', 'Ask in side chat'];
+  check(
+    expectedAssistantSelectionLabels.every((label) =>
+      assistantSelectionLabels.includes(label),
+    ),
+    'assistant selection keeps all native actions',
+    { labels: assistantSelectionLabels },
+  );
+  const assistantSelectionBuiltIn = assistantSelectionActions.find(
+    (action) => action.getAttribute('data-cgptx-origin') === 'app',
+  );
+  const assistantSelectionExtension = assistantSelectionActions.find(
+    (action) =>
+      action.getAttribute('data-cgptx-id') ===
+      'api-test-suite.assistant-selection-visual',
+  );
+  check(
+    Boolean(assistantSelectionExtension),
+    'assistant selection renders an extension action',
+    { labels: assistantSelectionLabels },
+  );
+  check(
+    assistantSelectionBuiltIn?.tagName === assistantSelectionExtension?.tagName &&
+      assistantSelectionBuiltIn?.className ===
+        assistantSelectionExtension?.className,
+    'assistant selection extension action reuses the native button component',
+    {
+      builtIn: assistantSelectionBuiltIn
+        ? {
+            tagName: assistantSelectionBuiltIn.tagName,
+            className: assistantSelectionBuiltIn.className,
+          }
+        : null,
+      extension: assistantSelectionExtension
+        ? {
+            tagName: assistantSelectionExtension.tagName,
+            className: assistantSelectionExtension.className,
+          }
+        : null,
+    },
+  );
+  const assistantSelectionClickCount = Number(
+    globalThis.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ ?? 0,
+  );
+  assistantSelectionExtension?.click();
+  await waitUntil(
+    () =>
+      Number(globalThis.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ ?? 0) ===
+        assistantSelectionClickCount + 1 &&
+      window.getSelection()?.isCollapsed === true,
+  );
+  check(
+    true,
+    'assistant selection action activates once and dismisses the selection',
+  );
   const waitForNativeAccount = async (email, timeoutMs = 20000) => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -3950,6 +4110,9 @@ let selectedThreadId = selectThreadId;
 if (selectThreadKind) {
   selectedThreadId = await selectThreadByKind(selectThreadKind, false);
 } else if (selectedThreadId) {
+  await returnFromSettingsForThreadSelection(
+    '[data-app-action-sidebar-thread-id$=":' + selectedThreadId + '"]',
+  );
   await selectThread(selectedThreadId, false);
 }
 if (noProfile) {
@@ -3971,6 +4134,13 @@ if (noProfile) {
         JSON.stringify(preProfileSettingsState),
     );
   }
+}
+await waitFor(
+  'globalThis.__CGPTX_ASSISTANT_SELECTION_REQUESTED__ === true || Array.isArray(globalThis.__CGPTX_TEST_RESULTS__)',
+  90000,
+);
+if (!Array.isArray(await evaluate('globalThis.__CGPTX_TEST_RESULTS__'))) {
+  await selectAssistantResponseText();
 }
 await waitFor(
   `globalThis.__CGPTX_BINDING_FIXTURE_READY__ === true ||
@@ -4003,6 +4173,7 @@ if (selectedThreadId) {
   await returnFromSettingsForThreadSelection(selector);
   await selectThread(selectedThreadId);
 }
+await selectAssistantResponseText();
 
 const report = await evaluate(
   '(' +

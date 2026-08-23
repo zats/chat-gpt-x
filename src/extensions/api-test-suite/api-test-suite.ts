@@ -22,6 +22,8 @@
  */
 
 import type {
+  AssistantSelectionContext,
+  AssistantSelectionMenuItem,
   Disposable,
   HeaderCssPropertiesRegistration,
   PlatformApi,
@@ -92,9 +94,7 @@ function ids(): string[] {
 }
 
 function register(
-  transform: (
-    items: readonly ProfileMenuItem[],
-  ) => readonly ProfileMenuItem[],
+  transform: (items: readonly ProfileMenuItem[]) => readonly ProfileMenuItem[],
 ): Disposable {
   const disposable = api.menus.profile.transformItems(transform);
   activeTestDisposables?.push(disposable);
@@ -103,6 +103,28 @@ function register(
 
 let observedThreadContext: ThreadContext | undefined;
 let observedThreadListContext: ThreadContext | undefined;
+let observedAssistantSelectionContext: AssistantSelectionContext | undefined;
+
+function assistantSelectionItems(): readonly AssistantSelectionMenuItem[] {
+  return api.menus.assistantSelection.getItems();
+}
+
+function assistantSelectionById(
+  id: string,
+): AssistantSelectionMenuItem | undefined {
+  return assistantSelectionItems().find((item) => item.id === id);
+}
+
+function registerAssistantSelection(
+  transform: (
+    items: readonly AssistantSelectionMenuItem[],
+    context: AssistantSelectionContext,
+  ) => readonly AssistantSelectionMenuItem[],
+): Disposable {
+  const disposable = api.menus.assistantSelection.transformItems(transform);
+  activeTestDisposables?.push(disposable);
+  return disposable;
+}
 
 function threadItems(): readonly ThreadMenuItem[] {
   assert(observedThreadContext, "thread context is available");
@@ -124,13 +146,253 @@ function registerThread(
   return disposable;
 }
 
+// --------------------------------------------------------------------------
+// Tests: assistant-selection menu API
+// --------------------------------------------------------------------------
+
+const ASSISTANT_SELECTION_BASIC_ID = `${EXT_ID}.assistant-selection-basic`;
+const ASSISTANT_SELECTION_CHAIN_A_ID = `${EXT_ID}.assistant-selection-chain-a`;
+const ASSISTANT_SELECTION_CHAIN_B_ID = `${EXT_ID}.assistant-selection-chain-b`;
+const ASSISTANT_SELECTION_DISABLED_ID = `${EXT_ID}.assistant-selection-disabled`;
+
+test("assistant-selection-menu: exposes selected text and native actions", () => {
+  assert(observedAssistantSelectionContext, "selection context was observed");
+  assert(
+    observedAssistantSelectionContext.selectedText.length > 0,
+    "selected text is non-empty",
+  );
+  assert(
+    Object.isFrozen(observedAssistantSelectionContext),
+    "selection context is immutable",
+  );
+  const builtIns = assistantSelectionItems().filter(
+    (item) => item.origin === "app",
+  );
+  assert(
+    builtIns.some((item) => item.id === "selectedTextOverlay.addToCodex"),
+    "Add to chat is exposed",
+  );
+  assert(
+    new Set(builtIns.map((item) => item.id)).size === builtIns.length,
+    "native action ids are unique",
+  );
+  assert(
+    builtIns.every((item) => Object.isFrozen(item)),
+    "native action descriptors are immutable",
+  );
+});
+
+profileTest(
+  "assistant-selection-menu: exposes authenticated quick and side chat actions",
+  () => {
+    const builtIns = assistantSelectionItems().filter(
+      (item) => item.origin === "app",
+    );
+    assert(
+      builtIns.some((item) => item.id === "selectedTextOverlay.moreDetails"),
+      "More details is exposed",
+    );
+    assert(
+      builtIns.some((item) => item.id === "selectedTextOverlay.askInSideChat"),
+      "Ask in side chat is exposed",
+    );
+  },
+);
+
+test("assistant-selection-menu: contributes an action and dispose removes it", () => {
+  const registration = registerAssistantSelection((items) => [
+    ...items,
+    {
+      kind: "action",
+      id: ASSISTANT_SELECTION_BASIC_ID,
+      label: "Selection Basic",
+    },
+  ]);
+  assert(
+    assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID)?.origin === EXT_ID,
+    "selection contribution is effective and attributed",
+  );
+  registration.dispose();
+  assert(
+    !assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID),
+    "selection contribution is removed",
+  );
+  registration.dispose();
+});
+
+test("assistant-selection-menu: transformers chain with the same selection", () => {
+  const selectedTexts: string[] = [];
+  registerAssistantSelection((items, context) => {
+    selectedTexts.push(context.selectedText);
+    return [
+      ...items,
+      {
+        kind: "action",
+        id: ASSISTANT_SELECTION_CHAIN_A_ID,
+        label: "Selection Chain A",
+      },
+    ];
+  });
+  registerAssistantSelection((items, context) => {
+    selectedTexts.push(context.selectedText);
+    assert(
+      items.some((item) => item.id === ASSISTANT_SELECTION_CHAIN_A_ID),
+      "second transformer sees the first contribution",
+    );
+    return [
+      ...items,
+      {
+        kind: "action",
+        id: ASSISTANT_SELECTION_CHAIN_B_ID,
+        label: "Selection Chain B",
+      },
+    ];
+  });
+  assert(
+    assistantSelectionItems().findIndex(
+      (item) => item.id === ASSISTANT_SELECTION_CHAIN_A_ID,
+    ) <
+      assistantSelectionItems().findIndex(
+        (item) => item.id === ASSISTANT_SELECTION_CHAIN_B_ID,
+      ),
+    "selection transformer order is deterministic",
+  );
+  assert(
+    selectedTexts.length >= 2 &&
+      selectedTexts.every(
+        (selectedText) =>
+          selectedText === observedAssistantSelectionContext?.selectedText,
+      ),
+    "every transformer receives the active selection",
+  );
+});
+
+test("assistant-selection-menu: throwing transformer is isolated", () => {
+  registerAssistantSelection(() => {
+    throw new Error("intentional selection transformer failure");
+  });
+  registerAssistantSelection((items) => [
+    ...items,
+    {
+      kind: "action",
+      id: ASSISTANT_SELECTION_BASIC_ID,
+      label: "After throw",
+    },
+  ]);
+  assert(
+    assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID),
+    "later selection transformer still runs",
+  );
+  assert(
+    assistantSelectionItems().some((item) => item.origin === "app"),
+    "native actions remain",
+  );
+});
+
+test("assistant-selection-menu: enforces namespaces and duplicate ids", () => {
+  registerAssistantSelection((items) => [
+    ...items,
+    { kind: "action", id: "foreign.selection", label: "Foreign" },
+    {
+      kind: "action",
+      id: ASSISTANT_SELECTION_BASIC_ID,
+      label: "First",
+    },
+    {
+      kind: "action",
+      id: ASSISTANT_SELECTION_BASIC_ID,
+      label: "Duplicate",
+    },
+  ]);
+  assert(
+    !assistantSelectionById("foreign.selection"),
+    "foreign selection id is dropped",
+  );
+  assert(
+    assistantSelectionItems().filter(
+      (item) => item.id === ASSISTANT_SELECTION_BASIC_ID,
+    ).length === 1,
+    "duplicate selection id is dropped",
+  );
+});
+
+test("assistant-selection-menu: built-in replacement inherits native activation", () => {
+  const builtIn = assistantSelectionItems().find(
+    (item) => item.origin === "app" && typeof item.onClick === "function",
+  );
+  assert(builtIn, "activatable native selection action exists");
+  const originalHandler = builtIn.onClick;
+  const originalIndex = assistantSelectionItems().findIndex(
+    (item) => item.id === builtIn.id,
+  );
+  registerAssistantSelection((items) =>
+    items.map((item) =>
+      item.id === builtIn.id
+        ? { kind: "action", id: builtIn.id, label: "Replaced Selection" }
+        : item,
+    ),
+  );
+  const replacement = assistantSelectionById(builtIn.id);
+  assert(
+    replacement?.onClick === originalHandler,
+    "native selection handler is inherited",
+  );
+  assert(
+    assistantSelectionItems().findIndex((item) => item.id === builtIn.id) ===
+      originalIndex,
+    "selection replacement retains its position",
+  );
+});
+
+test("assistant-selection-menu: activates enabled actions only", () => {
+  let clicks = 0;
+  let clickedText = "";
+  registerAssistantSelection((items, context) => [
+    ...items,
+    {
+      kind: "action",
+      id: ASSISTANT_SELECTION_DISABLED_ID,
+      label: "Selection Disabled",
+      disabled: true,
+      onClick: () => {
+        clicks += 100;
+      },
+    },
+    {
+      kind: "action",
+      id: ASSISTANT_SELECTION_BASIC_ID,
+      label: "Selection Click",
+      onClick: () => {
+        clicks += 1;
+        clickedText = context.selectedText;
+      },
+    },
+  ]);
+  assert(
+    !api.menus.assistantSelection.activateItem(ASSISTANT_SELECTION_DISABLED_ID),
+    "disabled selection action is rejected",
+  );
+  assert(
+    !api.menus.assistantSelection.activateItem("missing.selection-action"),
+    "unknown selection action is rejected",
+  );
+  assert(
+    api.menus.assistantSelection.activateItem(ASSISTANT_SELECTION_BASIC_ID),
+    "enabled selection action activates",
+  );
+  assert(Number(clicks) === 1, "selection action runs once");
+  assert(
+    clickedText === observedAssistantSelectionContext?.selectedText,
+    "selection action retains its selected-text context",
+  );
+});
+
 function registerHeaderProperties(
   properties: Parameters<
     PlatformApi["appearance"]["header"]["registerProperties"]
   >[0],
 ): HeaderCssPropertiesRegistration {
-  const registration =
-    api.appearance.header.registerProperties(properties);
+  const registration = api.appearance.header.registerProperties(properties);
   activeTestDisposables?.push(registration);
   return registration;
 }
@@ -158,17 +420,20 @@ const VISUAL_DISABLED_ID = `${EXT_ID}.visual-disabled`;
 const VISUAL_PARENT_ID = `${EXT_ID}.visual-parent`;
 const VISUAL_CHILD_ID = `${EXT_ID}.visual-child`;
 
-profileTest("profile-menu: contributes an action item and dispose removes it", () => {
-  const registration = register((items) => [
-    ...items,
-    { kind: "action", id: ID_BASIC, label: "Basic" },
-  ]);
-  assert(byId(ID_BASIC), "contributed item is in the effective list");
-  registration.dispose();
-  assert(!byId(ID_BASIC), "item is gone after dispose");
-  registration.dispose();
-  assert(!byId(ID_BASIC), "dispose is idempotent");
-});
+profileTest(
+  "profile-menu: contributes an action item and dispose removes it",
+  () => {
+    const registration = register((items) => [
+      ...items,
+      { kind: "action", id: ID_BASIC, label: "Basic" },
+    ]);
+    assert(byId(ID_BASIC), "contributed item is in the effective list");
+    registration.dispose();
+    assert(!byId(ID_BASIC), "item is gone after dispose");
+    registration.dispose();
+    assert(!byId(ID_BASIC), "dispose is idempotent");
+  },
+);
 
 profileTest("profile-menu: built-in items pass through unchanged", () => {
   const baseline = items();
@@ -181,16 +446,19 @@ profileTest("profile-menu: built-in items pass through unchanged", () => {
   registration.dispose();
 });
 
-profileTest("profile-menu: can remove a built-in item, dispose restores it", () => {
-  const victim = items()[0];
-  assert(victim, "found a built-in item to remove");
-  const registration = register((items) =>
-    items.filter((item) => item.id !== victim.id),
-  );
-  assert(!byId(victim.id), "built-in item was removed");
-  registration.dispose();
-  assert(byId(victim.id), "built-in item is restored after dispose");
-});
+profileTest(
+  "profile-menu: can remove a built-in item, dispose restores it",
+  () => {
+    const victim = items()[0];
+    assert(victim, "found a built-in item to remove");
+    const registration = register((items) =>
+      items.filter((item) => item.id !== victim.id),
+    );
+    assert(!byId(victim.id), "built-in item was removed");
+    registration.dispose();
+    assert(byId(victim.id), "built-in item is restored after dispose");
+  },
+);
 
 profileTest("profile-menu: transformers chain in registration order", () => {
   const seenBySecond: string[] = [];
@@ -260,59 +528,65 @@ profileTest("profile-menu: accepts and preserves all item affordances", () => {
   registration.dispose();
 });
 
-profileTest("profile-menu: activateItem fires onClick, disabled item does not", () => {
-  let clicked = 0;
-  const registration = register((items) => [
-    ...items,
-    {
-      kind: "action",
-      id: ID_CLICK,
-      label: "Click",
-      onClick: () => {
-        clicked += 1;
+profileTest(
+  "profile-menu: activateItem fires onClick, disabled item does not",
+  () => {
+    let clicked = 0;
+    const registration = register((items) => [
+      ...items,
+      {
+        kind: "action",
+        id: ID_CLICK,
+        label: "Click",
+        onClick: () => {
+          clicked += 1;
+        },
       },
-    },
-    {
-      kind: "action",
-      id: ID_RICH,
-      label: "Disabled click",
-      disabled: true,
-      onClick: () => {
-        clicked += 100;
+      {
+        kind: "action",
+        id: ID_RICH,
+        label: "Disabled click",
+        disabled: true,
+        onClick: () => {
+          clicked += 100;
+        },
       },
-    },
-  ]);
-  assert(
-    api.menus.profile.activateItem(ID_CLICK) === true,
-    "activateItem reports the activation",
-  );
-  assert(clicked === 1, "onClick fired exactly once");
-  assert(
-    api.menus.profile.activateItem(ID_RICH) === false,
-    "disabled item is not activated",
-  );
-  assert(clicked === 1, "disabled onClick never fired");
-  assert(
-    api.menus.profile.activateItem("no-such-item") === false,
-    "unknown id is not activated",
-  );
-  registration.dispose();
-});
+    ]);
+    assert(
+      api.menus.profile.activateItem(ID_CLICK) === true,
+      "activateItem reports the activation",
+    );
+    assert(clicked === 1, "onClick fired exactly once");
+    assert(
+      api.menus.profile.activateItem(ID_RICH) === false,
+      "disabled item is not activated",
+    );
+    assert(clicked === 1, "disabled onClick never fired");
+    assert(
+      api.menus.profile.activateItem("no-such-item") === false,
+      "unknown id is not activated",
+    );
+    registration.dispose();
+  },
+);
 
-profileTest("profile-menu: separator contribution increments by exactly one", () => {
-  const countSeparators = () =>
-    items().filter((item) => item.kind === "separator").length;
-  const baseline = countSeparators();
-  const registration = register((items) => [
-    ...items,
-    { kind: "separator", id: `${EXT_ID}.sep` },
-  ]);
-  assert(
-    countSeparators() === baseline + 1,
-    `separator count went ${baseline} -> ${baseline + 1}`,
-  );
-  registration.dispose();
-});
+profileTest(
+  "profile-menu: separator contribution increments by exactly one",
+  () => {
+    const countSeparators = () =>
+      items().filter((item) => item.kind === "separator").length;
+    const baseline = countSeparators();
+    const registration = register((items) => [
+      ...items,
+      { kind: "separator", id: `${EXT_ID}.sep` },
+    ]);
+    assert(
+      countSeparators() === baseline + 1,
+      `separator count went ${baseline} -> ${baseline + 1}`,
+    );
+    registration.dispose();
+  },
+);
 
 profileTest("profile-menu: drops items with foreign-namespace ids", () => {
   const registration = register((items) => [
@@ -361,8 +635,7 @@ profileTest("profile-menu: throwing onClick is isolated", () => {
     "throwing action still reports activation",
   );
   assert(
-    api.menus.profile.activateItem(ID_AFTER_THROW) === true &&
-      afterThrow === 1,
+    api.menus.profile.activateItem(ID_AFTER_THROW) === true && afterThrow === 1,
     "later actions remain activatable",
   );
   registration.dispose();
@@ -428,33 +701,36 @@ profileTest("profile-menu: replaces a built-in item in place by id", () => {
   registration.dispose();
 });
 
-profileTest("profile-menu: built-in replacement inherits omitted fields", () => {
-  const victim = items().find(
-    (item) =>
-      item.origin === "app" &&
-      item.kind === "action" &&
-      typeof item.onClick === "function",
-  );
-  assert(victim && victim.kind === "action", "found activatable built-in");
-  const originalOnClick = victim.onClick;
-  const registration = register((items) =>
-    items.map((item) =>
-      item.id === victim.id
-        ? { kind: "action", id: victim.id, label: "Inherited" }
-        : item,
-    ),
-  );
-  const replacement = byId(victim.id);
-  assert(
-    replacement?.kind === "action" && replacement.origin === "app",
-    "replacement remains app-owned",
-  );
-  assert(
-    replacement?.kind === "action" && replacement.onClick === originalOnClick,
-    "omitted handler is inherited",
-  );
-  registration.dispose();
-});
+profileTest(
+  "profile-menu: built-in replacement inherits omitted fields",
+  () => {
+    const victim = items().find(
+      (item) =>
+        item.origin === "app" &&
+        item.kind === "action" &&
+        typeof item.onClick === "function",
+    );
+    assert(victim && victim.kind === "action", "found activatable built-in");
+    const originalOnClick = victim.onClick;
+    const registration = register((items) =>
+      items.map((item) =>
+        item.id === victim.id
+          ? { kind: "action", id: victim.id, label: "Inherited" }
+          : item,
+      ),
+    );
+    const replacement = byId(victim.id);
+    assert(
+      replacement?.kind === "action" && replacement.origin === "app",
+      "replacement remains app-owned",
+    );
+    assert(
+      replacement?.kind === "action" && replacement.onClick === originalOnClick,
+      "omitted handler is inherited",
+    );
+    registration.dispose();
+  },
+);
 
 profileTest("profile-menu: submenu children are live, expandable items", () => {
   let parentClicks = 0;
@@ -490,8 +766,7 @@ profileTest("profile-menu: submenu children are live, expandable items", () => {
     parent && parent.kind === "action" ? parent.items?.[0] : undefined;
   assert(child?.origin === EXT_ID, "child origin is stamped recursively");
   assert(
-    api.menus.profile.activateItem(ID_PARENT) === true &&
-      parentClicks === 0,
+    api.menus.profile.activateItem(ID_PARENT) === true && parentClicks === 0,
     "activating a parent expands it instead of firing onClick",
   );
   assert(
@@ -501,27 +776,29 @@ profileTest("profile-menu: submenu children are live, expandable items", () => {
   registration.dispose();
 });
 
-profileTest("profile-menu: validates nested item namespaces and duplicates", () => {
-  const registration = register((items) => [
-    ...items,
-    {
-      kind: "action",
-      id: ID_PARENT,
-      label: "Validated parent",
-      items: [
-        { kind: "action", id: ID_CHILD, label: "Child" },
-        { kind: "action", id: ID_CHILD, label: "Duplicate child" },
-        { kind: "action", id: "someone-else.child", label: "Foreign child" },
-      ],
-    },
-  ]);
-  const parent = byId(ID_PARENT);
-  const children =
-    parent?.kind === "action" ? (parent.items ?? []) : [];
-  assert(children.length === 1, "invalid nested items are dropped");
-  assert(children[0]?.id === ID_CHILD, "valid nested item remains");
-  registration.dispose();
-});
+profileTest(
+  "profile-menu: validates nested item namespaces and duplicates",
+  () => {
+    const registration = register((items) => [
+      ...items,
+      {
+        kind: "action",
+        id: ID_PARENT,
+        label: "Validated parent",
+        items: [
+          { kind: "action", id: ID_CHILD, label: "Child" },
+          { kind: "action", id: ID_CHILD, label: "Duplicate child" },
+          { kind: "action", id: "someone-else.child", label: "Foreign child" },
+        ],
+      },
+    ]);
+    const parent = byId(ID_PARENT);
+    const children = parent?.kind === "action" ? (parent.items ?? []) : [];
+    assert(children.length === 1, "invalid nested items are dropped");
+    assert(children[0]?.id === ID_CHILD, "valid nested item remains");
+    registration.dispose();
+  },
+);
 
 // --------------------------------------------------------------------------
 // Tests: thread menu API
@@ -920,17 +1197,17 @@ test("thread-list: throwing providers are isolated and disposal is final", async
     return { view: () => document.createElement("span") };
   });
   activeTestDisposables?.push(throwing, good);
-  assert(
-    await waitFor(() => goodCalls > 0, 5000),
-    "later provider still runs",
-  );
+  assert(await waitFor(() => goodCalls > 0, 5000), "later provider still runs");
   assert(threadId, "an observed native thread row is available");
   good.dispose();
   good.dispose();
   const callsAfterDispose = goodCalls;
   good.invalidate(threadId);
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert(goodCalls === callsAfterDispose, "disposed registration stays inactive");
+  assert(
+    goodCalls === callsAfterDispose,
+    "disposed registration stays inactive",
+  );
 });
 
 // --------------------------------------------------------------------------
@@ -1525,8 +1802,7 @@ test("settings: inserts a searchable fixture into an existing pane", async () =>
     .find((category) => category.id === builtInCategory?.id);
   assert(
     typeof originalBuiltInCategoryLabel === "string" &&
-      transformedBuiltInCategory?.label ===
-        "Transformed built-in category" &&
+      transformedBuiltInCategory?.label === "Transformed built-in category" &&
       restoredBuiltInCategory?.label === originalBuiltInCategoryLabel,
     "built-in category labels are changed and restored through the public model",
   );
@@ -1602,17 +1878,19 @@ test("settings: inserts a searchable fixture into an existing pane", async () =>
                   keywords: undefined,
                 }
               : {
-                ...candidate,
-                title: "Transformed built-in title",
-                description: "Transformed built-in description",
-                footer: "Transformed built-in footer",
-                keywords: ["transformed-built-in-keyword"],
-              }
+                  ...candidate,
+                  title: "Transformed built-in title",
+                  description: "Transformed built-in description",
+                  footer: "Transformed built-in footer",
+                  keywords: ["transformed-built-in-keyword"],
+                }
             : candidate,
         )
       : current,
   );
-  const metadataPassThrough = api.settings.transformGroups((current) => current);
+  const metadataPassThrough = api.settings.transformGroups(
+    (current) => current,
+  );
   activeTestDisposables?.push(metadata, metadataPassThrough);
   const transformedBuiltInGroup = api.settings
     .getGroups(SETTINGS_BUILT_IN_PANE_ID)
@@ -1821,8 +2099,7 @@ test("appearance.header: properties update immediately and dispose restores prio
   const updatedProperties = api.appearance.header.getProperties();
   const expectedUpdatedProperties = {
     ...baseline,
-    "--header-background-color":
-      updatedProperties["--header-background-color"],
+    "--header-background-color": updatedProperties["--header-background-color"],
   };
   assert(
     ["rgb(219, 234, 254)", "rgb(23, 37, 84)"].includes(
@@ -1929,16 +2206,31 @@ test("appearance.header: rejects unknown properties and invalid colors", () => {
 // Tests: authentication API
 // --------------------------------------------------------------------------
 
-profileTest("authentication: current credentials expose stable inspectable identity", async () => {
-  const current = await api.authentication.getCurrent();
-  assert(current, "authenticated test profile has current credentials");
-  assert(current.userId.length > 0, "current credentials have a user id");
-  assert(current.label.length > 0, "current credentials have a preferred account label");
-  assert(current.authJson.length > 0, "current credentials include opaque JSON");
-  const inspected = await api.authentication.inspect(current.authJson);
-  assert(inspected.userId === current.userId, "inspection returns the same user id");
-  assert(inspected.label === current.label, "inspection returns the same preferred account label");
-});
+profileTest(
+  "authentication: current credentials expose stable inspectable identity",
+  async () => {
+    const current = await api.authentication.getCurrent();
+    assert(current, "authenticated test profile has current credentials");
+    assert(current.userId.length > 0, "current credentials have a user id");
+    assert(
+      current.label.length > 0,
+      "current credentials have a preferred account label",
+    );
+    assert(
+      current.authJson.length > 0,
+      "current credentials include opaque JSON",
+    );
+    const inspected = await api.authentication.inspect(current.authJson);
+    assert(
+      inspected.userId === current.userId,
+      "inspection returns the same user id",
+    );
+    assert(
+      inspected.label === current.label,
+      "inspection returns the same preferred account label",
+    );
+  },
+);
 
 test("authentication: invalid serialized credentials are rejected", async () => {
   let rejected = false;
@@ -1982,26 +2274,38 @@ test("authentication: stored identity distinguishes ChatGPT accounts for one use
     credentials("account-b", "shared-user", "second-token"),
   );
 
-  assert(first.userId === refreshed.userId, "the same account keeps its identity across token refreshes");
-  assert(first.userId !== second.userId, "different accounts for one user have different identities");
+  assert(
+    first.userId === refreshed.userId,
+    "the same account keeps its identity across token refreshes",
+  );
+  assert(
+    first.userId !== second.userId,
+    "different accounts for one user have different identities",
+  );
 });
 
-profileTest("authentication: native sign-in starts and credential replacement preserves the selected account", async () => {
-  const current = await api.authentication.getCurrent();
-  assert(current, "authenticated test profile has credentials to restore");
-  let changes = 0;
-  const registration = api.authentication.onDidChange(() => {
-    changes += 1;
-  });
-  await api.authentication.startSignIn();
-  await api.authentication.replaceCurrent(current.authJson);
-  const restored = await api.authentication.getCurrent();
-  assert(restored?.userId === current.userId, "replacement committed the selected account");
-  assert(changes === 1, "replacement emits one authentication change");
-  registration.dispose();
-  await api.authentication.replaceCurrent(current.authJson);
-  assert(changes === 1, "disposed authentication listener is not called");
-});
+profileTest(
+  "authentication: native sign-in starts and credential replacement preserves the selected account",
+  async () => {
+    const current = await api.authentication.getCurrent();
+    assert(current, "authenticated test profile has credentials to restore");
+    let changes = 0;
+    const registration = api.authentication.onDidChange(() => {
+      changes += 1;
+    });
+    await api.authentication.startSignIn();
+    await api.authentication.replaceCurrent(current.authJson);
+    const restored = await api.authentication.getCurrent();
+    assert(
+      restored?.userId === current.userId,
+      "replacement committed the selected account",
+    );
+    assert(changes === 1, "replacement emits one authentication change");
+    registration.dispose();
+    await api.authentication.replaceCurrent(current.authJson);
+    assert(changes === 1, "disposed authentication listener is not called");
+  },
+);
 
 // --------------------------------------------------------------------------
 // Entry points
@@ -2010,6 +2314,9 @@ profileTest("authentication: native sign-in starts and credential replacement pr
 let api: PlatformApi;
 let visualFixtures: Disposable[] = [];
 let threadListVisualFixture: Disposable | undefined;
+let assistantSelectionReadiness: Disposable | undefined;
+
+const ASSISTANT_SELECTION_VISUAL_ID = `${EXT_ID}.assistant-selection-visual`;
 
 function removeThreadListVisualFixture(): void {
   threadListVisualFixture?.dispose();
@@ -2025,12 +2332,15 @@ export function activate(platformApi: PlatformApi): void {
 }
 
 export function deactivate(): void {
+  assistantSelectionReadiness?.dispose();
+  assistantSelectionReadiness = undefined;
   removeThreadListVisualFixture();
   for (const fixture of visualFixtures.reverse()) fixture.dispose();
   visualFixtures = [];
-  delete (
-    globalThis as Record<string, unknown>
-  ).__CGPTX_REMOVE_THREAD_LIST_VISUAL_FIXTURE__;
+  delete (globalThis as Record<string, unknown>)
+    .__CGPTX_REMOVE_THREAD_LIST_VISUAL_FIXTURE__;
+  delete (globalThis as Record<string, unknown>)
+    .__CGPTX_ASSISTANT_SELECTION_REQUESTED__;
 }
 
 function installVisualFixture(): void {
@@ -2040,57 +2350,58 @@ function installVisualFixture(): void {
     );
     assert(builtInToMove, "visual fixture found a built-in item to move");
 
-    visualFixtures.push(register((current) => [
-      ...current.filter((item) => item.id !== builtInToMove.id),
-      { kind: "separator", id: VISUAL_SEPARATOR_ID },
-      {
-        kind: "action",
-        id: VISUAL_RICH_ID,
-        label: "Binding Rich Item",
-        icon: "person",
-        rightIcon: "chevron-right",
-        subText: "Binding subtext",
-        keyboardShortcut: "⌘T",
-        onClick: () => {
-          const fixture = globalThis as Record<string, unknown>;
-          fixture.__CGPTX_VISUAL_CLICK_COUNT__ =
-            Number(fixture.__CGPTX_VISUAL_CLICK_COUNT__ ?? 0) + 1;
-        },
-      },
-      {
-        kind: "action",
-        id: VISUAL_DISABLED_ID,
-        label: "Binding Disabled Item",
-        disabled: true,
-      },
-      {
-        kind: "action",
-        id: VISUAL_PARENT_ID,
-        label: "Binding Submenu",
-        items: [
-          {
-            kind: "action",
-            id: VISUAL_CHILD_ID,
-            label: "Binding Child Item",
-            onClick: () => {
-              const fixture = globalThis as Record<string, unknown>;
-              fixture.__CGPTX_VISUAL_CHILD_CLICK_COUNT__ =
-                Number(fixture.__CGPTX_VISUAL_CHILD_CLICK_COUNT__ ?? 0) + 1;
-            },
+    visualFixtures.push(
+      register((current) => [
+        ...current.filter((item) => item.id !== builtInToMove.id),
+        { kind: "separator", id: VISUAL_SEPARATOR_ID },
+        {
+          kind: "action",
+          id: VISUAL_RICH_ID,
+          label: "Binding Rich Item",
+          icon: "person",
+          rightIcon: "chevron-right",
+          subText: "Binding subtext",
+          keyboardShortcut: "⌘T",
+          onClick: () => {
+            const fixture = globalThis as Record<string, unknown>;
+            fixture.__CGPTX_VISUAL_CLICK_COUNT__ =
+              Number(fixture.__CGPTX_VISUAL_CLICK_COUNT__ ?? 0) + 1;
           },
-          builtInToMove,
-        ],
-      },
-    ]));
+        },
+        {
+          kind: "action",
+          id: VISUAL_DISABLED_ID,
+          label: "Binding Disabled Item",
+          disabled: true,
+        },
+        {
+          kind: "action",
+          id: VISUAL_PARENT_ID,
+          label: "Binding Submenu",
+          items: [
+            {
+              kind: "action",
+              id: VISUAL_CHILD_ID,
+              label: "Binding Child Item",
+              onClick: () => {
+                const fixture = globalThis as Record<string, unknown>;
+                fixture.__CGPTX_VISUAL_CHILD_CLICK_COUNT__ =
+                  Number(fixture.__CGPTX_VISUAL_CHILD_CLICK_COUNT__ ?? 0) + 1;
+              },
+            },
+            builtInToMove,
+          ],
+        },
+      ]),
+    );
     (globalThis as Record<string, unknown>).__CGPTX_VISUAL_MOVED_ID__ =
       builtInToMove.id;
-    (
-      globalThis as Record<string, unknown>
-    ).__CGPTX_ACTIVATE_VISUAL_PARENT__ = () =>
-      api.menus.profile.activateItem(VISUAL_PARENT_ID);
+    (globalThis as Record<string, unknown>).__CGPTX_ACTIVATE_VISUAL_PARENT__ =
+      () => api.menus.profile.activateItem(VISUAL_PARENT_ID);
   }
   threadListVisualFixture = api.threads.list.registerItem((thread) => {
-    if (thread.threadId !== observedThreadListContext?.threadId) return undefined;
+    if (thread.threadId !== observedThreadListContext?.threadId)
+      return undefined;
     return {
       view: () => {
         const bar = document.createElement("span");
@@ -2103,11 +2414,26 @@ function installVisualFixture(): void {
     };
   });
   visualFixtures.push(threadListVisualFixture);
+  visualFixtures.push(
+    api.menus.assistantSelection.transformItems((current) => [
+      ...current,
+      {
+        kind: "action",
+        id: ASSISTANT_SELECTION_VISUAL_ID,
+        label: "Binding Selection Item",
+        onClick: () => {
+          const fixture = globalThis as Record<string, unknown>;
+          fixture.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ =
+            Number(fixture.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ ?? 0) + 1;
+        },
+      },
+    ]),
+  );
   (
     globalThis as Record<string, unknown>
-  ).__CGPTX_REMOVE_THREAD_LIST_VISUAL_FIXTURE__ =
-    removeThreadListVisualFixture;
-  (globalThis as Record<string, unknown>).__CGPTX_BINDING_FIXTURE_READY__ = true;
+  ).__CGPTX_REMOVE_THREAD_LIST_VISUAL_FIXTURE__ = removeThreadListVisualFixture;
+  (globalThis as Record<string, unknown>).__CGPTX_BINDING_FIXTURE_READY__ =
+    true;
 }
 
 async function runAll(): Promise<void> {
@@ -2129,18 +2455,15 @@ async function runAll(): Promise<void> {
       return;
     }
   }
-  const threadReady = await waitFor(
-    () => {
-      observedThreadContext = api.threads.getCurrent();
-      return (
-        observedThreadContext !== undefined &&
-        api.menus.thread
-          .getItems(observedThreadContext.threadId)
-          .some((item) => item.origin === "app")
-      );
-    },
-    20000,
-  );
+  const threadReady = await waitFor(() => {
+    observedThreadContext = api.threads.getCurrent();
+    return (
+      observedThreadContext !== undefined &&
+      api.menus.thread
+        .getItems(observedThreadContext.threadId)
+        .some((item) => item.origin === "app")
+    );
+  }, 20000);
   if (!threadReady) {
     results.push({
       name: "readiness: built-in thread menu items present",
@@ -2149,6 +2472,35 @@ async function runAll(): Promise<void> {
     });
     (globalThis as Record<string, unknown>)[RESULTS_KEY] = results;
     console.error(`[${EXT_ID}] thread readiness gate failed`);
+    return;
+  }
+  assistantSelectionReadiness = api.menus.assistantSelection.transformItems(
+    (current, context) => {
+      observedAssistantSelectionContext = context;
+      return current;
+    },
+  );
+  (
+    globalThis as Record<string, unknown>
+  ).__CGPTX_ASSISTANT_SELECTION_REQUESTED__ = true;
+  const assistantSelectionReady = await waitFor(
+    () =>
+      observedAssistantSelectionContext !== undefined &&
+      api.menus.assistantSelection
+        .getItems()
+        .some((item) => item.origin === "app"),
+    20000,
+  );
+  if (!assistantSelectionReady) {
+    assistantSelectionReadiness.dispose();
+    assistantSelectionReadiness = undefined;
+    results.push({
+      name: "readiness: built-in assistant-selection actions present",
+      pass: false,
+      error: "no assistant-text selection toolbar within 20s",
+    });
+    (globalThis as Record<string, unknown>)[RESULTS_KEY] = results;
+    console.error(`[${EXT_ID}] assistant-selection readiness gate failed`);
     return;
   }
   for (const { name, fn } of tests) {
@@ -2168,6 +2520,8 @@ async function runAll(): Promise<void> {
       activeTestDisposables = undefined;
     }
   }
+  assistantSelectionReadiness.dispose();
+  assistantSelectionReadiness = undefined;
   (globalThis as Record<string, unknown>)[RESULTS_KEY] = results;
   const failed = results.filter((r) => !r.pass).length;
   if (failed === 0) installVisualFixture();

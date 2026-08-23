@@ -587,6 +587,27 @@ jq -cn \
   }' > "$ROLLOUT_PATH"
 jq -cn \
   --arg timestamp "$NOW_ISO" \
+  --arg turn_id "$THREAD_ID" \
+  '{
+    timestamp: $timestamp,
+    type: "event_msg",
+    payload: {type: "task_started", turn_id: $turn_id}
+  }' >> "$ROLLOUT_PATH"
+jq -cn \
+  --arg timestamp "$NOW_ISO" \
+  '{
+    timestamp: $timestamp,
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "user",
+      content: [
+        {type: "input_text", text: "ChatGPTX local CI fixture"}
+      ]
+    }
+  }' >> "$ROLLOUT_PATH"
+jq -cn \
+  --arg timestamp "$NOW_ISO" \
   '{
     timestamp: $timestamp,
     type: "event_msg",
@@ -596,6 +617,50 @@ jq -cn \
       images: [],
       local_images: [],
       text_elements: []
+    }
+  }' >> "$ROLLOUT_PATH"
+jq -cn \
+  --arg timestamp "$NOW_ISO" \
+  '{
+    timestamp: $timestamp,
+    type: "event_msg",
+    payload: {
+      type: "agent_message",
+      message: "ChatGPTX assistant selection fixture",
+      phase: "final_answer"
+    }
+  }' >> "$ROLLOUT_PATH"
+jq -cn \
+  --arg timestamp "$NOW_ISO" \
+  '{
+    timestamp: $timestamp,
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "assistant",
+      content: [
+        {
+          type: "output_text",
+          text: "ChatGPTX assistant selection fixture"
+        }
+      ],
+      phase: "final_answer"
+    }
+  }' >> "$ROLLOUT_PATH"
+jq -cn \
+  --arg timestamp "$NOW_ISO" \
+  --arg turn_id "$THREAD_ID" \
+  --argjson completed_at "$NOW_SECONDS" \
+  '{
+    timestamp: $timestamp,
+    type: "event_msg",
+    payload: {
+      type: "task_complete",
+      turn_id: $turn_id,
+      last_agent_message: "ChatGPTX assistant selection fixture",
+      completed_at: $completed_at,
+      duration_ms: 1,
+      time_to_first_token_ms: 1
     }
   }' >> "$ROLLOUT_PATH"
 
@@ -608,7 +673,7 @@ INSERT INTO threads (
 ) VALUES (
   '$THREAD_ID', '$ROLLOUT_PATH', $NOW_SECONDS, $NOW_SECONDS, 'cli', 'openai',
   '$WORKSPACE_ROOT', 'ChatGPTX local CI fixture', '{"type":"disabled"}',
-  'never', 0, 0, 0, '$CODEX_CLI_VERSION', 'ChatGPTX local CI fixture', 'disabled',
+  'never', 0, 1, 0, '$CODEX_CLI_VERSION', 'ChatGPTX local CI fixture', 'disabled',
   'gpt-5.6-sol', 'low', 'user', 'ChatGPTX local CI fixture', $NOW_SECONDS,
   'legacy'
 );

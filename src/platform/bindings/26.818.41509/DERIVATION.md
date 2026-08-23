@@ -8,8 +8,8 @@ Pinned build:
 - Electron: `151.0.7922.170`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.818.41509.zip`
 - Binding date: `2026-08-22`
-- Binding version: `1.0.1`
-- ChatGPT API version: `1.1.2`
+- Binding version: `1.1.0`
+- ChatGPT API version: `1.2.0`
 - Version-watcher issue: `#46`
 
 Research used only the supplied exact stock application and its supplied
@@ -20,12 +20,12 @@ state were not changed.
 
 No generated binding existed when issue `#46` was opened. The original
 `1.0.0` implementation started from the API-development implementation in
-`26.818.41705`. This `1.0.1` correction retains its verified module map and
-fixes the current generic thread-menu adapter losing its pointer-open state
-when unrelated extension surfaces changed. The public API, extensions,
-extension manifests, and all other bindings are unchanged. Current ESM
-imports, semantic callers, export maps, and live behavior were checked before
-retaining any short export name.
+`26.818.41705`. Version `1.0.1` fixed generic thread-menu ownership. Version
+`1.1.0` adds the `menus.assistantSelection` public API. It transforms the
+native toolbar shown for selected assistant text and keeps ChatGPT's current
+container and action components. Current ESM imports, semantic callers,
+export maps, and live behavior were checked before any short export name was
+retained.
 
 ## Verified module map
 
@@ -38,6 +38,7 @@ current stock import, definition, caller, or live behavior.
 | React, JSX, and React DOM | `app-initial-DwVrCWuo.js` | `XHt()` supplies React; `VHt()` supplies mutable `jsx` and `jsxs`; `pIt()` supplies `createRoot` |
 | Native menus | `app-initial-DwVrCWuo.js` | initializer `Y0`; namespace `K0`; `K0.Item`, `K0.Separator`, `K0.SubmenuItem`, and `K0.FlyoutSubmenuItem`; `W0` dropdown root |
 | Generic app menu | `app-initial-DwVrCWuo.js` | initializer `A1`; `k1` is the generic menu adapter; `tIt` is its exact internationalization hook |
+| Assistant-selection toolbar | `app-initial-DwVrCWuo.js` | export `pR` is the selected-text overlay (`Fwo`); `QGa` is its native container; `mU` is its native action wrapper |
 | Native icons | `app-initial-DwVrCWuo.js` | initializer `l2` and chevron `c2`; initializer `em` and Profile icon `$p`; initializer `o6` and Settings icon `a6` |
 | Native color picker | `app-initial-DwVrCWuo.js` | initializer `cc`; controlled picker `sc` |
 | Settings shell and search | `settings-page-D-6MG6rZ.js` | semantic category headings, sidebar rows, search input and results, pane selection, and the Suspense boundary |
@@ -61,6 +62,11 @@ Additional semantic anchors:
   row supplies `$p` as its exact `LeftIcon`.
 - `threadHeader.*`, `toggle-thread-pin`, `copy-session-id`, and
   `copy-deeplink` identify current local and remote thread actions.
+- `selectedTextOverlay.addToCodex`, `selectedTextOverlay.moreDetails`, and
+  `selectedTextOverlay.askInSideChat` identify the assistant-selection
+  actions. `data-response-annotation-target` and
+  `data-response-annotation-conversation` identify selectable assistant
+  responses.
 - `data-app-action-sidebar-thread-row`, scoped thread attributes, and
   `data-thread-title-trigger` identify persisted sidebar rows.
 - `settings.nav.heading.personal`, `.integrations`, `.coding`, and `.archived`
@@ -99,6 +105,15 @@ authentication. The thread boundary covers local and remote overflow menus
 and preserves native source identity, title, shortcut maps, and render
 callbacks for unchanged built-ins.
 
+The assistant-selection boundary calls the current `pR` component inside the
+same provider tree. It captures the native `QGa` container and `mU` action
+wrapper, then applies extension transformers in registration order. Built-in
+replacement items inherit omitted fields and handlers. Extension items use
+the native action wrapper. Activation clears the browser selection before it
+calls the selected handler. The boundary is limited to assistant responses:
+it requires selected text, at least one assistant action handler, and no edit
+or comment handler.
+
 The Settings boundary captures native categories, panes, groups, rows,
 localized messages, and controls. Contributions render with the current page
 (`ra`), group (`En`), rows (`bO`), row (`EO`), toggle (`WW`), select trigger
@@ -128,6 +143,10 @@ The project-bound fixture exposed ten direct built-in actions. The Copy owner
 expanded to four native children, and Continue in expanded to two current
 children; both owners changed to their native open state on pointer movement.
 No action, including archive or removal, was activated.
+
+The synthetic completed assistant response exposed the stock Add to chat
+action when text was selected. More details and Ask in side chat are
+profile-dependent and were omitted from the API-key baseline.
 
 ## Authentication and appearance
 
@@ -170,9 +189,9 @@ CHATGPT_APP_PATH="/path/to/ChatGPT.app" \
   scripts/run-local-ci.sh /path/to/api-key-auth.json
 ```
 
-The exact build passed `36` extension and utility unit checks, `26/26`
+The exact build passed `36` extension and utility unit checks, `33/33`
 applicable public API checks with a matching fresh renderer result, and
-`35/35` native UI and shipped-extension composition checks. The Release
+`39/39` native UI and shipped-extension composition checks. The Release
 launcher built and signed successfully and contained no bundled platform
 components.
 
@@ -191,6 +210,11 @@ outside the API-key gate.
   moved.
 - Empty or reordered thread model: the generic menu export, raw message
   descriptors, action ids, or source-position reinsertion changed.
+- Empty assistant-selection model: the `pR` export, selected-text message ids,
+  native `QGa` container, or `mU` action wrapper changed.
+- Assistant-selection action with non-native layout or no activation: the
+  native container or action ownership changed, or browser-selection dismissal
+  regressed.
 - A connected thread trigger remains closed after pointer-down: the generic
   adapter identity or its dedicated thread-menu change signal regressed, or
   native dropdown ownership changed.
