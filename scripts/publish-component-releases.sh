@@ -97,17 +97,14 @@ publish() {
   existing="$(
     gh release view "$release" \
       --repo "$GITHUB_REPOSITORY" \
-      --json isDraft,targetCommitish \
+      --json isDraft \
       2>/dev/null || true
   )"
   if [[ -n "$existing" ]]; then
-    jq -e \
-      --arg target "$TARGET_SHA" \
-      '.isDraft == false and .targetCommitish == $target' \
-      <<< "$existing" >/dev/null || {
-        echo "existing release $release targets different content" >&2
-        exit 1
-      }
+    jq -e '.isDraft == false' <<< "$existing" >/dev/null || {
+      echo "existing release $release is still a draft" >&2
+      exit 1
+    }
     local verification_root
     verification_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/chatgptx-release-check.XXXXXX")"
     gh release download "$release" \

@@ -61,6 +61,30 @@ const unpublishedSchema2Binding = {
     boundAt: "2026-08-18",
   },
 };
+const knownUnpublishedSchema3ChatGPTAPIs = {
+  "1.2.0": {
+    release: "chatgpt-api-v1.2.0",
+    sha256:
+      "410a9ecc5d35710403fbb0c7873e9a41d4d002ba3202e7278803195552c2f832",
+  },
+  "1.3.0": {
+    release: "chatgpt-api-v1.3.0",
+    sha256:
+      "99e1691a05f1ee577f9cbeb13c2dbc50fd52631a517dc7ac82a725a157ba385b",
+  },
+};
+const knownUnpublishedSchema3Extensions = [
+  {
+    id: "reactions",
+    version: "0.1.0",
+    entry: {
+      compatibility: { chatgptApi: "^1.3.0" },
+      release: "extension-reactions-v0.1.0",
+      sha256:
+        "a2dc8430bb6781953aadaca11528706d856f8f483437154a2a8eff2e3721ee7f",
+    },
+  },
+];
 
 export function compareVersions(left, right) {
   const leftParts = parseVersion(left);
@@ -119,6 +143,7 @@ export function createReleasePlan({
   base,
   head,
   root = repositoryRoot,
+  repair = false,
 }) {
   const changedPaths = readChangedPaths(base, head, root);
   const affected = classifyChanges(changedPaths, root);
@@ -132,7 +157,7 @@ export function createReleasePlan({
     previousLatest,
     revisionHasPath(root, base, "scripts/component-releases.mjs"),
   );
-  if (bootstrap) markAllComponentsAffected(affected, root);
+  if (bootstrap || repair) markAllComponentsAffected(affected, root);
 
   const platform = readJson(root, "src/platform/manifest.json");
   requireVersion(platform.version, "src/platform/manifest.json version");
@@ -168,8 +193,16 @@ export function createReleasePlan({
     bindingManifests,
     extensionManifests,
   });
-  if (!bootstrap) {
+  const catalogCleanup = isKnownUnpublishedCatalogCleanup(
+    latest,
+    previousLatest,
+  );
+  if (!bootstrap && !repair) {
     validateCatalogHistory(latest, previousLatest, affected.bindings);
+    validateNewCatalogEntries(latest, previousLatest, {
+      platform,
+      extensionManifests,
+    });
   }
 
   const publicAffectedExtensionIds = [...affected.extensions]
@@ -191,16 +224,18 @@ export function createReleasePlan({
   const indexMigration =
     !bootstrap && previousLatest?.schemaVersion !== latest.schemaVersion;
 
-  validateGeneration({
-    affected: hasPublishedComponentChanges,
-    bootstrap,
-    changedPaths,
-    indexMigration,
-    latest,
-    previousLatest,
-  });
+  if (!repair) {
+    validateGeneration({
+      affected: hasPublishedComponentChanges,
+      bootstrap,
+      changedPaths,
+      indexMigration: indexMigration || catalogCleanup,
+      latest,
+      previousLatest,
+    });
+  }
 
-  if (affected.chatgptApi && !bootstrap) {
+  if (affected.chatgptApi && !bootstrap && !repair) {
     const previous = readJsonAtRevision(
       root,
       base,
@@ -227,7 +262,7 @@ export function createReleasePlan({
     .map((chatgpt) => {
       const manifest = bindingManifests.get(chatgpt);
       if (!manifest) throw new Error(`Missing binding ${chatgpt}`);
-      if (!bootstrap) {
+      if (!bootstrap && !repair) {
         const previous = readJsonAtRevision(
           root,
           base,
@@ -266,7 +301,7 @@ export function createReleasePlan({
       if (previous?.private === true) continue;
       throw new Error(`Missing extension ${id}`);
     }
-    if (!bootstrap) {
+    if (!bootstrap && !repair) {
       const previous = readJsonAtRevision(
         root,
         base,
@@ -309,6 +344,7 @@ export function createReleasePlan({
   return {
     schemaVersion: 3,
     generation: latest.generation,
+    repair,
     base,
     head,
     changedPaths,
@@ -322,6 +358,76 @@ export function createReleasePlan({
     bindings,
     extensions,
   };
+}
+
+export function validateNewCatalogEntries(
+  latest,
+  previousLatest,
+  { platform, extensionManifests },
+) {
+  for (const version of Object.keys(latest.chatgptApis ?? {})) {
+    if (
+      !previousLatest?.chatgptApis?.[version] &&
+      version !== platform.version
+    ) {
+      throw new Error(
+        `updates/latest.json contains unpublished intermediate ChatGPT API ${version}; only current source version ${platform.version} can be released`,
+      );
+    }
+  }
+
+  for (const [id, extension] of Object.entries(latest.extensions ?? {})) {
+    const manifest = extensionManifests.get(id);
+    if (!manifest || manifest.private === true) continue;
+    const previousVersions = previousLatest?.extensions?.[id]?.versions ?? {};
+    for (const version of Object.keys(extension.versions ?? {})) {
+      if (!previousVersions[version] && version !== manifest.version) {
+        throw new Error(
+          `updates/latest.json contains unpublished intermediate extension ${id} ${version}; only current source version ${manifest.version} can be released`,
+        );
+      }
+    }
+  }
+}
+
+export function isKnownUnpublishedCatalogCleanup(latest, previousLatest) {
+  if (
+    latest?.schemaVersion !== 3 ||
+    previousLatest?.schemaVersion !== 3
+  ) {
+    return false;
+  }
+
+  const expected = structuredClone(previousLatest);
+  expected.generation = latest.generation;
+  let removed = false;
+
+  for (const [version, entry] of Object.entries(
+    knownUnpublishedSchema3ChatGPTAPIs,
+  )) {
+    if (
+      isDeepStrictEqual(previousLatest.chatgptApis?.[version], entry) &&
+      !latest.chatgptApis?.[version]
+    ) {
+      delete expected.chatgptApis[version];
+      removed = true;
+    }
+  }
+
+  for (const { id, version, entry } of knownUnpublishedSchema3Extensions) {
+    if (
+      isDeepStrictEqual(
+        previousLatest.extensions?.[id]?.versions?.[version],
+        entry,
+      ) &&
+      !latest.extensions?.[id]?.versions?.[version]
+    ) {
+      delete expected.extensions[id].versions[version];
+      removed = true;
+    }
+  }
+
+  return removed && isDeepStrictEqual(latest, expected);
 }
 
 function parseVersion(value) {
@@ -721,6 +827,15 @@ export function validateCatalogHistory(
   )) {
     if (compareVersions(version, minimumRemoteAPIVersion) < 0) continue;
     const currentEntry = latest.chatgptApis?.[version];
+    if (
+      !currentEntry &&
+      isDeepStrictEqual(
+        knownUnpublishedSchema3ChatGPTAPIs[version],
+        previousEntry,
+      )
+    ) {
+      continue;
+    }
     if (!currentEntry) {
       throw new Error(
         `updates/latest.json must retain ChatGPT API ${version}`,
@@ -799,6 +914,14 @@ export function validateCatalogHistory(
       previousVersions ?? {},
     )) {
       const currentEntry = latest.extensions?.[id]?.versions?.[version];
+      const isKnownUnpublishedSchema3Entry =
+        previousLatest.schemaVersion === 3 &&
+        knownUnpublishedSchema3Extensions.some(
+          (entry) =>
+            entry.id === id &&
+            entry.version === version &&
+            isDeepStrictEqual(entry.entry, previousEntry),
+        );
       const isKnownUnpublishedSchema2Entry =
         previousLatest.schemaVersion === 2 &&
         latest.schemaVersion === 3 &&
@@ -810,7 +933,10 @@ export function validateCatalogHistory(
             previousEntry.release === entry.release &&
             previousEntry.sha256 === entry.sha256,
         );
-      if (!currentEntry && isKnownUnpublishedSchema2Entry) {
+      if (
+        !currentEntry &&
+        (isKnownUnpublishedSchema2Entry || isKnownUnpublishedSchema3Entry)
+      ) {
         continue;
       }
       if (!currentEntry) {
@@ -960,14 +1086,14 @@ function revisionHasPath(root, revision, filePath) {
 }
 
 function run() {
-  const [base, head] = process.argv.slice(2);
-  if (!base || !head) {
+  const [base, head, mode] = process.argv.slice(2);
+  if (!base || !head || (mode && mode !== "--repair")) {
     throw new Error(
-      "usage: node scripts/component-releases.mjs <base-sha> <head-sha|--worktree>",
+      "usage: node scripts/component-releases.mjs <base-sha> <head-sha|--worktree> [--repair]",
     );
   }
   process.stdout.write(
-    `${JSON.stringify(createReleasePlan({ base, head }), null, 2)}\n`,
+    `${JSON.stringify(createReleasePlan({ base, head, repair: mode === "--repair" }), null, 2)}\n`,
   );
 }
 

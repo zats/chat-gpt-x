@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -17,8 +18,10 @@ import {
   createReleasePlan,
   findUtilityConsumers,
   isBootstrap,
+  isKnownUnpublishedCatalogCleanup,
   releaseTag,
   validateCatalogHistory,
+  validateNewCatalogEntries,
   validateUpdateIndex,
 } from "./component-releases.mjs";
 
@@ -229,6 +232,139 @@ test("bootstraps when the release planner did not exist at the base", () => {
   assert.equal(isBootstrap(released, false), true);
   assert.equal(isBootstrap(released, true), false);
   assert.equal(isBootstrap(null, true), true);
+});
+
+test("rejects unpublished intermediate component versions", () => {
+  const previous = {
+    chatgptApis: {},
+    extensions: {},
+  };
+  const latest = {
+    chatgptApis: {
+      "1.3.0": {},
+      "1.4.0": {},
+    },
+    extensions: {
+      reactions: {
+        versions: {
+          "0.1.0": {},
+          "0.2.0": {},
+        },
+      },
+    },
+  };
+  const extensionManifests = new Map([
+    ["reactions", { version: "0.2.0", private: false }],
+  ]);
+
+  assert.throws(
+    () =>
+      validateNewCatalogEntries(latest, previous, {
+        platform: { version: "1.4.0" },
+        extensionManifests,
+      }),
+    /unpublished intermediate ChatGPT API 1\.3\.0/,
+  );
+
+  delete latest.chatgptApis["1.3.0"];
+  assert.throws(
+    () =>
+      validateNewCatalogEntries(latest, previous, {
+        platform: { version: "1.4.0" },
+        extensionManifests,
+      }),
+    /unpublished intermediate extension reactions 0\.1\.0/,
+  );
+});
+
+test("recognizes only the known unpublished catalog cleanup", () => {
+  const previous = {
+    schemaVersion: 3,
+    generation: 38,
+    chatgptApis: {
+      "1.2.0": {
+        release: "chatgpt-api-v1.2.0",
+        sha256:
+          "410a9ecc5d35710403fbb0c7873e9a41d4d002ba3202e7278803195552c2f832",
+      },
+      "1.3.0": {
+        release: "chatgpt-api-v1.3.0",
+        sha256:
+          "99e1691a05f1ee577f9cbeb13c2dbc50fd52631a517dc7ac82a725a157ba385b",
+      },
+    },
+    extensions: {
+      reactions: {
+        versions: {
+          "0.1.0": {
+            compatibility: { chatgptApi: "^1.3.0" },
+            release: "extension-reactions-v0.1.0",
+            sha256:
+              "a2dc8430bb6781953aadaca11528706d856f8f483437154a2a8eff2e3721ee7f",
+          },
+        },
+      },
+    },
+  };
+  const latest = structuredClone(previous);
+  latest.generation = 39;
+  delete latest.chatgptApis["1.2.0"];
+  delete latest.chatgptApis["1.3.0"];
+  delete latest.extensions.reactions.versions["0.1.0"];
+
+  assert.equal(isKnownUnpublishedCatalogCleanup(latest, previous), true);
+
+  const unknownCleanup = structuredClone(previous);
+  unknownCleanup.generation = 39;
+  delete unknownCleanup.chatgptApis["1.2.0"];
+  unknownCleanup.chatgptApis["1.3.0"].sha256 = "0".repeat(64);
+  assert.equal(
+    isKnownUnpublishedCatalogCleanup(unknownCleanup, previous),
+    false,
+  );
+});
+
+test("repair plans rebuild every current public component", () => {
+  const head = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  }).trim();
+  const plan = createReleasePlan({
+    base: head,
+    head,
+    repair: true,
+  });
+  const platform = JSON.parse(
+    readFileSync(
+      path.join(repositoryRoot, "src/platform/manifest.json"),
+      "utf8",
+    ),
+  );
+  const pinned = JSON.parse(
+    readFileSync(
+      path.join(repositoryRoot, "src/platform/bindings/manifest.json"),
+      "utf8",
+    ),
+  );
+  const reactions = JSON.parse(
+    readFileSync(
+      path.join(repositoryRoot, "src/extensions/reactions/package.json"),
+      "utf8",
+    ),
+  );
+
+  assert.equal(plan.repair, true);
+  assert.equal(plan.chatgptApi.version, platform.version);
+  assert.ok(
+    plan.bindings.some((binding) => binding.chatgpt === pinned.chatgpt),
+  );
+  assert.ok(
+    plan.extensions.some(
+      (extension) =>
+        extension.id === "reactions" &&
+        extension.version === reactions.version,
+    ),
+  );
 });
 
 test("validates the schema-v3 public component index", () => {

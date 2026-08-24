@@ -19,6 +19,18 @@ const retryWorkflow = readFileSync(
   ),
   "utf8",
 );
+const ciWorkflow = readFileSync(
+  new URL("../.github/workflows/ci.yml", import.meta.url),
+  "utf8",
+);
+const componentPublisher = readFileSync(
+  new URL("./publish-component-releases.sh", import.meta.url),
+  "utf8",
+);
+const protectedCI = readFileSync(
+  new URL("./run-protected-ci.sh", import.meta.url),
+  "utf8",
+);
 const apiTestSuite = readFileSync(
   new URL(
     "../src/extensions/api-test-suite/api-test-suite.ts",
@@ -152,5 +164,42 @@ test("transient rebind retries are isolated and limited", () => {
   assert.match(
     retryWorkflow,
     /node scripts\/retry-transient-rebind-failure\.mjs/,
+  );
+});
+
+test("issue retry repairs publication after its binding reached main", () => {
+  assert.match(workflow, /recover-landed:/);
+  assert.match(workflow, /id: landed-binding/);
+  assert.match(workflow, /--repair-components/);
+  assert.equal(
+    workflow.match(/scripts\/run-protected-ci\.sh/g)?.length,
+    2,
+  );
+  assert.match(
+    workflow,
+    /needs\.recover-landed\.outputs\.landed != 'true'/,
+  );
+  assert.match(
+    workflow,
+    /RECOVERED: \$\{\{ needs\.recover-landed\.outputs\.landed \}\}/,
+  );
+  assert.match(ciWorkflow, /repair_component_releases:/);
+  assert.match(ciWorkflow, /--repair/);
+  assert.match(
+    ciWorkflow,
+    /scripts\/filter-unpublished-component-releases\.mjs/g,
+  );
+  assert.match(protectedCI, /repair_component_releases=true/);
+});
+
+test("publication repair accepts an identical immutable release", () => {
+  assert.match(componentPublisher, /\.isDraft == false/);
+  assert.doesNotMatch(
+    componentPublisher,
+    /\.targetCommitish == \$target/,
+  );
+  assert.match(
+    componentPublisher,
+    /existing release \$release has different content/,
   );
 });

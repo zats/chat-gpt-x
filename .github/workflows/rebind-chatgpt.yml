@@ -260,10 +260,90 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --body "Binding generation started: [workflow run #$GITHUB_RUN_NUMBER]($run_url)."
 
+  recover-landed:
+    needs:
+      - request
+      - mark-issue-in-progress
+    if: needs.request.outputs.active == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      actions: write
+      contents: write
+    outputs:
+      landed: ${{ steps.landed-binding.outputs.landed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Detect a binding already landed by the failed run
+        id: landed-binding
+        env:
+          APP_VERSION: ${{ needs.request.outputs.version }}
+          DOWNLOAD_URL: ${{ needs.request.outputs.download-url }}
+          EVENT_NAME: ${{ github.event_name }}
+          FORCE: ${{ needs.request.outputs.force }}
+        run: |
+          echo "landed=false" >> "$GITHUB_OUTPUT"
+          if [[ "$EVENT_NAME" != "issue_comment" || "$FORCE" == "true" ]]; then
+            exit 0
+          fi
+
+          binding_root="src/platform/bindings/$APP_VERSION"
+          if [[ ! -f "$binding_root/manifest.json" ]]; then
+            exit 0
+          fi
+          jq -e \
+            --arg version "$APP_VERSION" \
+            '.chatgpt == $version' \
+            "$binding_root/manifest.json" >/dev/null
+          jq -e \
+            --arg version "$APP_VERSION" \
+            --arg url "$DOWNLOAD_URL" \
+            '.chatgpt == $version and .downloadUrl == $url' \
+            src/platform/bindings/manifest.json >/dev/null
+          jq -e \
+            --arg version "$APP_VERSION" \
+            --slurpfile manifest "$binding_root/manifest.json" \
+            '.bindings[$version] as $binding |
+              $binding.version == $manifest[0].version and
+              $binding.chatgptApi == $manifest[0].chatgptApi and
+              $binding.asarSha256 == $manifest[0].asarSha256' \
+            updates/latest.json >/dev/null
+          echo "landed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Repair and verify landed component publication
+        if: steps.landed-binding.outputs.landed == 'true'
+        env:
+          APP_VERSION: ${{ needs.request.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.request.outputs.issue-number }}
+        run: |
+          release_head_sha="$(git rev-parse HEAD)"
+          release_base_sha="$(git rev-parse HEAD^)"
+          validation_id="repair-rebind-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          scripts/run-protected-ci.sh \
+            "$validation_id" \
+            "$release_base_sha" \
+            "$release_head_sha" \
+            --repair-components
+
+          branch_name="codex/bindings-chatgpt-$APP_VERSION-issue-$ISSUE_NUMBER"
+          if git ls-remote --exit-code --heads \
+            origin "refs/heads/$branch_name" >/dev/null 2>&1; then
+            git push origin --delete "$branch_name"
+          fi
+
   generate:
     needs:
       - request
       - mark-issue-in-progress
+      - recover-landed
+    if: >-
+      needs.recover-landed.result == 'success' &&
+      needs.recover-landed.outputs.landed != 'true'
     runs-on: macos-26
     timeout-minutes: 360
     environment: codex-agent
@@ -1268,44 +1348,10 @@ jobs:
           }
 
           validation_id="rebind-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          validation_title="CI ($validation_id)"
-          gh workflow run ci.yml \
-            --repo "$GITHUB_REPOSITORY" \
-            --ref main \
-            -f protected_run=true \
-            -f validation_id="$validation_id" \
-            -f release_base_sha="$release_base_sha" \
-            -f release_head_sha="$EXPECTED_HEAD_SHA"
-
-          run_id=""
-          deadline=$((SECONDS + 120))
-          while (( SECONDS < deadline )); do
-            gh run list \
-              --repo "$GITHUB_REPOSITORY" \
-              --workflow ci.yml \
-              --branch main \
-              --event workflow_dispatch \
-              --limit 20 \
-              --json databaseId,displayTitle,headSha \
-              > "$RUNNER_TEMP/main-ci-runs.json"
-            run_id="$(
-              jq -r \
-                --arg headSha "$landed_sha" \
-                --arg title "$validation_title" \
-                '[.[] | select(.headSha == $headSha and .displayTitle == $title)][0].databaseId // empty' \
-                "$RUNNER_TEMP/main-ci-runs.json"
-            )"
-            [[ -z "$run_id" ]] || break
-            sleep 2
-          done
-          [[ -n "$run_id" ]] || {
-            echo "Post-merge CI run did not appear for $landed_sha" >&2
-            exit 1
-          }
-
-          gh run watch "$run_id" \
-            --repo "$GITHUB_REPOSITORY" \
-            --exit-status
+          scripts/run-protected-ci.sh \
+            "$validation_id" \
+            "$release_base_sha" \
+            "$EXPECTED_HEAD_SHA"
           git push origin --delete "$branch_name"
 
   finalize-issue:
@@ -1315,6 +1361,7 @@ jobs:
     needs:
       - request
       - mark-issue-in-progress
+      - recover-landed
       - generate
       - prepare-candidate
       - validate-candidate
@@ -1334,6 +1381,8 @@ jobs:
           REQUEST_RESULT: ${{ needs.request.result }}
           REQUEST_VALIDATION_ERROR: ${{ needs.request.outputs.validation-error }}
           MARK_RESULT: ${{ needs.mark-issue-in-progress.result }}
+          RECOVER_RESULT: ${{ needs.recover-landed.result }}
+          RECOVERED: ${{ needs.recover-landed.outputs.landed }}
           GENERATE_RESULT: ${{ needs.generate.result }}
           APP_VALIDATION_ERROR: ${{ needs.generate.outputs.app-validation-error }}
           PREPARE_RESULT: ${{ needs.prepare-candidate.result }}
@@ -1380,13 +1429,26 @@ jobs:
           done
 
           run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          normal_success=false
+          recovered_success=false
           if [[ \
-            "$REQUEST_RESULT" == "success" &&
-            "$MARK_RESULT" == "success" &&
             "$GENERATE_RESULT" == "success" &&
             "$PREPARE_RESULT" == "success" &&
             "$VALIDATION_RESULT" == "success" &&
             "$LAND_RESULT" == "success"
+          ]]; then
+            normal_success=true
+          fi
+          if [[ "$RECOVER_RESULT" == "success" && "$RECOVERED" == "true" ]]; then
+            recovered_success=true
+          fi
+          if [[ \
+            "$REQUEST_RESULT" == "success" &&
+            "$MARK_RESULT" == "success" &&
+            (
+              "$normal_success" == "true" ||
+              "$recovered_success" == "true"
+            )
           ]]; then
             gh issue edit "$issue_number" \
               --repo "$GITHUB_REPOSITORY" \
