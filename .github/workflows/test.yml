@@ -61,9 +61,11 @@ jobs:
           node --check scripts/materialize-ci-auth.mjs
           node --check scripts/retry-transient-rebind-failure.mjs
           node --check scripts/stage-local-component-store.mjs
+          node --check scripts/suppress-optional-product-ui.mjs
           node --check scripts/trigger-chatgpt-rebind.mjs
           node --check scripts/validate-rebind-binding.mjs
           node --check scripts/validate-pinned-chatgpt.mjs
+          node --check scripts/wait-for-chatgpt-product-shell.mjs
           node --check scripts/wait-for-chatgpt-ready.mjs
           bash -n scripts/publish-component-releases.sh
           bash -n scripts/publish-update-index.sh
@@ -75,8 +77,10 @@ jobs:
           node --test scripts/materialize-ci-auth.test.mjs
           node --test scripts/rebind-workflow.test.mjs
           node --test scripts/retry-transient-rebind-failure.test.mjs
+          node --test scripts/suppress-optional-product-ui.test.mjs
           node --test scripts/trigger-chatgpt-rebind.test.mjs
           node --test scripts/validate-rebind-binding.test.mjs
+          node --test scripts/wait-for-chatgpt-product-shell.test.mjs
           node --test src/platform/runtime/extension-launch-config.test.cjs
 
   end-to-end:

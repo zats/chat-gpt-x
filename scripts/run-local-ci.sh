@@ -328,6 +328,7 @@ launch_app() {
   local name="$1"
   local mode="${2:-normal}"
   local started_at="$SECONDS"
+  node "$REPO_ROOT/scripts/suppress-optional-product-ui.mjs" "$CODEX_ROOT"
   validate_app_build "$name launch"
   progress "launching ChatGPT for $name"
   if [[ "$mode" == "api-test" ]]; then
@@ -450,6 +451,9 @@ NODE
       return 1
     }
   fi
+  progress "ChatGPT exposed CDP for $name ($((SECONDS - started_at))s)"
+  run_logged "$name-product-shell" node \
+    "$REPO_ROOT/scripts/wait-for-chatgpt-product-shell.mjs" "$PORT"
   progress "ChatGPT ready for $name ($((SECONDS - started_at))s)"
 }
 
@@ -531,7 +535,6 @@ jq \
         threads: false
       }
     | .["electron-persisted-atom-state"]["sidebar-project-expanded-v1-codex:\($projectId)"] = true
-    | .["electron-persisted-atom-state"]["electron:onboarding-welcome-pending"] = false
     | .["electron-saved-workspace-roots"] = [$workspace]
     | .["active-workspace-roots"] = [$workspace]
     | .["local-projects"] = {
