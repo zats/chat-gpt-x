@@ -34,6 +34,7 @@ import type {
 
 const EXT_ID = "api-test-suite";
 const RESULTS_KEY = "__CGPTX_TEST_RESULTS__";
+const THREAD_READINESS_TIMEOUT_MS = 70000;
 const NO_PROFILE = process.env.CHATGPTX_TEST_NO_PROFILE === "1";
 
 // --------------------------------------------------------------------------
@@ -2660,12 +2661,12 @@ async function runAll(): Promise<void> {
         .getItems(observedThreadContext.threadId)
         .some((item) => item.origin === "app")
     );
-  }, 20000);
+  }, THREAD_READINESS_TIMEOUT_MS);
   if (!threadReady) {
     results.push({
       name: "readiness: built-in thread menu items present",
       pass: false,
-      error: "no persisted thread menu within 20s",
+      error: "no persisted thread menu within 70s",
     });
     (globalThis as Record<string, unknown>)[RESULTS_KEY] = results;
     console.error(`[${EXT_ID}] thread readiness gate failed`);

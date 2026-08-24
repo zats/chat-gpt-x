@@ -19,6 +19,13 @@ const retryWorkflow = readFileSync(
   ),
   "utf8",
 );
+const apiTestSuite = readFileSync(
+  new URL(
+    "../src/extensions/api-test-suite/api-test-suite.ts",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("the workflow prepares the exact research tree before the agent", () => {
   const extraction = workflow.indexOf(
@@ -76,6 +83,19 @@ test("issue retries seed the prior generated patch and failure evidence", () => 
   assert.match(
     workflow.slice(agent),
     /Do not dismiss it as transient or only rerun the same test/,
+  );
+});
+
+test("candidate validation gives native thread selection its full window", () => {
+  const timeout = apiTestSuite.match(
+    /const THREAD_READINESS_TIMEOUT_MS = (\d+);/,
+  );
+
+  assert.ok(timeout);
+  assert.ok(Number(timeout[1]) > 60000);
+  assert.match(
+    apiTestSuite,
+    /}, THREAD_READINESS_TIMEOUT_MS\);[\s\S]*no persisted thread menu within 70s/,
   );
 });
 
