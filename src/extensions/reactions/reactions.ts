@@ -5,18 +5,14 @@ import type {
   Disposable,
   PlatformApi,
 } from "../../platform/types";
+import { sharedReactionSettings } from "./reaction-settings";
 
 const EXTENSION_ID = "reactions";
 const ADD_TO_CHAT_ID = "selectedTextOverlay.addToCodex";
 
 export const REACTION_ACTION_ID = `${EXTENSION_ID}.react`;
 
-export const REACTIONS = Object.freeze([
-  Object.freeze({ id: "thumbs-up", emoji: "👍" }),
-  Object.freeze({ id: "thumbs-down", emoji: "👎" }),
-  Object.freeze({ id: "unsure", emoji: "🤷" }),
-  Object.freeze({ id: "angry", emoji: "🤬" }),
-] as const);
+export const REACTIONS = Object.freeze(["👍", "👎", "🤔", "🤬"]);
 
 function createReaction(
   context: AssistantSelectionContext,
@@ -32,10 +28,11 @@ function createReaction(
 
 function reactionItems(
   context: AssistantSelectionContext,
+  emojis: readonly string[],
 ): readonly AssistantSelectionMenuActionItem[] {
-  return REACTIONS.map(({ id, emoji }) => ({
+  return emojis.map((emoji, index) => ({
     kind: "action" as const,
-    id: `${EXTENSION_ID}.${id}`,
+    id: `${EXTENSION_ID}.reaction-${index + 1}`,
     label: emoji,
     labelScale: 2,
     verticalPadding: 4,
@@ -47,6 +44,7 @@ function reactionItems(
 export function transformAssistantSelectionItems(
   items: readonly AssistantSelectionMenuItem[],
   context: AssistantSelectionContext,
+  emojis: readonly string[] = REACTIONS,
 ): readonly AssistantSelectionMenuItem[] {
   const addToChatIndex = items.findIndex((item) => item.id === ADD_TO_CHAT_ID);
   if (addToChatIndex < 0) return items;
@@ -54,7 +52,7 @@ export function transformAssistantSelectionItems(
     kind: "action",
     id: REACTION_ACTION_ID,
     label: "React",
-    items: reactionItems(context),
+    items: reactionItems(context, emojis),
   };
   return [
     ...items.slice(0, addToChatIndex + 1),
@@ -66,9 +64,13 @@ export function transformAssistantSelectionItems(
 let registration: Disposable | undefined;
 
 export function activate(api: PlatformApi): void {
+  const settings = sharedReactionSettings();
+  void settings.load().catch((error: unknown) => {
+    console.error(`[${EXTENSION_ID}] settings load failed`, error);
+  });
   registration?.dispose();
-  registration = api.menus.assistantSelection.transformItems(
-    transformAssistantSelectionItems,
+  registration = api.menus.assistantSelection.transformItems((items, context) =>
+    transformAssistantSelectionItems(items, context, settings.emojis),
   );
 }
 

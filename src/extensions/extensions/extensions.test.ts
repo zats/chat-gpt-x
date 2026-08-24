@@ -38,6 +38,7 @@ function installedExtension(enabled: boolean): InstalledExtension {
     version: "1.2.3",
     enabled,
     required: false,
+    settingsPaneId: "thread-colors.settings",
   };
 }
 
@@ -146,6 +147,7 @@ test("extension rows use package titles and descriptions as search text", () => 
         version: "1.2.3",
         enabled: false,
         required: false,
+        settingsPaneId: "thread-colors.settings",
       },
     ],
     ui,
@@ -155,19 +157,22 @@ test("extension rows use package titles and descriptions as search text", () => 
   assert.equal(rows[0]?.label, "Thread Colors");
   assert.equal(rows[0]?.description, "Adds native thread colors.");
   assert.deepEqual(rows[0]?.keywords, ["thread-colors", "1.2.3"]);
+  assert.deepEqual(rows[0]?.destination, {
+    paneId: "thread-colors.settings",
+  });
   assert.equal(controls[0]?.checked, false);
   assert.equal(controls[0]?.disabled, false);
 });
 
-test("the required manager row cannot disable itself", () => {
-  let disabled: boolean | undefined;
+test("the manager omits itself from the installed extension rows", () => {
+  let toggleCalls = 0;
   const ui = {
-    toggle(options) {
-      disabled = options.disabled;
+    toggle() {
+      toggleCalls += 1;
       return {} as SettingsControl;
     },
   } as SettingsUiApi;
-  createExtensionRows(
+  const rows = createExtensionRows(
     [
       {
         id: "extensions",
@@ -181,7 +186,21 @@ test("the required manager row cannot disable itself", () => {
     ui,
     () => {},
   );
-  assert.equal(disabled, true);
+  assert.deepEqual(rows, []);
+  assert.equal(toggleCalls, 0);
+});
+
+test("extension rows without settings omit only the destination", () => {
+  const ui = {
+    toggle() {
+      return {} as SettingsControl;
+    },
+  } as SettingsUiApi;
+  const extension = { ...installedExtension(true), settingsPaneId: undefined };
+  const [row] = createExtensionRows([extension], ui, () => {});
+
+  assert.equal(row?.destination, undefined);
+  assert.notEqual(row?.control, undefined);
 });
 
 test("manager settings transformers register before a pending extension list resolves", async () => {

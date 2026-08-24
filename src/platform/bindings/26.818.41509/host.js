@@ -19,6 +19,9 @@
   const AUTH_MODULE = "./assets/chatgpt-desktop-auth-url-bqp_bDD7.js";
   const SETTINGS_VISIBILITY_MODULE =
     "./assets/use-visible-settings-sections-BZAGLkjZ.js";
+  const TOOLBAR_BREADCRUMB_MODULE =
+    "./assets/toolbar-breadcrumb-bXUC3DMD.js";
+  const EXTENSIONS_SETTINGS_PANE_ID = "extensions.installed";
   const AUTHENTICATION_RESTART_TIMEOUT_MS = 20_000;
   const RESPONSE_ANNOTATION_CREATION_TIMEOUT_MS = 10_000;
   const HEADER_BACKGROUND_PROPERTY = "--header-background-color";
@@ -253,6 +256,8 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   const settingsGroupTransformers = [];
   const settingsItemTransformers = [];
   const extensions = new Map();
+  const extensionSettings = new Map();
+  const extensionSettingsPaneOwners = new Map();
   const safeHandlers = new WeakSet();
   const renderListeners = new Set();
   const assistantSelectionRenderListeners = new Set();
@@ -511,8 +516,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
   function settleColorPicker(request, color) {
     if (request.status === "settled") return;
-    if (request === activeColorPicker) activeColorPicker = null;
-    else {
+    if (request === activeColorPicker) {
+      activeColorPicker = null;
+    } else {
       const index = colorPickerQueue.indexOf(request);
       if (index >= 0) colorPickerQueue.splice(index, 1);
     }
@@ -531,6 +537,18 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     } catch (error) {
       warn(`color-picker listener of ${request.extId} threw`, error);
     }
+  }
+
+  function finishActiveColorPickerFromKeyboard(event) {
+    const request = activeColorPicker;
+    if (!request || request.status !== "active") return;
+    if (event.key !== "Escape" && event.key !== "Enter") return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    settleColorPicker(
+      request,
+      event.key === "Escape" ? undefined : request.color,
+    );
   }
 
   function openColorPicker(extId, options) {
@@ -1094,6 +1112,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     }
     const descriptor = Object.freeze({
       ...item,
+      ...(item.destination === undefined
+        ? {}
+        : { destination: Object.freeze({ ...item.destination }) }),
       ...(item.keywords === undefined
         ? {}
         : { keywords: freezeStrings(item.keywords) }),
@@ -1221,6 +1242,33 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         (typeof raw.id === "string" ? raw.id : "unidentified item"),
     );
     return { control: undefined, owner: undefined };
+  }
+
+  function normalizeSettingsItemDestination(existing, raw) {
+    if (!Object.prototype.hasOwnProperty.call(raw, "destination")) {
+      return existing?.destination;
+    }
+    const destination = raw.destination;
+    if (destination === undefined) return undefined;
+    if (
+      !destination ||
+      typeof destination !== "object" ||
+      Array.isArray(destination) ||
+      typeof destination.paneId !== "string" ||
+      destination.paneId.length === 0 ||
+      (destination.itemId !== undefined &&
+        (typeof destination.itemId !== "string" ||
+          destination.itemId.length === 0))
+    ) {
+      warn("dropping invalid settings item destination");
+      return undefined;
+    }
+    return Object.freeze({
+      paneId: destination.paneId,
+      ...(destination.itemId === undefined
+        ? {}
+        : { itemId: destination.itemId }),
+    });
   }
 
   function restoreForeignSettingsDescriptors(
@@ -1530,11 +1578,14 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       }
       if (typeof raw.label !== "string") continue;
       const control = normalizeSettingsItemControl(existing, raw, extId);
+      const destination = normalizeSettingsItemDestination(existing, raw);
       const item = existing
         ? mergeSettingsDescriptor(existing, raw)
         : { ...raw, origin: extId };
       if (control.control === undefined) delete item.control;
       else item.control = control.control;
+      if (destination === undefined) delete item.destination;
+      else item.destination = destination;
       items.push(
         freezeSettingsItem(
           item,
@@ -1644,6 +1695,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
               ": " +
               item.id,
           );
+        }
+        if (
+          uniqueItems.length === group.items.length &&
+          uniqueItems.every((item, index) => item === group.items[index])
+        ) {
+          return group;
         }
         return freezeSettingsGroup(
           { ...group, items: uniqueItems },
@@ -2908,7 +2965,12 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     }
   }
 
-  function cloneSettingsNavigationRow(pane) {
+  function extensionSettingsParentPane(paneId, panes) {
+    if (!extensionSettingsPaneOwners.has(paneId)) return null;
+    return panes.get(EXTENSIONS_SETTINGS_PANE_ID) ?? null;
+  }
+
+  function cloneSettingsNavigationRow(pane, panes) {
     const source = settingsNavigationRows.get(pane.id);
     const row = source?.row ?? settingsNavigationRowTemplate;
     if (!row) return null;
@@ -2925,7 +2987,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ...sourceButton.props,
         "aria-label": pane.label,
         label: pane.label,
-        isActive: currentSettingsPaneId() === pane.id,
+        isActive:
+          (extensionSettingsParentPane(currentSettingsPaneId(), panes)?.id ??
+            currentSettingsPaneId()) === pane.id,
         disabled: pane.disabled === true,
         "data-settings-panel-slug": settingsSectionSlug(pane),
         ...(isBuiltIn
@@ -2968,14 +3032,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     );
   }
 
-  function renderSettingsNavigationCategory(category) {
+  function renderSettingsNavigationCategory(category, panes) {
     const source =
       settingsNavigationGroupTemplates.get(category.id) ??
       settingsNavigationGroupTemplates.get("personal");
     if (!source) return null;
     const originalChildren = childrenOf(source.props?.children);
     const rows = category.panes
-      .map(cloneSettingsNavigationRow)
+      .filter((pane) => !extensionSettingsParentPane(pane.id, panes))
+      .map((pane) => cloneSettingsNavigationRow(pane, panes))
       .filter(Boolean);
     const extras =
       category.id === "personal" ? originalChildren.slice(1) : [];
@@ -3000,11 +3065,13 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       () => renderVersion,
       () => renderVersion,
     );
+    const categories = computeEffectiveSettingsCategories();
+    const panes = settingsPanesById(categories);
     return native.jsx(
       native.React.Fragment,
       {
-        children: computeEffectiveSettingsCategories()
-          .map(renderSettingsNavigationCategory)
+        children: categories
+          .map((category) => renderSettingsNavigationCategory(category, panes))
           .filter(Boolean),
       },
       "cgptx-settings-navigation",
@@ -3308,6 +3375,22 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     }
     const handler = settingsControlHandlers.get(control);
     if (!handler || handler.extId !== controlOwner) return undefined;
+    if (control.kind === "inline") {
+      return native.jsx("div", {
+        "data-cgptx-settings-inline": "true",
+        className: "flex min-w-0 items-center gap-2",
+        children: control.controls.map((child, index) =>
+          native.jsx(
+            "span",
+            {
+              className: "inline-flex min-w-0 shrink-0",
+              children: renderSettingsControl(child, itemId, controlOwner),
+            },
+            index,
+          ),
+        ),
+      });
+    }
     if (control.kind === "toggle") {
       return native.jsx(native.SettingsToggle, {
         checked: control.checked,
@@ -3362,7 +3445,85 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         children: control.label,
       });
     }
+    if (control.kind === "textField") {
+      return native.jsx("div", {
+        className: "w-44 max-w-full",
+        children: native.jsx(native.SettingsTextField, {
+          type: "text",
+          variant: "compact",
+          value: control.value,
+          placeholder: control.placeholder,
+          disabled: control.disabled,
+          onChange: safeSettingsCallback(
+            (event) => handler.callback(event.currentTarget.value),
+            itemId,
+          ),
+        }),
+      });
+    }
     return undefined;
+  }
+
+  function renderSettingsTrailingControl(
+    item,
+    control,
+    reserveDisclosure,
+  ) {
+    if (!reserveDisclosure) return control;
+    const disclosure = item.destination
+      ? native.jsx(native.SettingsButton, {
+          "aria-label": "Open " + item.label + " settings",
+          "data-cgptx-settings-disclosure": "true",
+          color: "ghost",
+          size: "icon",
+          uniform: true,
+          onClick: safeSettingsCallback(
+            () => openSettingsItemDestination(item),
+            item.id ?? item.label,
+          ),
+          children: native.jsx(native.ChevronRight, {
+            "aria-hidden": true,
+            className: "icon-2xs",
+          }),
+        })
+      : native.jsx(native.SettingsButton, {
+          "aria-hidden": true,
+          "data-cgptx-settings-disclosure-placeholder": "true",
+          color: "ghost",
+          size: "icon",
+          uniform: true,
+          tabIndex: -1,
+          style: { opacity: 0, pointerEvents: "none" },
+          children: native.jsx(native.ChevronRight, {
+            "aria-hidden": true,
+            className: "icon-2xs",
+          }),
+        });
+    return native.jsx("div", {
+      className: "flex items-center gap-2",
+      children: [control, disclosure],
+    });
+  }
+
+  function openSettingsItemDestination(item) {
+    const operation = settingsOpenOperations.then(() =>
+      openSettingsPane(item.destination.paneId, item.destination.itemId),
+    );
+    settingsOpenOperations = operation.catch(() => {});
+    return operation;
+  }
+
+  function renderSettingsDestinationText(item, content, part) {
+    if (!item.destination || content === undefined) return content;
+    return native.jsx("span", {
+      className: "cursor-interaction",
+      "data-cgptx-settings-destination-text": part,
+      onClick: safeSettingsCallback(
+        () => openSettingsItemDestination(item),
+        item.id ?? item.label,
+      ),
+      children: content,
+    });
   }
 
   function settingsPaneRowClass(paneId) {
@@ -3374,7 +3535,13 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return className;
   }
 
-  function renderSettingsItem(paneId, model, group, item) {
+  function renderSettingsItem(
+    paneId,
+    model,
+    group,
+    item,
+    reserveDisclosure,
+  ) {
     const view =
       typeof item.id === "string"
         ? settingsGroupView(model, group)?.rowElements.find(
@@ -3393,22 +3560,35 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ...(view?.props ?? {}),
         id: item.id,
         "data-settings-target-id": item.id,
-        className: [view?.props?.className, settingsPaneRowClass(paneId)]
+        className: [
+          view?.props?.className,
+          settingsPaneRowClass(paneId),
+        ]
           .filter((value) => typeof value === "string" && value.length > 0)
           .join(" "),
-        label:
+        label: renderSettingsDestinationText(
+          item,
           nativeContent && item.label === nativeContent.labelText
             ? nativeContent.label
             : item.label,
-        description:
+          "label",
+        ),
+        description: renderSettingsDestinationText(
+          item,
           nativeContent &&
           item.description === nativeContent.descriptionText
             ? nativeContent.description
             : item.description,
-        control: renderSettingsControl(
-          item.control,
-          item.id ?? item.label,
-          controlOwner,
+          "description",
+        ),
+        control: renderSettingsTrailingControl(
+          item,
+          renderSettingsControl(
+            item.control,
+            item.id ?? item.label,
+            controlOwner,
+          ),
+          reserveDisclosure,
         ),
       },
       item.id,
@@ -3533,8 +3713,17 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   function renderSettingsGroup(paneId, model, group) {
+    const reserveDisclosure = group.items.some(
+      (item) => item.destination !== undefined,
+    );
     const items = group.items.map((item) =>
-      renderSettingsItem(paneId, model, group, item),
+      renderSettingsItem(
+        paneId,
+        model,
+        group,
+        item,
+        reserveDisclosure,
+      ),
     );
     const view = settingsGroupView(model, group);
     if (view) return renderCapturedSettingsGroup(view, group, items);
@@ -3639,12 +3828,20 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ? registry.anchorToken === token.current
         : pass.firstToken === token.current;
     if (registry.committedPass !== pass) return effectiveView.source;
-    if (!isAnchor || !pageId) return null;
+    if (!pageId) return null;
     const model = settingsGroupModel(pageId);
+    const groups = computeEffectiveSettingsGroups(pageId);
+    if (
+      groups.length === model.groups.length &&
+      groups.every((group, index) => group === model.groups[index])
+    ) {
+      return effectiveView.source;
+    }
+    if (!isAnchor) return null;
     return native.jsx(
       native.React.Fragment,
       {
-        children: computeEffectiveSettingsGroups(pageId).map((group) =>
+        children: groups.map((group) =>
           renderSettingsGroup(pageId, model, group),
         ),
       },
@@ -4773,26 +4970,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       setColor(normalized);
       previewColorPicker(request, normalized);
     };
-    React.useEffect(() => {
+    React.useLayoutEffect(() => {
       const finishOutside = (event) => {
         if (!surface.current.contains(event.target)) {
           settleColorPicker(request, request.color);
         }
       };
-      const finishFromKeyboard = (event) => {
-        if (event.key !== "Escape" && event.key !== "Enter") return;
-        event.preventDefault();
-        event.stopPropagation();
-        settleColorPicker(
-          request,
-          event.key === "Escape" ? undefined : request.color,
-        );
-      };
       addEventListener("pointerdown", finishOutside, true);
-      addEventListener("keydown", finishFromKeyboard, true);
       return () => {
         removeEventListener("pointerdown", finishOutside, true);
-        removeEventListener("keydown", finishFromKeyboard, true);
       };
     }, [request]);
     React.useEffect(() => {
@@ -4846,6 +5032,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   }
 
   function mountColorPickerHost() {
+    addEventListener("keydown", finishActiveColorPickerFromKeyboard, true);
     const container = document.createElement("div");
     container.setAttribute("data-cgptx-color-picker-host", "");
     document.body.append(container);
@@ -5217,12 +5404,31 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       const paneId = renderedCustomPaneId;
       let content = child;
       if (paneId) {
-        const pane = settingsPanesById(
-          computeEffectiveSettingsCategories(),
-        ).get(paneId);
+        const panes = settingsPanesById(computeEffectiveSettingsCategories());
+        const pane = panes.get(paneId);
         if (pane) {
+          const parentPane = extensionSettingsParentPane(paneId, panes);
+          const title = pane.title ?? pane.label;
           content = React.cloneElement(child, {
-            title: pane.title ?? pane.label,
+            title: parentPane
+              ? native.jsx(native.ToolbarBreadcrumb, {
+                  ancestors: [
+                    {
+                      id: parentPane.id,
+                      label: parentPane.label,
+                      onClick: () => {
+                        void openSettingsPane(parentPane.id).catch((error) =>
+                          warn(
+                            'extension settings breadcrumb failed to open',
+                            error,
+                          ),
+                        );
+                      },
+                    },
+                  ],
+                  current: title,
+                })
+              : title,
             children: renderCustomSettingsChildren(pane),
           });
         }
@@ -5440,6 +5646,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       threadMenuModule,
       authModule,
       settingsVisibilityModule,
+      toolbarBreadcrumbModule,
     ] = await Promise.all([
       import(APP_INITIAL_MODULE),
       import(PLUS_ICON_MODULE),
@@ -5447,6 +5654,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       import(THREAD_MENU_MODULE),
       import(AUTH_MODULE),
       import(SETTINGS_VISIBILITY_MODULE),
+      import(TOOLBAR_BREADCRUMB_MODULE),
     ]);
     authModule.r();
     appInitialModule.Y0();
@@ -5472,6 +5680,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     appInitialModule.aa();
     appInitialModule.na();
     settingsVisibilityModule.i();
+    toolbarBreadcrumbModule.n();
     plusIconModule.t();
     paletteIconModule.n();
     threadMenuModule.n();
@@ -5517,6 +5726,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       SettingsToggle: appInitialModule.WW,
       SettingsSelectTrigger: appInitialModule.Yi,
       SettingsButton: appInitialModule.IF,
+      SettingsTextField: appInitialModule.IY,
+      ChevronRight: appInitialModule.c2,
+      ToolbarBreadcrumb: toolbarBreadcrumbModule.t,
       settingsSectionIcons: settingsVisibilityModule.r,
       iconComponents: new Map([
         ["chevron-right", appInitialModule.c2],
@@ -6077,6 +6289,68 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         });
         return control;
       },
+
+      textField(rawOptions) {
+        const options = settingsOptions(rawOptions, "settings text field");
+        if (typeof options.value !== "string") {
+          throw new TypeError("settings text field value must be a string");
+        }
+        if (
+          options.placeholder !== undefined &&
+          typeof options.placeholder !== "string"
+        ) {
+          throw new TypeError(
+            "settings text field placeholder must be a string",
+          );
+        }
+        if (
+          options.disabled !== undefined &&
+          typeof options.disabled !== "boolean"
+        ) {
+          throw new TypeError("settings text field disabled must be boolean");
+        }
+        if (typeof options.onChange !== "function") {
+          throw new TypeError(
+            "settings text field onChange must be a function",
+          );
+        }
+        const control = Object.freeze({
+          kind: "textField",
+          value: options.value,
+          placeholder: options.placeholder,
+          disabled: options.disabled === true,
+        });
+        settingsControlHandlers.set(control, {
+          extId,
+          callback: options.onChange,
+        });
+        return control;
+      },
+
+      inline(rawControls) {
+        if (!Array.isArray(rawControls) || rawControls.length === 0) {
+          throw new TypeError(
+            "settings inline requires one or more controls",
+          );
+        }
+        for (const control of rawControls) {
+          const handler = settingsControlHandlers.get(control);
+          if (!handler || handler.extId !== extId) {
+            throw new TypeError(
+              "settings inline controls must belong to this extension",
+            );
+          }
+          if (control.kind === "inline") {
+            throw new TypeError("settings inline controls cannot be nested");
+          }
+        }
+        const control = Object.freeze({
+          kind: "inline",
+          controls: Object.freeze([...rawControls]),
+        });
+        settingsControlHandlers.set(control, { extId });
+        return control;
+      },
     });
   }
 
@@ -6168,9 +6442,31 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     }
   }
 
+  function registerExtensionSettings(id, moduleExports, paneId) {
+    if (extensionSettings.has(id)) return;
+    if (
+      typeof paneId !== "string" ||
+      !paneId.startsWith(`${id}.`) ||
+      paneId.length <= id.length + 1
+    ) {
+      warn('extension settings "' + id + '" has an invalid pane id');
+      return;
+    }
+    extensionSettings.set(id, { id, exports: moduleExports });
+    extensionSettingsPaneOwners.set(paneId, id);
+    if (typeof moduleExports?.activate !== "function") return;
+    try {
+      moduleExports.activate(makeApi(id));
+      log("extension settings activated: " + id);
+    } catch (error) {
+      warn('extension settings "' + id + '" failed to activate', error);
+    }
+  }
+
   window.__CGPTX_HOST__ = Object.freeze({
     version: "26.818.41509",
     registerExtension,
+    registerExtensionSettings,
     _debug: Object.freeze({
       captureBuiltInsFromOpenMenu,
       computeEffectiveItems,

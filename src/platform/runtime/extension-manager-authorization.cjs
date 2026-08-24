@@ -85,10 +85,29 @@ function wrapExtensionSource({
   );
 }
 
+function wrapExtensionSettingsSource({ id, paneId, code }) {
+  if (
+    typeof id !== "string" ||
+    typeof paneId !== "string" ||
+    !paneId.startsWith(`${id}.`) ||
+    paneId.length <= id.length + 1 ||
+    typeof code !== "string"
+  ) {
+    throw new TypeError("Invalid extension settings source");
+  }
+  return (
+    ";(() => { const module = { exports: {} }; const exports = module.exports; try {\n" +
+    code +
+    `\nwindow.__CGPTX_HOST__?.registerExtensionSettings(${JSON.stringify(id)}, module.exports, ${JSON.stringify(paneId)});` +
+    `\nreturn true; } catch (e) { console.error(${JSON.stringify(`[cgptx-bridge] extension settings ${id} failed to load`)}, e); return false; } })();`
+  );
+}
+
 module.exports = {
   assertExtensionManagerAuthorization,
   createExtensionManagerAuthorization,
   isAuthorizedExtensionManagerEntry,
   orderExtensionEntries,
   wrapExtensionSource,
+  wrapExtensionSettingsSource,
 };

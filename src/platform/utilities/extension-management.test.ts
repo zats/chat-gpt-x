@@ -17,6 +17,7 @@ test("extension management validates and freezes runtime metadata", async () => 
           version: "1.0.0",
           enabled: false,
           required: false,
+          settingsPaneId: "thread-colors.settings",
         },
       ];
     },
@@ -26,6 +27,7 @@ test("extension management validates and freezes runtime metadata", async () => 
     "manager-authorization",
   ).list();
   assert.equal(result[0]?.name, "Thread Colors");
+  assert.equal(result[0]?.settingsPaneId, "thread-colors.settings");
   assert(Object.isFrozen(result));
   assert(Object.isFrozen(result[0]));
 });

@@ -7,9 +7,9 @@ Pinned build:
 - app.asar SHA-256: `8eb91bd9efbf9a4dd04b9b0afdbfcb4e0bab5da18c1919ad74ca327c00c7e791`
 - Electron: `151.0.7922.170`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.818.41509.zip`
-- Binding date: `2026-08-22`
-- Binding version: `1.2.0`
-- ChatGPT API version: `1.3.0`
+- Binding date: `2026-08-24`
+- Binding version: `1.3.0`
+- ChatGPT API version: `1.4.0`
 - Version-watcher issue: `#46`
 
 Research used only the supplied exact stock application and its supplied
@@ -24,10 +24,15 @@ No generated binding existed when issue `#46` was opened. The original
 `1.1.0` added the `menus.assistantSelection` public API. `1.2.0` adds its
 in-place child-action page, selection-scoped native response-annotation
 creation, and the compatible `labelScale: 2` and `verticalPadding: 4` action
-presentation. It transforms the native toolbar shown for selected assistant
-text and keeps ChatGPT's current container, action, annotation, and composer
-components. Current ESM imports, semantic callers, export maps, and live
-behavior were checked before any short export name was retained.
+presentation. It also adds native Settings row disclosures and the controlled
+single-line text field used by extension-owned settings providers. It
+transforms the native toolbar shown for selected assistant text and keeps
+ChatGPT's current container, action, annotation, composer, and Settings
+components. `1.3.0` adds `settings.ui.inline`, which composes one or more
+controls owned by the same extension in one native Settings row. It also
+preserves unchanged native group elements to prevent dynamic Settings panes
+from entering a render loop. Current ESM imports, semantic callers, export
+maps, and live behavior were checked before any short export name was retained.
 
 ## Verified module map
 
@@ -41,13 +46,14 @@ current stock import, definition, caller, or live behavior.
 | Native menus | `app-initial-DwVrCWuo.js` | initializer `Y0`; namespace `K0`; `K0.Item`, `K0.Separator`, `K0.SubmenuItem`, and `K0.FlyoutSubmenuItem`; `W0` dropdown root |
 | Generic app menu | `app-initial-DwVrCWuo.js` | initializer `A1`; `k1` is the generic menu adapter; `tIt` is its exact internationalization hook |
 | Assistant-selection toolbar | `app-initial-DwVrCWuo.js` | export `pR` is the selected-text overlay (`Fwo`); `QGa` is its native container; `mU` is its native action wrapper |
-| Native icons | `app-initial-DwVrCWuo.js` | initializer `l2` and chevron `c2`; initializer `em` and Profile icon `$p`; initializer `o6` and Settings icon `a6` |
+| Native icons | `app-initial-DwVrCWuo.js` | initializer `l2` and chevron-right `c2`; initializer `em` and Profile icon `$p`; initializer `o6` and Settings icon `a6` |
 | Native color picker | `app-initial-DwVrCWuo.js` | initializer `cc`; controlled picker `sc` |
 | Settings shell and search | `settings-page-D-6MG6rZ.js` | semantic category headings, sidebar rows, search input and results, pane selection, and the Suspense boundary |
 | Settings section icons | `use-visible-settings-sections-BZAGLkjZ.js` | initializer `i`; section-icon map `r` |
+| Settings breadcrumb | `toolbar-breadcrumb-bXUC3DMD.js` | initializer `n`; native breadcrumb component `t` |
 | Native Settings page | `app-initial-DwVrCWuo.js` | initializer `aa`; component `ra` |
 | Native Settings group, rows, and row | `app-initial-DwVrCWuo.js` | initializer `Dn` and group `En`; initializer `xO` and rows `bO`; initializer `DO` and row `EO` |
-| Native Settings controls | `app-initial-DwVrCWuo.js` | initializer `GW` and toggle `WW`; initializer `Qi`, section title `Zi`, and select trigger `Yi`; initializer `LF` and button `IF` |
+| Native Settings controls | `app-initial-DwVrCWuo.js` | initializer `GW` and toggle `WW`; initializer `Qi`, section title `Zi`, and select trigger `Yi`; initializer `LF` and button `IF`; controlled input `IY` |
 | Native Settings loading row | `app-initial-DwVrCWuo.js` | initializer `na`; component `ta` |
 | Application scope | `app-initial-DwVrCWuo.js` | initializer `HFt`; application-scope token `VFt`; scope hook `IVt` |
 | Authentication context | `app-initial-DwVrCWuo.js` | initializer `xot` and auth-nonce hook `wot`; initializer `Pot` and app-server registry hook `Lot` |
@@ -144,10 +150,44 @@ serialization, composer validation, and message submission.
 The Settings boundary captures native categories, panes, groups, rows,
 localized messages, and controls. Contributions render with the current page
 (`ra`), group (`En`), rows (`bO`), row (`EO`), toggle (`WW`), select trigger
-(`Yi`), button (`IF`), and loading (`ta`) components. Private weak maps retain
-handlers and native React content outside public descriptors. The initialized
-`nMt` message bus opens `/settings/general-settings` before the lazy Profile
-subtree mounts, including in API-key mode.
+(`Yi`), button (`IF`), controlled input (`IY`), chevron-right (`c2`), and
+loading (`ta`) components. Rows without a destination render the same native
+icon button and chevron at zero opacity, outside pointer and keyboard input,
+so all trailing controls use the exact native disclosure width. A destination
+opens from its label, description, or chevron. The label and description use
+`cursor-interaction`, which follows the application-wide interactive-pointer
+preference, while the trailing control stays independent. An inline control
+group uses a small flex container around ordered native controls. It
+rejects empty groups, nested groups, and controls owned by another extension.
+Private weak maps retain handlers and native React content
+outside public descriptors. If every group and item transformer returns a
+native pane unchanged, the boundary preserves each original native group
+element instead of rebuilding the page. This is required for dynamic panes
+such as Personalization: rebuilding an unchanged group causes its native state
+update to recapture the page continuously, consumes the renderer heap, and
+stops UI input. Effective category, pane, group, and item text enters the
+native search index. The initialized `nMt` message bus opens
+`/settings/general-settings` before the lazy Profile subtree mounts, including
+in API-key mode.
+
+The extension package manifest declares its dedicated settings pane through
+`settings.pane`. The launcher carries that exact pane ID to the renderer when
+it loads the settings provider. If the Extensions manager pane is effective,
+the binding omits the dedicated pane from the top-level sidebar, marks
+Extensions as active while the dedicated pane is open, and passes the native
+toolbar breadcrumb (`t`) as the page title. The breadcrumb ancestor opens
+`extensions.installed`. The dedicated pane stays in the effective settings
+tree, so native search, direct settings links, and group transforms continue
+to use it.
+
+The native color-picker host installs one persistent keyboard capture listener
+when the binding mounts, before later native menus and overlays can suppress a
+picker event. It consumes Escape or Enter only while a picker request is
+active. Each visible surface installs only its outside-click listener in a
+layout effect. The live test waits for both result settlement and dialog
+removal before it starts another picker, so it cannot mistake a settled
+session's stale DOM for the new session. It sends Escape from the focused
+native slider instead of dispatching an artificial event at `document`.
 
 The external session preload installs the main-world JSX hook. Native imports
 may finish before or after the first application render. The host waits for
@@ -216,19 +256,22 @@ CHATGPT_APP_PATH="/path/to/ChatGPT.app" \
   scripts/run-local-ci.sh /path/to/api-key-auth.json
 ```
 
-The exact build passed `38` extension and utility unit checks, `33/33`
+The exact build passed `43` extension and utility unit checks, `33/33`
 applicable public API checks with a matching fresh renderer result, and
 `45/45` native UI and shipped-extension composition checks. The Release
 launcher built and signed successfully and contained no bundled platform
 components.
 
 With the API test extension absent, a separate normal-flow launch loaded all
-four staged shipped extensions. The binding reached native-ready with no
-error; `reactions` registered its assistant-selection transformer;
-`thread-colors` contributed its native thread-menu item; and the required
-extension manager rendered its native pane, group, and four
-installed-extension rows. `multiple-accounts` is profile-dependent and was
-outside the API-key gate.
+four staged shipped extension packages. The binding reached native-ready with
+no error. The `reactions` feature registered its assistant-selection
+transformer and its settings provider added a searchable Reactions pane with a
+native controlled emoji field and reset action. `thread-colors` contributed
+its native thread-menu item. The required extension manager rendered its
+native pane, group, and three user-manageable installed-extension rows with
+aligned disclosure slots. The required Extensions manager omitted its own
+package. `multiple-accounts` is profile-dependent and was outside the API-key
+gate.
 
 ## Failure signatures
 
@@ -254,6 +297,20 @@ outside the API-key gate.
 - Response-annotation creation times out: the Add to chat handler no longer
   creates a native annotation editor, or the create-mode annotation-layer
   update/direct-submit callback contract changed.
+- A Settings text field does not edit or retain focus: the `IY` controlled
+  input contract or its compact variant changed.
+- Settings inline controls are absent or reordered: the composite renderer no
+  longer retains its child descriptors or renders them in array order.
+- A visible color picker ignores Escape: dismissal listeners were moved after
+  the layout commit or a replacement picker retained stale session handlers.
+- A Settings disclosure is absent, misaligned, or its row does not navigate:
+  the `IF` icon-button contract, `c2` icon, invisible sibling disclosure,
+  `cursor-interaction` token, or native settings route changed.
+- Extension settings are absent from search: effective category, pane, group,
+  or item metadata no longer enters the native Settings search index.
+- An untouched native Settings pane consumes CPU or renderer memory: no-op
+  group or item transforms lost native descriptor identity, or the boundary
+  rebuilt native groups instead of preserving their original elements.
 - A connected thread trigger remains closed after pointer-down: the generic
   adapter identity or its dedicated thread-menu change signal regressed, or
   native dropdown ownership changed.

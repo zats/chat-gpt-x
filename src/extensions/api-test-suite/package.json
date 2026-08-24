@@ -1,12 +1,12 @@
 {
   "id": "api-test-suite",
   "name": "API Test Suite",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "private": true,
   "description": "Mechanical end-to-end test extension for the platform. Exercises every public API path deterministically and defines whether a binding is 'working'. Internal tooling, not a user extension.",
   "main": "contents/main.js",
   "compatibility": {
-    "chatgptApi": "^1.3.0"
+    "chatgptApi": "^1.4.0"
   },
   "capabilities": [
     "menus.assistant-selection",

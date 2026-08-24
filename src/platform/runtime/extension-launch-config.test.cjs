@@ -11,6 +11,8 @@ const vm = require("node:vm");
 const {
   listInstalledExtensions,
   readExtensionEntries,
+  readExtensionLaunch,
+  readExtensionSettingsEntries,
   setExtensionEnabled,
 } = require("./extension-launch-config.cjs");
 const {
@@ -19,6 +21,7 @@ const {
   isAuthorizedExtensionManagerEntry,
   orderExtensionEntries,
   wrapExtensionSource,
+  wrapExtensionSettingsSource,
 } = require("./extension-manager-authorization.cjs");
 
 function makeStore(extensions) {
@@ -43,10 +46,21 @@ function makeStore(extensions) {
         description: extension.description,
         version,
         main: "contents/main.js",
+        ...(extension.settings
+          ? {
+              settings: {
+                main: "contents/settings.js",
+                pane: `${extension.id}.settings`,
+              },
+            }
+          : {}),
         ...(extension.required ? { required: true } : {}),
       }),
     );
     fs.writeFileSync(path.join(directory, "contents/main.js"), "");
+    if (extension.settings) {
+      fs.writeFileSync(path.join(directory, "contents/settings.js"), "");
+    }
     settings.extensions[extension.id] = {
       enabled: extension.enabled,
       ...(extension.channel ? { channel: extension.channel } : {}),
@@ -129,6 +143,7 @@ test("disabled extensions stay installed and are omitted at startup", () => {
       description: "Adds thread colors.",
       enabled: false,
       channel: "stable",
+      settings: true,
     },
   ]);
 
@@ -144,7 +159,52 @@ test("disabled extensions stay installed and are omitted at startup", () => {
       version: "1.0.0",
       enabled: false,
       required: false,
+      settingsPaneId: "thread-colors.settings",
       path: "components/extensions/thread-colors/1.0.0",
+    },
+  ]);
+});
+
+test("settings providers load for disabled extensions in id order", () => {
+  const { root, versions } = makeStore([
+    {
+      id: "thread-colors",
+      name: "Thread Colors",
+      description: "Adds thread colors.",
+      enabled: false,
+      settings: true,
+    },
+    {
+      id: "multiple-accounts",
+      name: "Multiple Accounts",
+      description: "Switches accounts.",
+      enabled: false,
+    },
+    {
+      id: "reactions",
+      name: "Reactions",
+      description: "Adds reactions.",
+      enabled: true,
+      settings: true,
+    },
+  ]);
+
+  assert.deepEqual(readExtensionSettingsEntries(root, versions), [
+    {
+      id: "reactions",
+      paneId: "reactions.settings",
+      path: path.join(
+        root,
+        "components/extensions/reactions/1.0.0/contents/settings.js",
+      ),
+    },
+    {
+      id: "thread-colors",
+      paneId: "thread-colors.settings",
+      path: path.join(
+        root,
+        "components/extensions/thread-colors/1.0.0/contents/settings.js",
+      ),
     },
   ]);
 });
@@ -277,8 +337,10 @@ test("launch configuration replaces the complete extension set", () => {
   fs.writeFileSync(
     configurationFile,
     JSON.stringify({
-      schemaVersion: 1,
-      extensions: [{ id: "api-test-suite", path: extensionPath }],
+      schemaVersion: 3,
+      extensions: [
+        { id: "api-test-suite", path: extensionPath, enabled: true },
+      ],
     }),
   );
 
@@ -350,17 +412,17 @@ test("invalid launch configuration is rejected and consumed", () => {
   assert.equal(fs.existsSync(configurationFile), false);
 });
 
-test("launch configuration schema 2 is rejected and consumed", () => {
+test("launch configuration schema 1 is rejected and consumed", () => {
   const { root, versions } = makeStore([]);
   const configurationFile = path.join(root, "launch-v2.json");
   fs.writeFileSync(
     configurationFile,
     JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 1,
       extensions: [
         {
           id: "extensions",
-          origin: "local",
+          enabled: true,
           path: "/tmp/extensions/main.js",
         },
       ],
@@ -374,6 +436,48 @@ test("launch configuration schema 2 is rejected and consumed", () => {
         extensionsDirectory: root,
       }),
     /Invalid ChatGPTX launch configuration/,
+  );
+  assert.equal(fs.existsSync(configurationFile), false);
+});
+
+test("launch configuration loads settings for a disabled extension", () => {
+  const { root, versions } = makeStore([]);
+  const configurationFile = path.join(root, "launch-settings.json");
+  const mainPath = path.join(root, "reactions/contents/main.js");
+  const settingsPath = path.join(root, "reactions/contents/settings.js");
+  fs.writeFileSync(
+    configurationFile,
+    JSON.stringify({
+      schemaVersion: 3,
+      extensions: [
+        {
+          id: "reactions",
+          path: mainPath,
+          enabled: false,
+          settingsPath,
+          settingsPaneId: "reactions.settings",
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(
+    readExtensionLaunch({
+      configurationFile,
+      versions,
+      extensionsDirectory: root,
+    }),
+    {
+      extensions: [],
+      settings: [
+        {
+          id: "reactions",
+          paneId: "reactions.settings",
+          path: settingsPath,
+        },
+      ],
+      storageExtensionIds: ["reactions"],
+    },
   );
   assert.equal(fs.existsSync(configurationFile), false);
 });
@@ -493,6 +597,30 @@ test("only the locked extension manager receives management authorization", () =
     ).map((entry) => entry.id),
     ["extensions", "thread-colors"],
   );
+});
+
+test("settings source registers only the settings provider", () => {
+  let registered;
+  const wrapped = wrapExtensionSettingsSource({
+    id: "reactions",
+    paneId: "reactions.settings",
+    code: "module.exports = { activate(api) { return api; } };",
+  });
+  const result = vm.runInNewContext(wrapped, {
+    console,
+    window: {
+      __CGPTX_HOST__: {
+        registerExtensionSettings(id, moduleExports, paneId) {
+          registered = { id, moduleExports, paneId };
+        },
+      },
+    },
+  });
+
+  assert.equal(result, true);
+  assert.equal(registered.id, "reactions");
+  assert.equal(registered.paneId, "reactions.settings");
+  assert.equal(registered.moduleExports.activate("settings-api"), "settings-api");
 });
 
 test("an explicit local manager override is authorized and activates first", () => {

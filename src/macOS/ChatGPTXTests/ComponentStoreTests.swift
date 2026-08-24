@@ -127,6 +127,66 @@ final class ComponentStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testExtensionPackageCanDeclareASettingsProvider() throws {
+        let store = try makeStore()
+        let extensionComponent = makeExtension(id: "alpha")
+        try installFixture(
+            makeLock(extensions: [extensionComponent]),
+            in: store
+        )
+        let packageRoot = try store.resolveStorePath(extensionComponent.path)
+        try FileManager.default.removeItem(
+            at: packageRoot.appendingPathComponent(
+                ComponentStore.integrityReceiptFileName
+            )
+        )
+        try installExtensionPackage(
+            extensionComponent,
+            in: store,
+            includeSettings: true
+        )
+
+        let prepared = try XCTUnwrap(store.prepareInstalled())
+
+        XCTAssertEqual(prepared.extensions, [extensionComponent])
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: store.rootURL.appendingPathComponent(
+                    "components/extensions/alpha/1.0.0/contents/settings.js"
+                ).path
+            )
+        )
+    }
+
+    @MainActor
+    func testLaunchExtensionEncodesEnablementAndSettingsProvider() throws {
+        let extensionComponent = LaunchExtension(
+            id: "alpha",
+            path: "/components/alpha/contents/main.js",
+            enabled: false,
+            settingsPath: "/components/alpha/contents/settings.js",
+            settingsPaneId: "alpha.settings"
+        )
+
+        let encoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(extensionComponent)
+        )
+        let object = try XCTUnwrap(encoded as? [String: Any])
+
+        XCTAssertEqual(object["id"] as? String, "alpha")
+        XCTAssertEqual(
+            object["path"] as? String,
+            "/components/alpha/contents/main.js"
+        )
+        XCTAssertEqual(object["enabled"] as? Bool, false)
+        XCTAssertEqual(
+            object["settingsPath"] as? String,
+            "/components/alpha/contents/settings.js"
+        )
+        XCTAssertEqual(object["settingsPaneId"] as? String, "alpha.settings")
+    }
+
+    @MainActor
     func testPrepareInstalledWaitsForSharedMutationLock() throws {
         let store = try makeStore()
         let extensionComponent = makeExtension(id: "alpha")
@@ -577,7 +637,8 @@ final class ComponentStoreTests: XCTestCase {
         _ extensionComponent: StoredExtension,
         in store: ComponentStore,
         includeOldChatGPTKey: Bool = true,
-        omitMain: Bool = false
+        omitMain: Bool = false,
+        includeSettings: Bool = false
     ) throws {
         let extensionRootURL = try store.resolveStorePath(
             extensionComponent.path
@@ -599,6 +660,12 @@ final class ComponentStoreTests: XCTestCase {
         if extensionComponent.required {
             manifest["required"] = true
         }
+        if includeSettings {
+            manifest["settings"] = [
+                "main": "contents/settings.js",
+                "pane": "\(extensionComponent.id).settings",
+            ]
+        }
         try writeJSON(
             manifest,
             to: extensionRootURL.appendingPathComponent("package.json")
@@ -608,6 +675,14 @@ final class ComponentStoreTests: XCTestCase {
                 "module.exports = {};\n",
                 to: extensionRootURL.appendingPathComponent(
                     "contents/main.js"
+                )
+            )
+        }
+        if includeSettings {
+            try writeText(
+                "module.exports = {};\n",
+                to: extensionRootURL.appendingPathComponent(
+                    "contents/settings.js"
                 )
             )
         }

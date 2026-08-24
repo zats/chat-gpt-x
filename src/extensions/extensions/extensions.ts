@@ -29,7 +29,8 @@ function sameInstalledExtensions(
         extension.description === candidate.description &&
         extension.version === candidate.version &&
         extension.enabled === candidate.enabled &&
-        extension.required === candidate.required
+        extension.required === candidate.required &&
+        extension.settingsPaneId === candidate.settingsPaneId
       );
     })
   );
@@ -40,17 +41,22 @@ export function createExtensionRows(
   ui: SettingsUiApi,
   setEnabled: (id: string, enabled: boolean) => void | Promise<void>,
 ): readonly SettingsItem[] {
-  return extensions.map((extension) => ({
-    id: `${EXTENSION_ID}.item.${extension.id}`,
-    label: extension.name,
-    description: extension.description,
-    keywords: [extension.id, extension.version],
-    control: ui.toggle({
-      checked: extension.enabled,
-      disabled: extension.required,
-      onChange: (enabled) => setEnabled(extension.id, enabled),
-    }),
-  }));
+  return extensions
+    .filter((extension) => extension.id !== EXTENSION_ID)
+    .map((extension) => ({
+      id: `${EXTENSION_ID}.item.${extension.id}`,
+      label: extension.name,
+      description: extension.description,
+      keywords: [extension.id, extension.version],
+      destination: extension.settingsPaneId
+        ? { paneId: extension.settingsPaneId }
+        : undefined,
+      control: ui.toggle({
+        checked: extension.enabled,
+        disabled: extension.required,
+        onChange: (enabled) => setEnabled(extension.id, enabled),
+      }),
+    }));
 }
 
 export async function activateExtensions(

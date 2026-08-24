@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANONICAL_MAIN="contents/main.js"
+CANONICAL_SETTINGS_MAIN="contents/settings.js"
 REQUIRED_BUN_VERSION="1.4.0"
 
 command -v bun >/dev/null || {
@@ -91,6 +92,32 @@ for manifest in "${manifests[@]}"; do
   CHATGPTX_TEST_NO_PROFILE="${CHATGPTX_TEST_NO_PROFILE:-0}" bun build \
     "${build_arguments[@]}"
   cp "$built_main" "$extension_main_output"
+
+  if jq -e '.settings != null' "$manifest" >/dev/null; then
+    settings_main="$(jq -er '.settings.main' "$manifest")"
+    settings_pane="$(jq -er '.settings.pane' "$manifest")"
+    settings_source="$extension_dir/settings.ts"
+    [[ "$settings_main" == "$CANONICAL_SETTINGS_MAIN" ]] || {
+      echo "extension settings main must be $CANONICAL_SETTINGS_MAIN: $manifest" >&2
+      exit 1
+    }
+    [[ "$settings_pane" == "$extension_id."* && "$settings_pane" != "$extension_id." ]] || {
+      echo "extension settings pane must use the extension namespace: $manifest" >&2
+      exit 1
+    }
+    [[ -f "$settings_source" ]] || {
+      echo "extension settings source not found: $settings_source" >&2
+      exit 1
+    }
+    built_settings="$BUILD_ROOT/$extension_id/settings.js"
+    settings_output="$extension_build_dir/$CANONICAL_SETTINGS_MAIN"
+    mkdir -p "$(dirname "$built_settings")" "$(dirname "$settings_output")"
+    bun build "$settings_source" \
+      --target=browser \
+      --format=cjs \
+      --outfile="$built_settings"
+    cp "$built_settings" "$settings_output"
+  fi
   cp "$manifest" "$extension_build_dir/package.json"
 
   echo "$extension_id -> $extension_main_output"

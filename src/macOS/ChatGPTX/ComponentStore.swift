@@ -73,6 +73,12 @@ struct ExtensionPackageManifest: Decodable {
     let main: String
     let compatibility: ExtensionCompatibility
     let required: Bool?
+    let settings: ExtensionSettingsPackageManifest?
+}
+
+struct ExtensionSettingsPackageManifest: Decodable {
+    let main: String
+    let pane: String
 }
 
 struct PreparedComponentStore {
@@ -589,6 +595,11 @@ struct ComponentStore {
             manifest.version == extensionComponent.version,
             manifest.main == "contents/main.js",
             manifest.compatibility == extensionComponent.compatibility,
+            isValidSettingsManifest(
+                manifest.settings,
+                extensionID: extensionComponent.id,
+                packageRoot: packageRoot
+            ),
             fileManager.fileExists(
                 atPath: packageRoot.appendingPathComponent(
                     manifest.main
@@ -600,6 +611,22 @@ struct ComponentStore {
             )
         }
         return manifest
+    }
+
+    private func isValidSettingsManifest(
+        _ settings: ExtensionSettingsPackageManifest?,
+        extensionID: String,
+        packageRoot: URL
+    ) -> Bool {
+        guard let settings else { return true }
+        return settings.main == "contents/settings.js"
+            && settings.pane.hasPrefix("\(extensionID).")
+            && settings.pane.count > extensionID.count + 1
+            && fileManager.fileExists(
+                atPath: packageRoot.appendingPathComponent(
+                    settings.main
+                ).path
+            )
     }
 
     func validate(_ versions: ComponentVersionsLock) throws {

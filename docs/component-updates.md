@@ -159,7 +159,15 @@ ChatGPT version and `app.asar` hash match the installed app exactly.
 The store preserves unknown fields and records for extensions that are not
 currently compatible. When an extension becomes compatible again, its prior
 enablement returns. A required extension is always enabled. Extension state is
-separate from extension code.
+separate from extension code. An extension can declare a separate
+`contents/settings.js` provider and its namespaced native Settings pane in its
+package manifest. The provider loads for an installed compatible extension
+even when its feature bundle is disabled. It stores extension-owned values
+under `state/<extension-id>/`. Pane, group, and row metadata makes these
+settings available through ChatGPT's native Settings search. A declared
+extension settings pane does not appear as a separate top-level sidebar item.
+The extension manager links to it, Extensions stays selected while it is open,
+and the native breadcrumb returns to Extensions.
 
 Obsolete flat package layouts are invalid. The launcher does not migrate or
 load them.
@@ -248,10 +256,13 @@ The updater:
 10. Preserves extension settings.
 11. Writes one atomic active lock last.
 
-At every injected launch, the launcher reads the current lock and settings. It
-writes a mode-`0600` launch configuration with the exact enabled extension
-entry points. This keeps enablement current and lets already-published runtimes
-load the new versioned store.
+At every injected launch, the launcher reads the current lock, package
+manifests, and settings. It writes a mode-`0600`, schema-3 launch configuration
+with one record for every installed compatible extension. Each record has the
+feature entry point, current enablement, and an optional settings-provider
+entry point and pane ID. The runtime loads the required extension manager
+feature first, then every declared settings provider, then the other enabled
+feature bundles.
 
 Component changes take effect on the next ChatGPT launch. If ChatGPT is
 running, the launcher offers a restart.

@@ -45,7 +45,9 @@ the listed extensions, under
 `${TMPDIR}/ChatGPTX/extension-builds/<extension-id>/` for launch-scoped
 development. `CHATGPTX_EXTENSION_BUILD_DIR` overrides that output root.
 Manifests declare `contents/main.js`, their semantic version, and a
-`compatibility.chatgptApi` range.
+`compatibility.chatgptApi` range. An extension with settings also declares
+`"settings": { "main": "contents/settings.js", "pane": "<id>.<name>" }`;
+the build compiles `settings.ts` into that separate provider bundle.
 Installed extension code lives under
 `<Codex home>/extensions/components/extensions/<extension-id>/<version>/`;
 persistent state lives under
@@ -53,10 +55,18 @@ persistent state lives under
 `<Codex home>/extensions/settings.json` maps every installed extension ID to
 an extensible settings object with `enabled`; startup reads package metadata
 from the versioned packages selected by `versions-lock.json`. The required
-`extensions` manager activates first. All other enabled extensions activate in
-lexical ID order. Settings for temporarily incompatible extensions remain
-stored. `resolveCodexHome()` defines Codex home from
+`extensions` manager feature activates first. Settings providers then activate
+for every installed compatible extension, including a disabled extension, so
+its searchable settings remain available. Other enabled feature bundles
+activate in lexical ID order. Settings for temporarily incompatible extensions
+remain stored. `resolveCodexHome()` defines Codex home from
 `CODEX_HOME`, defaulting to `$HOME/.codex`.
+
+A manifest-declared extension settings pane is a child of the required
+Extensions pane. It stays out of the top-level Settings sidebar, keeps
+Extensions selected while open, and uses ChatGPT's native breadcrumb to return
+to Extensions. It remains available to native settings search and direct pane
+navigation.
 
 Run the packaged launcher with `--test-api` and an explicit locally built
 `api-test-suite` to restart ChatGPT with only that suite. Pass
@@ -98,4 +108,4 @@ Rules: CDP is for development-time inspection and hot-probing only — productio
 
 ## Current state
 
-The pinned API-development binding is `src/platform/bindings/26.818.41509/` at ChatGPTX API `1.3.0`. Its current API-key exact-build run passes the public API suite (33/33) and native UI suite (45/45). The public `reactions` extension uses the assistant-selection child page, 2× emoji labels with 4 px vertical padding, and native response-annotation creation API. A normal reaction stays in the composer; a Command-click uses the native direct-submit path. Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + remotely installed main-process bridge, binding, and extensions.
+The pinned API-development binding is `src/platform/bindings/26.818.41509/` at ChatGPTX API `1.3.0`. Its current API-key exact-build run passes 43 extension and utility checks, the public API suite (33/33), and the native UI suite (45/45). The public `reactions` extension uses the assistant-selection child page, 2× emoji labels with 4 px vertical padding, native response-annotation creation, and a searchable native Settings pane for an emoji-only reaction sequence. A normal reaction stays in the composer; a Command-click uses the native direct-submit path. Reusable extension storage is provided separately by `src/platform/utilities/`. Runtime: macOS launcher + remotely installed main-process bridge, binding, and extensions.

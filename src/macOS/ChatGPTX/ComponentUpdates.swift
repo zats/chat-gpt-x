@@ -1246,11 +1246,23 @@ private extension ComponentStore {
                 manifest.id == id,
                 manifest.version == version,
                 manifest.main == "contents/main.js",
-                manifest.compatibility == compatibility
+                manifest.compatibility == compatibility,
+                manifest.settings == nil
+                    || (
+                        manifest.settings?.main == "contents/settings.js"
+                            && manifest.settings?.pane.hasPrefix("\(id).")
+                                == true
+                            && (manifest.settings?.pane.count ?? 0)
+                                > id.count + 1
+                    )
             else {
                 throw ComponentUpdateError.archiveLayoutInvalid
             }
-            try requireFiles(["contents/main.js"], beneath: root)
+            try requireFiles(
+                ["contents/main.js"]
+                    + (manifest.settings.map { [$0.main] } ?? []),
+                beneath: root
+            )
         }
     }
 

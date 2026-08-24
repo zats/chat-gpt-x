@@ -1308,6 +1308,8 @@ const SETTINGS_GROUP_ID = `${EXT_ID}.general`;
 const SETTINGS_TOGGLE_ID = `${EXT_ID}.enabled`;
 const SETTINGS_SELECT_ID = `${EXT_ID}.mode`;
 const SETTINGS_BUTTON_ID = `${EXT_ID}.action`;
+const SETTINGS_TEXT_FIELD_ID = `${EXT_ID}.text`;
+const SETTINGS_INLINE_ID = `${EXT_ID}.inline`;
 const SETTINGS_BUILT_IN_PANE_ID = "codex.settings.general-settings";
 const SETTINGS_EXISTING_GROUP_ID = `${EXT_ID}.existing-pane-group`;
 const SETTINGS_EXISTING_ITEM_ID = `${EXT_ID}.existing-pane-item`;
@@ -1320,6 +1322,41 @@ function settingPane(id: string) {
 }
 
 test("settings: adds a native pane, group, rows, and standard controls", async () => {
+  const textField = api.settings.ui.textField({
+    value: "Initial text",
+    placeholder: "Enter text",
+    onChange() {},
+  });
+  let nonStringTextRejected = false;
+  try {
+    api.settings.ui.textField({
+      value: 0 as never,
+      onChange() {},
+    });
+  } catch {
+    nonStringTextRejected = true;
+  }
+  assert(nonStringTextRejected, "text fields reject non-string values");
+  const inline = api.settings.ui.inline([
+    textField,
+    api.settings.ui.button({ label: "Reset", onClick() {} }),
+  ]);
+  let emptyInlineRejected = false;
+  try {
+    api.settings.ui.inline([]);
+  } catch {
+    emptyInlineRejected = true;
+  }
+  let nestedInlineRejected = false;
+  try {
+    api.settings.ui.inline([inline]);
+  } catch {
+    nestedInlineRejected = true;
+  }
+  assert(
+    emptyInlineRejected && nestedInlineRejected,
+    "inline controls reject empty and nested control groups",
+  );
   const emptyValueSelect = api.settings.ui.select({
     value: "",
     options: [
@@ -1409,6 +1446,7 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
             label: "Fixture toggle",
             description: "Searchable toggle description.",
             keywords: ["fixture-toggle"],
+            destination: { paneId: SETTINGS_BUILT_IN_PANE_ID },
             control: api.settings.ui.toggle({
               checked: true,
               onChange() {},
@@ -1427,6 +1465,16 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
               appearance: "secondary",
               onClick() {},
             }),
+          },
+          {
+            id: SETTINGS_TEXT_FIELD_ID,
+            label: "Fixture text field",
+            control: textField,
+          },
+          {
+            id: SETTINGS_INLINE_ID,
+            label: "Fixture inline controls",
+            control: inline,
           },
         ]
       : current,
@@ -1458,7 +1506,12 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
     group?.keywords?.includes("fixture-group"),
     "group search keywords are preserved",
   );
-  assert(group?.items.length === 3, "every contributed row is effective");
+  assert(group?.items.length === 5, "every contributed row is effective");
+  assert(
+    group?.items.find((item) => item.id === SETTINGS_INLINE_ID)?.control ===
+      inline,
+    "an inline native-control group remains opaque and effective",
+  );
   assert(
     group?.items.every(
       (item) => item.origin === EXT_ID && item.control !== undefined,
@@ -1467,8 +1520,9 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
   );
   assert(
     group?.items[0]?.description === "Searchable toggle description." &&
-      group.items[0]?.keywords?.includes("fixture-toggle"),
-    "item search text is preserved",
+      group.items[0]?.keywords?.includes("fixture-toggle") &&
+      group.items[0]?.destination?.paneId === SETTINGS_BUILT_IN_PANE_ID,
+    "item search text and destination are preserved",
   );
 
   const clearPaneMetadata = api.settings.transformCategories((categories) =>
@@ -1514,6 +1568,7 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
                 description: undefined,
                 keywords: undefined,
                 control: undefined,
+                destination: undefined,
                 origin: "forged",
               }
             : candidate,
@@ -1549,6 +1604,7 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
       clearedItem.description === undefined &&
       clearedItem.keywords === undefined &&
       clearedItem.control === undefined &&
+      clearedItem.destination === undefined &&
       clearedItem.origin === EXT_ID,
     "explicit undefined clears optional settings fields without changing ownership",
   );
@@ -1573,7 +1629,8 @@ test("settings: adds a native pane, group, rows, and standard controls", async (
       restoredGroup.keywords?.includes("fixture-group") &&
       restoredItem?.description === "Searchable toggle description." &&
       restoredItem.keywords?.includes("fixture-toggle") &&
-      restoredItem.control !== undefined,
+      restoredItem.control !== undefined &&
+      restoredItem.destination?.paneId === SETTINGS_BUILT_IN_PANE_ID,
     "disposing the clearing transforms restores optional settings fields",
   );
 });

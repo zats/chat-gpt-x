@@ -1,12 +1,12 @@
 {
   "id": "extensions",
   "name": "Extensions",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Shows installed extensions and controls whether they load at ChatGPT startup.",
   "main": "contents/main.js",
   "required": true,
   "compatibility": {
-    "chatgptApi": "^1.1.0"
+    "chatgptApi": "^1.4.0"
   },
   "capabilities": [
     "settings"

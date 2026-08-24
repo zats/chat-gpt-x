@@ -1274,37 +1274,72 @@ async function validateUi(
     isPrimary: true,
     pointerType: 'mouse',
   }));
-  await waitUntil(() => pickerResult !== undefined);
+  await waitUntil(
+    () =>
+      pickerResult !== undefined &&
+      document.querySelector('[data-cgptx-native-color-picker]') === null,
+  );
   check(
     pickerResult === pickerPreview &&
       document.querySelector('[data-cgptx-native-color-picker]') === null,
     'clicking outside returns the live selected color and dismisses the picker',
     { pickerPreview, pickerResult },
   );
-  let cancelledPickerSettled = false;
-  let cancelledPickerResult = '#pending';
-  const cancelledPicker = globalThis.__CGPTX_HOST__._debug.openColorPicker({
-    initialColor: '#53B559',
-    title: 'Cancelled API UI color',
-    onChange() {},
-  });
-  void cancelledPicker.result.then((color) => {
-    cancelledPickerSettled = true;
-    cancelledPickerResult = color;
-  });
-  await waitUntil(() =>
-    Boolean(document.querySelector('[data-cgptx-native-color-picker]')),
-  );
-  document.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'Escape',
-    bubbles: true,
-    cancelable: true,
-  }));
-  await waitUntil(() => cancelledPickerSettled);
+  const cancelledPickerResults = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let settled = false;
+    let result = '#pending';
+    const cancelledPicker = globalThis.__CGPTX_HOST__._debug.openColorPicker({
+      initialColor: '#53B559',
+      title: `Cancelled API UI color ${attempt}`,
+      onChange() {},
+    });
+    void cancelledPicker.result.then((color) => {
+      settled = true;
+      result = color;
+    });
+    await waitUntil(() => {
+      const dialog = document.querySelector(
+        '[data-cgptx-native-color-picker]',
+      );
+      return Boolean(dialog?.contains(document.activeElement));
+    });
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    try {
+      await waitUntil(
+        () =>
+          settled &&
+          document.querySelector('[data-cgptx-native-color-picker]') === null,
+      );
+    } catch (error) {
+      const dialog = document.querySelector(
+        '[data-cgptx-native-color-picker]',
+      );
+      throw new Error(
+        `color-picker cancellation ${attempt} failed: ${JSON.stringify({
+          settled,
+          result,
+          active: globalThis.__CGPTX_HOST__._debug.activeColorPicker(),
+          dialogLabel: dialog?.getAttribute('aria-label'),
+          activeElementRole: document.activeElement?.getAttribute('role'),
+          renderError: globalThis.__CGPTX_HOST__._debug.colorPickerRenderError(),
+        })}`,
+        { cause: error },
+      );
+    }
+    cancelledPickerResults.push(result);
+  }
   check(
-    cancelledPickerResult === undefined &&
-      document.querySelector('[data-cgptx-native-color-picker]') === null,
-    'Escape cancels and dismisses the native picker',
+    cancelledPickerResults.length === 3 &&
+      cancelledPickerResults.every((result) => result === undefined),
+    'Escape immediately cancels consecutive native picker sessions',
+    { cancelledPickerResults },
   );
   markProgress('color-picker');
 
@@ -2095,8 +2130,11 @@ async function validateUi(
   const settingsAppearanceGroupId = `${settingsFixtureId}.appearance-group`;
   const settingsAppearanceItemId = `${settingsFixtureId}.appearance-item`;
   const settingsToggleId = `${settingsFixtureId}.toggle`;
+  const settingsAlignedToggleId = `${settingsFixtureId}.aligned-toggle`;
   const settingsSelectId = `${settingsFixtureId}.select`;
   const settingsButtonId = `${settingsFixtureId}.button`;
+  const settingsTextFieldId = `${settingsFixtureId}.text-field`;
+  const settingsInlineId = `${settingsFixtureId}.inline`;
   const settingsBuiltInGroupId = `${settingsFixtureId}.built-in-group`;
   const settingsBuiltInItemId = `${settingsFixtureId}.built-in-item`;
   const settingsProfileGroupId = `${settingsFixtureId}.profile-group`;
@@ -2105,12 +2143,14 @@ async function validateUi(
   const settingsObserverReplayId = `${settingsObserverId}.replay`;
   let settingsApi;
   let settingsToggleChecked = false;
+  let settingsAlignedToggleChecked = false;
   let settingsSelectedValue = 'first';
+  let settingsTextValue = 'Initial value';
   let settingsButtonClicks = 0;
   let settingsBuiltInOverrideItemId;
   let settingsBuiltInOverrideClicks = 0;
   let settingsItemRegistration;
-  globalThis.__CGPTX_HOST__.registerExtension(settingsFixtureId, {
+  globalThis.__CGPTX_HOST__.registerExtensionSettings(settingsFixtureId, {
     activate(api) {
       settingsApi = api.settings;
       const settingsBuiltInOverrideControl = settingsApi.ui.button({
@@ -2266,10 +2306,25 @@ async function validateUi(
               id: settingsToggleId,
               label: 'Settings fixture toggle',
               description: 'settings-item-marker',
+              destination: {
+                paneId: settingsSecondPaneId,
+                itemId: settingsSecondItemId,
+              },
               control: settingsApi.ui.toggle({
                 checked: settingsToggleChecked,
                 onChange(checked) {
                   settingsToggleChecked = checked;
+                  settingsItemRegistration.invalidate();
+                },
+              }),
+            },
+            {
+              id: settingsAlignedToggleId,
+              label: 'Settings aligned toggle',
+              control: settingsApi.ui.toggle({
+                checked: settingsAlignedToggleChecked,
+                onChange(checked) {
+                  settingsAlignedToggleChecked = checked;
                   settingsItemRegistration.invalidate();
                 },
               }),
@@ -2300,11 +2355,45 @@ async function validateUi(
                 },
               }),
             },
+            {
+              id: settingsTextFieldId,
+              label: 'Settings fixture text',
+              keywords: ['settings-text-field-marker'],
+              control: settingsApi.ui.textField({
+                value: settingsTextValue,
+                placeholder: 'Type a fixture value',
+                onChange(value) {
+                  settingsTextValue = value;
+                  settingsItemRegistration.invalidate();
+                },
+              }),
+            },
+            {
+              id: settingsInlineId,
+              label: 'Settings fixture inline controls',
+              control: settingsApi.ui.inline([
+                settingsApi.ui.textField({
+                  value: settingsTextValue,
+                  placeholder: 'Inline fixture value',
+                  onChange(value) {
+                    settingsTextValue = value;
+                    settingsItemRegistration.invalidate();
+                  },
+                }),
+                settingsApi.ui.button({
+                  label: 'Reset fixture',
+                  onClick() {
+                    settingsTextValue = 'Reset value';
+                    settingsItemRegistration.invalidate();
+                  },
+                }),
+              ]),
+            },
           ];
         },
       );
     },
-  });
+  }, settingsSecondPaneId);
 
   let settingsObserverFoundControl = false;
   let settingsObserverHandlerCount = -1;
@@ -2359,6 +2448,30 @@ async function validateUi(
       foundControl: settingsObserverFoundControl,
       exposedHandlerCount: settingsObserverHandlerCount,
       invokedOwner: settingsObserverInvokedOwner,
+    },
+  );
+
+  const untouchedPersonalizationOpened = await settingsApi.open(
+    'codex.settings.personalization',
+  );
+  await sleep(100);
+  const untouchedPersonalizationRenderCount =
+    globalThis.__CGPTX_HOST__._debug.settingsState()
+      .contentBoundaryRenderCount;
+  await sleep(250);
+  const untouchedPersonalizationState =
+    globalThis.__CGPTX_HOST__._debug.settingsState();
+  check(
+    untouchedPersonalizationOpened &&
+      untouchedPersonalizationState.currentPaneId ===
+        'codex.settings.personalization' &&
+      untouchedPersonalizationState.contentBoundaryRenderCount ===
+        untouchedPersonalizationRenderCount,
+    'an untouched native settings pane settles without a render or memory loop',
+    {
+      before: untouchedPersonalizationRenderCount,
+      after: untouchedPersonalizationState.contentBoundaryRenderCount,
+      state: untouchedPersonalizationState,
     },
   );
 
@@ -3021,12 +3134,38 @@ async function validateUi(
   await waitUntil(() => document.getElementById(settingsToggleId) != null);
   const settingsToggleRow = document.getElementById(settingsToggleId);
   const settingsToggle = settingsToggleRow?.querySelector('[role="switch"]');
+  const settingsAlignedToggle = document
+    .getElementById(settingsAlignedToggleId)
+    ?.querySelector('[role="switch"]');
   const settingsSelect = document
     .getElementById(settingsSelectId)
     ?.querySelector('button');
   const settingsButton = Array.from(
     document.getElementById(settingsButtonId)?.querySelectorAll('button') ?? [],
   ).find((button) => button.textContent?.trim() === 'Run fixture');
+  const settingsTextField = document
+    .getElementById(settingsTextFieldId)
+    ?.querySelector('input');
+  const settingsInlineRow = document.getElementById(settingsInlineId);
+  const settingsInlineControls = settingsInlineRow?.querySelector(
+    '[data-cgptx-settings-inline="true"]',
+  );
+  const settingsInlineTextField = settingsInlineControls?.querySelector('input');
+  const settingsInlineButton = Array.from(
+    settingsInlineControls?.querySelectorAll('button') ?? [],
+  ).find((button) => button.textContent?.trim() === 'Reset fixture');
+  const settingsDisclosure = settingsToggleRow?.querySelector(
+    '[data-cgptx-settings-disclosure="true"]',
+  );
+  const settingsDisclosurePlaceholder = document
+    .getElementById(settingsAlignedToggleId)
+    ?.querySelector('[data-cgptx-settings-disclosure-placeholder="true"]');
+  const settingsDestinationLabel = settingsToggleRow?.querySelector(
+    '[data-cgptx-settings-destination-text="label"]',
+  );
+  const settingsDestinationDescription = settingsToggleRow?.querySelector(
+    '[data-cgptx-settings-destination-text="description"]',
+  );
   const settingsObserverReplay = document
     .getElementById(settingsObserverReplayId)
     ?.querySelector('[role="switch"]');
@@ -3045,9 +3184,35 @@ async function validateUi(
   );
   check(
     settingsToggle?.getAttribute('aria-checked') === 'false' &&
+      settingsAlignedToggle?.getAttribute('aria-checked') === 'false' &&
       Boolean(settingsSelect) &&
-      Boolean(settingsButton),
-    'custom settings rows render native toggle, select, and button controls',
+      Boolean(settingsButton) &&
+      settingsTextField?.value === 'Initial value' &&
+      settingsTextField.placeholder === 'Type a fixture value' &&
+      settingsInlineTextField?.value === 'Initial value' &&
+      Boolean(settingsInlineButton) &&
+      settingsInlineTextField
+        ?.closest('span')
+        ?.nextElementSibling?.contains(settingsInlineButton) === true,
+    'custom settings rows render native controls and preserve inline control order',
+  );
+  check(
+    Boolean(settingsDisclosure) &&
+      Boolean(settingsDisclosurePlaceholder) &&
+      settingsDestinationLabel?.className.includes('cursor-interaction') &&
+      settingsDestinationDescription?.className.includes('cursor-interaction') &&
+      settingsDisclosurePlaceholder?.tagName === 'BUTTON' &&
+      settingsDisclosurePlaceholder.querySelector('svg') !== null &&
+      getComputedStyle(settingsDisclosurePlaceholder).opacity === '0' &&
+      Math.abs(
+        (settingsDisclosure?.getBoundingClientRect().width ?? 0) -
+          (settingsDisclosurePlaceholder?.getBoundingClientRect().width ?? 1),
+      ) < 1 &&
+      Math.abs(
+        (settingsToggle?.getBoundingClientRect().x ?? 0) -
+          (settingsAlignedToggle?.getBoundingClientRect().x ?? 1),
+      ) < 1,
+    'an invisible native disclosure reserves exact sibling width and aligns controls',
   );
   check(
     document.getElementById(settingsObserverReplayId) != null &&
@@ -3084,12 +3249,46 @@ async function validateUi(
         ?.textContent?.trim() === 'Default/None',
   );
   invokeNativeButton(settingsButton);
+  const textValueSetter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    'value',
+  )?.set;
+  textValueSetter.call(settingsTextField, 'Updated value');
+  settingsTextField.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  await waitUntil(() => settingsTextValue === 'Updated value');
   check(
     settingsToggleChecked &&
       settingsSelectedValue === '' &&
       emptyValueOption != null &&
-      settingsButtonClicks === 1,
-    'native settings controls accept empty select values, call handlers, and invalidate state',
+      settingsButtonClicks === 1 &&
+      document
+        .getElementById(settingsTextFieldId)
+        ?.querySelector('input')?.value === 'Updated value',
+    'native settings controls accept input values, call handlers, and invalidate state',
+  );
+  invokeNativeButton(settingsInlineButton);
+  await waitUntil(
+    () =>
+      document
+        .getElementById(settingsInlineId)
+        ?.querySelector('input')?.value === 'Reset value',
+  );
+  check(
+    settingsTextValue === 'Reset value',
+    'a native control inside an inline group calls its owner handler',
+  );
+
+  settingsDestinationLabel.dispatchEvent(
+    new MouseEvent('click', { bubbles: true }),
+  );
+  await waitUntil(
+    () => document.getElementById(settingsSecondItemId) != null,
+  );
+  check(
+    document.getElementById(settingsSecondItemId)?.textContent?.includes(
+      'Second custom pane item',
+    ) === true,
+    'settings title text uses the app cursor preference and opens its destination',
   );
 
   const secondCustomPaneOpened = await settingsApi.open(settingsSecondPaneId, {
@@ -3101,14 +3300,40 @@ async function validateUi(
   const secondCustomSidebarRow = document.querySelector(
     `button[data-settings-panel-slug="${settingsSecondPaneId}"]`,
   );
+  const extensionsSidebarRow = document.querySelector(
+    'button[data-settings-panel-slug="extensions.installed"]',
+  );
+  const extensionSettingsBreadcrumb = document.querySelector(
+    'nav[aria-label="Breadcrumb"]',
+  );
   check(
     secondCustomPaneOpened &&
       document.getElementById(settingsSecondItemId)?.textContent?.includes(
         'Second custom pane item',
       ) &&
-      secondCustomSidebarRow?.getAttribute('aria-current') === 'page' &&
+      secondCustomSidebarRow === null &&
+      extensionsSidebarRow?.getAttribute('aria-current') === 'page' &&
+      extensionSettingsBreadcrumb?.textContent?.includes('Extensions') &&
+      extensionSettingsBreadcrumb?.textContent?.includes(
+        'Second Settings UI Fixture',
+      ) &&
       firstCustomSidebarRow?.getAttribute('aria-current') !== 'page',
-    'a custom pane deep link updates content and sidebar selection',
+    'an extension settings deep link hides its sidebar row, selects Extensions, and shows the native breadcrumb',
+  );
+  const extensionSettingsBackButton = Array.from(
+    extensionSettingsBreadcrumb?.querySelectorAll('button') ?? [],
+  ).find((button) => button.textContent?.includes('Extensions'));
+  extensionSettingsBackButton?.click();
+  await waitUntil(
+    () =>
+      extensionsSidebarRow?.getAttribute('aria-current') === 'page' &&
+      document.body.textContent?.includes(
+        'Shows installed extensions and controls whether they load at ChatGPT startup.',
+      ),
+  );
+  check(
+    Boolean(extensionSettingsBackButton),
+    'the native extension settings breadcrumb returns to Extensions',
   );
   const sharedPaneScrolls = [];
   const sharedPaneScrollIntoView = Element.prototype.scrollIntoView;
@@ -4019,6 +4244,7 @@ async function validateUi(
     'settings-pane-marker',
     'settings-group-marker',
     'settings-item-marker',
+    'settings-text-field-marker',
   ];
   const searchableLevels = [];
   for (const marker of searchMarkers) {
@@ -4038,6 +4264,24 @@ async function validateUi(
   check(
     Boolean(extensionTitleResult) && Boolean(extensionDescriptionResult),
     'Extensions settings search indexes installed package titles and descriptions',
+  );
+
+  await setSettingsSearch('Reaction emojis');
+  const reactionSettingsResult = settingsSearchResult('Reactions');
+  check(
+    Boolean(reactionSettingsResult),
+    'settings search finds the Reactions extension settings',
+  );
+  reactionSettingsResult?.click();
+  await waitUntil(() =>
+    Array.from(document.querySelectorAll('input')).some(
+      (input) => input.id !== 'settings-search' && input.value === '👍👎🤔🤬',
+    ),
+  );
+  check(
+    document.body.textContent?.includes('Reset to defaults') &&
+      document.body.textContent?.includes('Choose the reactions shown for selected text.'),
+    'the Reactions search result opens its native field and reset action',
   );
 
   await setSettingsSearch('settings-item-marker');

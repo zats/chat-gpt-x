@@ -20,8 +20,21 @@ function readExtensionEntries({
   versions,
   extensionsDirectory,
 }) {
+  return readExtensionLaunch({
+    configurationFile,
+    versions,
+    extensionsDirectory,
+  }).extensions;
+}
+
+function readExtensionLaunch({
+  configurationFile,
+  versions,
+  extensionsDirectory,
+}) {
   if (!configurationFile) {
-    return listInstalledExtensions(extensionsDirectory, versions)
+    const installed = listInstalledExtensions(extensionsDirectory, versions);
+    const extensions = installed
       .filter((extension) => extension.enabled)
       .map((extension) => ({
         id: extension.id,
@@ -32,6 +45,20 @@ function readExtensionEntries({
           "contents/main.js",
         ),
       }));
+    const settings = readExtensionSettingsEntries(
+      extensionsDirectory,
+      versions,
+    );
+    return Object.freeze({
+      extensions: Object.freeze(extensions),
+      settings: Object.freeze(settings),
+      storageExtensionIds: Object.freeze([
+        ...new Set([
+          ...extensions.map((extension) => extension.id),
+          ...settings.map((extension) => extension.id),
+        ]),
+      ]),
+    });
   }
 
   let parsed;
@@ -45,32 +72,85 @@ function readExtensionEntries({
 
   if (
     !hasExactKeys(parsed, ["schemaVersion", "extensions"]) ||
-    parsed.schemaVersion !== 1 ||
+    parsed.schemaVersion !== 3 ||
     !Array.isArray(parsed.extensions)
   ) {
     throw new Error("Invalid ChatGPTX launch configuration");
   }
 
   const ids = new Set();
-  return parsed.extensions.map((extension) => {
+  const settings = [];
+  const storageExtensionIds = [];
+  const extensions = parsed.extensions.flatMap((extension) => {
     if (
-      !hasExactKeys(extension, ["id", "path"]) ||
+      !hasExactKeys(
+        extension,
+        extension?.settingsPath === undefined
+          ? ["enabled", "id", "path"]
+          : [
+              "enabled",
+              "id",
+              "path",
+              "settingsPaneId",
+              "settingsPath",
+            ],
+      ) ||
       typeof extension.id !== "string" ||
       !extensionIdPattern.test(extension.id) ||
       ids.has(extension.id) ||
+      typeof extension.enabled !== "boolean" ||
       typeof extension.path !== "string" ||
-      !path.isAbsolute(extension.path)
+      !path.isAbsolute(extension.path) ||
+      (extension.settingsPath !== undefined &&
+        (typeof extension.settingsPath !== "string" ||
+          !path.isAbsolute(extension.settingsPath) ||
+          typeof extension.settingsPaneId !== "string" ||
+          !extension.settingsPaneId.startsWith(`${extension.id}.`) ||
+          extension.settingsPaneId.length <= extension.id.length + 1))
     ) {
       throw new Error("Invalid ChatGPTX launch extension");
     }
     ids.add(extension.id);
-    return {
+    if (extension.settingsPath !== undefined) {
+      settings.push({
+        id: extension.id,
+        paneId: extension.settingsPaneId,
+        path: extension.settingsPath,
+      });
+    }
+    if (extension.enabled || extension.settingsPath !== undefined) {
+      storageExtensionIds.push(extension.id);
+    }
+    if (!extension.enabled) return [];
+    return [{
       id: extension.id,
       configured: true,
       enabled: true,
       path: extension.path,
-    };
+    }];
   });
+  return Object.freeze({
+    extensions: Object.freeze(extensions),
+    settings: Object.freeze(settings),
+    storageExtensionIds: Object.freeze(storageExtensionIds),
+  });
+}
+
+function readExtensionSettingsEntries(extensionsDirectory, versions) {
+  return selectedExtensions(versions)
+    .map((extension) => ({
+      extension,
+      manifest: readExtensionManifest(extensionsDirectory, extension),
+    }))
+    .filter(({ manifest }) => manifest.settings)
+    .map(({ extension, manifest }) => ({
+      id: extension.id,
+      paneId: manifest.settings.pane,
+      path: path.join(
+        extensionPackageDirectory(extensionsDirectory, extension.path),
+        manifest.settings.main,
+      ),
+    }));
 }
 
 function listInstalledExtensions(extensionsDirectory, versions) {
@@ -90,6 +170,11 @@ function listInstalledExtensions(extensionsDirectory, versions) {
       version: manifest.version,
       enabled: manifest.required === true ? true : setting.enabled,
       required: manifest.required === true,
+      ...(manifest.settings
+        ? {
+            settingsPaneId: manifest.settings.pane,
+          }
+        : {}),
       path: extension.path,
     });
   });
@@ -194,6 +279,13 @@ function readExtensionManifest(extensionsDirectory, extension) {
   } catch {
     throw new Error("Invalid installed extension package: " + id);
   }
+  const settingsValid =
+    manifest?.settings === undefined ||
+    (hasExactKeys(manifest.settings, ["main", "pane"]) &&
+      manifest.settings.main === "contents/settings.js" &&
+      typeof manifest.settings.pane === "string" &&
+      manifest.settings.pane.startsWith(`${id}.`) &&
+      manifest.settings.pane.length > id.length + 1);
   if (
     !manifest ||
     typeof manifest !== "object" ||
@@ -204,7 +296,8 @@ function readExtensionManifest(extensionsDirectory, extension) {
     typeof manifest.description !== "string" ||
     !semanticVersionPattern.test(manifest.version) ||
     manifest.main !== "contents/main.js" ||
-    (manifest.required !== undefined && typeof manifest.required !== "boolean")
+    (manifest.required !== undefined && typeof manifest.required !== "boolean") ||
+    !settingsValid
   ) {
     throw new Error("Invalid installed extension package: " + id);
   }
@@ -280,5 +373,7 @@ function hasExactKeys(value, keys) {
 module.exports = {
   listInstalledExtensions,
   readExtensionEntries,
+  readExtensionLaunch,
+  readExtensionSettingsEntries,
   setExtensionEnabled,
 };

@@ -44,7 +44,7 @@ describe("reactions extension", () => {
     expect(parent.kind).toBe("action");
     if (parent.kind !== "action") throw new Error("React action is missing");
     expect(parent.items?.map((item) => item.label)).toEqual(
-      REACTIONS.map((reaction) => reaction.emoji),
+      REACTIONS,
     );
     expect(parent.items?.map((item) => item.labelScale)).toEqual(
       REACTIONS.map(() => 2),
@@ -56,16 +56,43 @@ describe("reactions extension", () => {
     parent.items?.[0]?.onClick?.({ metaKey: false });
     await Promise.resolve();
     expect(createResponseAnnotation).toHaveBeenCalledWith(
-      `User reacted with ${REACTIONS[0].emoji}`,
+      `User reacted with ${REACTIONS[0]}`,
       { submit: false },
     );
 
     parent.items?.[1]?.onClick?.({ metaKey: true });
     await Promise.resolve();
     expect(createResponseAnnotation).toHaveBeenLastCalledWith(
-      `User reacted with ${REACTIONS[1].emoji}`,
+      `User reacted with ${REACTIONS[1]}`,
       { submit: true },
     );
+  });
+
+  test("uses the configured emoji sequence", () => {
+    const context: AssistantSelectionContext = Object.freeze({
+      selectedText: "Selected",
+      async createResponseAnnotation() {},
+    });
+    const items: readonly AssistantSelectionMenuItem[] = [
+      {
+        kind: "action",
+        id: "selectedTextOverlay.addToCodex",
+        label: "Add to chat",
+        origin: "app",
+      },
+    ];
+
+    const transformed = transformAssistantSelectionItems(items, context, [
+      "🎉",
+      "👨‍👩‍👧‍👦",
+    ]);
+    const parent = transformed[1];
+    expect(parent?.kind).toBe("action");
+    if (parent?.kind !== "action") throw new Error("React action is missing");
+    expect(parent.items?.map((item) => item.label)).toEqual([
+      "🎉",
+      "👨‍👩‍👧‍👦",
+    ]);
   });
 
   test("keeps the menu unchanged when Add to chat is unavailable", () => {

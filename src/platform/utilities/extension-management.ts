@@ -13,6 +13,7 @@ export interface InstalledExtension {
   readonly version: string;
   readonly enabled: boolean;
   readonly required: boolean;
+  readonly settingsPaneId?: string;
 }
 
 export interface ExtensionManagement {
@@ -52,7 +53,11 @@ function normalizeExtensions(value: unknown): readonly InstalledExtension[] {
         !("enabled" in entry) ||
         typeof entry.enabled !== "boolean" ||
         !("required" in entry) ||
-        typeof entry.required !== "boolean"
+        typeof entry.required !== "boolean" ||
+        ("settingsPaneId" in entry &&
+          entry.settingsPaneId !== undefined &&
+          (typeof entry.settingsPaneId !== "string" ||
+            !entry.settingsPaneId.startsWith(`${entry.id}.`)))
       ) {
         throw new TypeError("Invalid installed extension listing");
       }
@@ -64,6 +69,8 @@ function normalizeExtensions(value: unknown): readonly InstalledExtension[] {
         version: entry.version,
         enabled: entry.enabled,
         required: entry.required,
+        settingsPaneId:
+          "settingsPaneId" in entry ? entry.settingsPaneId : undefined,
       });
     }),
   );

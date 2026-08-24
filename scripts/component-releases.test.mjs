@@ -191,7 +191,7 @@ test("marks only consumers of the changed utility module", () => {
       repositoryRoot,
       new Set(["src/platform/utilities/extension-storage.ts"]),
     ).sort(),
-    ["multiple-accounts", "thread-colors"],
+    ["multiple-accounts", "reactions", "thread-colors"],
   );
 });
 

@@ -130,6 +130,30 @@ function run() {
         ],
         { cwd: repositoryRoot, stdio: "inherit" },
       );
+      const manifest = JSON.parse(
+        readFileSync(path.join(sourceRoot, "package.json"), "utf8"),
+      );
+      if (manifest.settings) {
+        if (
+          manifest.settings.main !== "contents/settings.js" ||
+          typeof manifest.settings.pane !== "string" ||
+          !manifest.settings.pane.startsWith(`${extension.id}.`) ||
+          manifest.settings.pane.length <= extension.id.length + 1
+        ) {
+          throw new Error(`Invalid settings metadata for ${extension.id}`);
+        }
+        execFileSync(
+          "bun",
+          [
+            "build",
+            path.join(sourceRoot, "settings.ts"),
+            "--target=browser",
+            "--format=cjs",
+            `--outfile=${path.join(contents, "settings.js")}`,
+          ],
+          { cwd: repositoryRoot, stdio: "inherit" },
+        );
+      }
       artifacts.push(archive(stage, outputPath, extension, { writesIndex }));
     }
   } finally {

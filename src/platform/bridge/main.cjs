@@ -35,7 +35,7 @@ function init() {
   } = require("../runtime/codex-paths.cjs");
   const {
     listInstalledExtensions,
-    readExtensionEntries,
+    readExtensionLaunch,
     setExtensionEnabled,
   } = require("../runtime/extension-launch-config.cjs");
   const {
@@ -44,6 +44,7 @@ function init() {
     isAuthorizedExtensionManagerEntry,
     orderExtensionEntries,
     wrapExtensionSource,
+    wrapExtensionSettingsSource,
   } = require("../runtime/extension-manager-authorization.cjs");
 
   const CODEX_HOME = resolveCodexHome();
@@ -225,15 +226,31 @@ function init() {
           "contents/main.js",
         )
       : null;
-    const extensionEntries = orderExtensionEntries(
-      readExtensionEntries({
+    const launch = readExtensionLaunch({
         configurationFile: LAUNCH_CONFIGURATION_FILE,
         versions,
         extensionsDirectory: STATE_DIR,
-      }),
+      });
+    const extensionEntries = orderExtensionEntries(
+      launch.extensions,
       extensionManagerPath,
     );
-    const extensions = extensionEntries
+    const settingsEntries = launch.settings;
+    const orderedEntries = [
+      ...extensionEntries.filter((entry) =>
+        isAuthorizedExtensionManagerEntry(entry, extensionManagerPath),
+      ),
+      ...settingsEntries.map((entry) => ({
+        ...entry,
+        enabled: true,
+        settings: true,
+      })),
+      ...extensionEntries.filter(
+        (entry) =>
+          !isAuthorizedExtensionManagerEntry(entry, extensionManagerPath),
+      ),
+    ];
+    const extensions = orderedEntries
       .filter((entry) => entry && entry.enabled && entry.id && entry.path)
       .map((entry) => {
         try {
@@ -241,15 +258,21 @@ function init() {
           log("extension-loaded", { id: entry.id, path: entry.path });
           return {
             id: entry.id,
-            wrapped: wrapExtensionSource({
-              id: entry.id,
-              code,
-              managerAuthorization: extensionManagerAuthorization,
-              managerAuthorized: isAuthorizedExtensionManagerEntry(
-                entry,
-                extensionManagerPath,
-              ),
-            }),
+            wrapped: entry.settings
+              ? wrapExtensionSettingsSource({
+                  id: entry.id,
+                  paneId: entry.paneId,
+                  code,
+                })
+              : wrapExtensionSource({
+                  id: entry.id,
+                  code,
+                  managerAuthorization: extensionManagerAuthorization,
+                  managerAuthorized: isAuthorizedExtensionManagerEntry(
+                    entry,
+                    extensionManagerPath,
+                  ),
+                }),
           };
         } catch (error) {
           log("extension-unreadable", { id: entry.id, error: String(error) });
@@ -257,7 +280,7 @@ function init() {
         }
       })
       .filter(Boolean);
-    const enabledExtensionIds = new Set(extensions.map((extension) => extension.id));
+    const enabledExtensionIds = new Set(launch.storageExtensionIds);
 
     function assertAppSender(event) {
       if (!event.sender.getURL().startsWith("app:")) {

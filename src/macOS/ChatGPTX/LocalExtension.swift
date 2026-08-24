@@ -1,8 +1,25 @@
 import Foundation
 
-struct LaunchExtension: Codable, Equatable {
+struct LaunchExtension: Encodable, Equatable {
     let id: String
     let path: String
+    let enabled: Bool
+    let settingsPath: String?
+    let settingsPaneId: String?
+
+    init(
+        id: String,
+        path: String,
+        enabled: Bool = true,
+        settingsPath: String? = nil,
+        settingsPaneId: String? = nil
+    ) {
+        self.id = id
+        self.path = path
+        self.enabled = enabled
+        self.settingsPath = settingsPath
+        self.settingsPaneId = settingsPaneId
+    }
 }
 
 private struct LocalExtensionManifest: Decodable {
@@ -10,6 +27,7 @@ private struct LocalExtensionManifest: Decodable {
     let version: String
     let main: String
     let compatibility: ExtensionCompatibility
+    let settings: ExtensionSettingsPackageManifest?
 }
 
 enum LocalExtensionResolver {
@@ -73,6 +91,27 @@ enum LocalExtensionResolver {
         guard fileManager.fileExists(atPath: mainURL.path) else {
             throw LocalExtensionError.pathMissing(mainURL.path)
         }
+        let settingsURL: URL?
+        if let settings = manifest.settings {
+            guard settings.main == "contents/settings.js",
+                settings.pane.hasPrefix("\(manifest.id)."),
+                settings.pane.count > manifest.id.count + 1
+            else {
+                throw LocalExtensionError.manifestInvalid(
+                    packageURL.path,
+                    CocoaError(.fileReadCorruptFile)
+                )
+            }
+            let resolved = packageRoot
+                .appendingPathComponent(settings.main)
+                .standardizedFileURL
+            guard fileManager.fileExists(atPath: resolved.path) else {
+                throw LocalExtensionError.pathMissing(resolved.path)
+            }
+            settingsURL = resolved
+        } else {
+            settingsURL = nil
+        }
         guard try ComponentCompatibility.matches(
             manifest.compatibility,
             chatgptAPIVersion: chatgptAPIVersion
@@ -83,7 +122,12 @@ enum LocalExtensionResolver {
             )
         }
 
-        return LaunchExtension(id: manifest.id, path: mainURL.path)
+        return LaunchExtension(
+            id: manifest.id,
+            path: mainURL.path,
+            settingsPath: settingsURL?.path,
+            settingsPaneId: manifest.settings?.pane
+        )
     }
 }
 

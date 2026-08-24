@@ -822,6 +822,18 @@ export interface SettingsItem {
   /** Native control rendered at the trailing edge of the row. */
   readonly control?: SettingsControl;
 
+  /**
+   * Native disclosure navigation shown beside the trailing control.
+   *
+   * Activating the label, description, or disclosure opens the effective pane
+   * through ChatGPT's native Settings route and optionally scrolls to one row.
+   * The trailing control remains independent. When any row in a group has a
+   * destination, the binding reserves the same disclosure width for every
+   * sibling row so their trailing controls stay horizontally aligned. A
+   * destination that is not currently effective does nothing.
+   */
+  readonly destination?: SettingsItemDestination;
+
   /** Extra native settings-search terms for this row. */
   readonly keywords?: readonly string[];
 
@@ -830,6 +842,15 @@ export interface SettingsItem {
    * use this value as ownership authority.
    */
   readonly origin?: "app" | string;
+}
+
+/** Native Settings destination for one disclosure row. @group Settings */
+export interface SettingsItemDestination {
+  /** Effective pane to open. */
+  readonly paneId: string;
+
+  /** Optional pane-unique row to scroll into view. */
+  readonly itemId?: string;
 }
 
 /** Options for {@link SettingsApi.open}. @group Settings */
@@ -856,9 +877,10 @@ export interface SettingsControl {
 /**
  * Factories for standard native controls used in ChatGPT settings rows.
  *
- * The returned values are opaque and can only be used as a
- * {@link SettingsItem.control}. Factories do not create DOM or expose React.
- * Callback failures are isolated and logged.
+ * The returned values are opaque. Use one as a {@link SettingsItem.control}
+ * or combine controls from the same extension with {@link inline}. Factories
+ * do not create DOM or expose React. Callback failures are isolated and
+ * logged.
  *
  * @group Settings
  */
@@ -871,6 +893,18 @@ export interface SettingsUiApi {
 
   /** Create ChatGPT's native settings button. */
   button(options: SettingsButtonOptions): SettingsControl;
+
+  /** Create ChatGPT's native controlled single-line text field. */
+  textField(options: SettingsTextFieldOptions): SettingsControl;
+
+  /**
+   * Render one or more controls in order at the trailing edge of one row.
+   *
+   * Every child must be a non-composite control created by this extension.
+   * Empty and nested groups are invalid. ChatGPT's native controls keep their
+   * normal focus, keyboard, state, animation, and accessibility behavior.
+   */
+  inline(controls: readonly SettingsControl[]): SettingsControl;
 }
 
 /**
@@ -954,6 +988,30 @@ export interface SettingsButtonOptions {
 
   /** Called after native activation. */
   readonly onClick: () => void | Promise<void>;
+}
+
+/**
+ * Options for a native controlled single-line settings text field.
+ *
+ * The extension owns validation and durable storage. The native field calls
+ * `onChange` after each user edit. Update the controlled value and invalidate
+ * the owning settings registration to render the new state. Callback failures
+ * are isolated and logged like other Settings controls.
+ *
+ * @group Settings
+ */
+export interface SettingsTextFieldOptions {
+  /** Current controlled text. */
+  readonly value: string;
+
+  /** Placeholder shown when the value is empty. */
+  readonly placeholder?: string;
+
+  /** Disable native pointer and keyboard interaction. */
+  readonly disabled?: boolean;
+
+  /** Called with the complete next text after a native input change. */
+  readonly onChange: (value: string) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

@@ -379,31 +379,42 @@ launch_app() {
     local launch_configuration=""
     if [[ "$mode" == "composition" ]]; then
       launch_configuration="$WORK_ROOT/$name-launch.json"
-      jq \
-        --arg root "$CODEX_ROOT/extensions" \
-        --arg apiTest "$LOCAL_API_TEST_ROOT/contents/main.js" \
-        --slurpfile versions "$versions_lock" \
-        --slurpfile settings "$CODEX_ROOT/extensions/settings.json" \
-        -n \
-        '{
-          schemaVersion: 1,
-          extensions: (
-            [
-              $versions[0].extensions[]
-              | select(
-                  .required
-                  or $settings[0].extensions[.id].enabled
-                )
-              | {
-                  id,
-                  path: ($root + "/" + .path + "/contents/main.js")
-                }
-            ]
-            | sort_by(.id)
-            + [{id: "api-test-suite", path: $apiTest}]
-          )
-        }' \
-        > "$launch_configuration"
+      node - \
+        "$versions_lock" \
+        "$CODEX_ROOT/extensions/settings.json" \
+        "$CODEX_ROOT/extensions" \
+        "$LOCAL_API_TEST_ROOT/contents/main.js" \
+        "$launch_configuration" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [versionsFile, settingsFile, root, apiTest, output] =
+  process.argv.slice(2);
+const versions = JSON.parse(fs.readFileSync(versionsFile, "utf8"));
+const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
+const extensions = versions.extensions.map((extension) => {
+  const packageRoot = path.join(root, extension.path);
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
+  );
+  return {
+    id: extension.id,
+    path: path.join(packageRoot, "contents/main.js"),
+    enabled:
+      extension.required || settings.extensions[extension.id].enabled,
+    ...(manifest.settings
+      ? {
+          settingsPath: path.join(packageRoot, manifest.settings.main),
+          settingsPaneId: manifest.settings.pane,
+        }
+      : {}),
+  };
+});
+extensions.push({ id: "api-test-suite", path: apiTest, enabled: true });
+fs.writeFileSync(
+  output,
+  `${JSON.stringify({ schemaVersion: 3, extensions }, null, 2)}\n`,
+);
+NODE
       chmod 600 "$launch_configuration"
     fi
     env HOME="$TEST_HOME" CODEX_HOME="$CODEX_ROOT" \
@@ -682,7 +693,9 @@ SQL
 run_logged unit-tests bun test \
   "$REPO_ROOT/src/extensions/extensions/extensions.test.ts" \
   "$REPO_ROOT/src/extensions/multiple-accounts/multiple-accounts.test.ts" \
+  "$REPO_ROOT/src/extensions/reactions/reaction-settings.test.ts" \
   "$REPO_ROOT/src/extensions/reactions/reactions.test.ts" \
+  "$REPO_ROOT/src/extensions/reactions/settings.test.ts" \
   "$REPO_ROOT/src/extensions/thread-colors/thread-colors.test.ts" \
   "$REPO_ROOT/src/platform/utilities/extension-management.test.ts" \
   "$REPO_ROOT/src/platform/utilities/extension-storage.test.ts"

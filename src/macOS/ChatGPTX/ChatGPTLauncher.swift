@@ -510,19 +510,8 @@ struct ChatGPTLauncher {
             selectedExtensions = [apiTestExtension]
         } else {
             selectedExtensions = Self.merge(
-                installedExtensions: componentStore.extensions
-                    .filter(\.enabled)
-                    .map {
-                    LaunchExtension(
-                        id: $0.id,
-                        path: componentStore.rootURL
-                            .appendingPathComponent(
-                                $0.path,
-                                isDirectory: true
-                            )
-                            .appendingPathComponent("contents/main.js")
-                            .path
-                    )
+                installedExtensions: try componentStore.extensions.map {
+                    try installedLaunchExtension($0)
                 },
                 localExtensions: localExtensions
             )
@@ -541,7 +530,7 @@ struct ChatGPTLauncher {
         )
         let data = try JSONEncoder().encode(
             LaunchConfiguration(
-                schemaVersion: 1,
+                schemaVersion: 3,
                 extensions: selectedExtensions
             )
         )
@@ -551,6 +540,34 @@ struct ChatGPTLauncher {
             ofItemAtPath: configurationURL.path
         )
         return configurationURL
+    }
+
+    private func installedLaunchExtension(
+        _ extensionComponent: StoredExtension
+    ) throws -> LaunchExtension {
+        let packageRoot = componentStore.rootURL.appendingPathComponent(
+            extensionComponent.path,
+            isDirectory: true
+        )
+        let manifest = try JSONDecoder().decode(
+            ExtensionPackageManifest.self,
+            from: Data(
+                contentsOf: packageRoot.appendingPathComponent(
+                    "package.json"
+                )
+            )
+        )
+        return LaunchExtension(
+            id: extensionComponent.id,
+            path: packageRoot.appendingPathComponent(
+                "contents/main.js"
+            ).path,
+            enabled: extensionComponent.enabled,
+            settingsPath: manifest.settings.map {
+                packageRoot.appendingPathComponent($0.main).path
+            },
+            settingsPaneId: manifest.settings?.pane
+        )
     }
 
     private func launchVersionsLock() throws -> URL {
