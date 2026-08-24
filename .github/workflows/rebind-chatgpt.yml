@@ -362,8 +362,6 @@ jobs:
           done < "$RUNNER_TEMP/previous-binding-paths.txt"
           git diff --binary "$candidate_parent" "$candidate_head" -- \
             "$binding_root" \
-            src/platform/bindings/manifest.json \
-            updates/latest.json \
             > "$RUNNER_TEMP/previous-binding.patch"
           [[ -s "$RUNNER_TEMP/previous-binding.patch" ]] || {
             echo "Previous generated binding patch is empty." >&2

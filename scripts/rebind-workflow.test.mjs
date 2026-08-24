@@ -44,15 +44,29 @@ test("issue retries seed the prior generated patch and failure evidence", () => 
     "- name: Seed retry from previous candidate branch",
   );
   const agent = workflow.indexOf("- name: Run Codex rebind agent");
+  const seedBlock = workflow.slice(seed, agent);
 
   assert.notEqual(seed, -1);
   assert.ok(seed < agent);
-  assert.match(
-    workflow.slice(seed, agent),
-    /git diff --binary "\$candidate_parent" "\$candidate_head"/,
+  const retryPatchStart = seedBlock.indexOf(
+    'git diff --binary "$candidate_parent" "$candidate_head"',
   );
+  const retryPatchEnd = seedBlock.indexOf(
+    '> "$RUNNER_TEMP/previous-binding.patch"',
+    retryPatchStart,
+  );
+  assert.notEqual(retryPatchStart, -1);
+  assert.notEqual(retryPatchEnd, -1);
+  const retryPatch = seedBlock.slice(
+    retryPatchStart,
+    retryPatchEnd +
+      '> "$RUNNER_TEMP/previous-binding.patch"'.length,
+  );
+  assert.match(retryPatch, /"\$binding_root"/);
+  assert.doesNotMatch(retryPatch, /src\/platform\/bindings\/manifest\.json/);
+  assert.doesNotMatch(retryPatch, /updates\/latest\.json/);
   assert.match(
-    workflow.slice(seed, agent),
+    seedBlock,
     /actions\/jobs\/\$failed_job_id\/logs/,
   );
   assert.match(
