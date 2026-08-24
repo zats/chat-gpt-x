@@ -61,6 +61,7 @@ jobs:
           node --check scripts/component-releases.mjs
           node --check scripts/filter-unpublished-component-releases.mjs
           node --check scripts/materialize-ci-auth.mjs
+          node --check scripts/protected-ci-run-state.mjs
           node --check scripts/retry-transient-rebind-failure.mjs
           node --check scripts/stage-local-component-store.mjs
           node --check scripts/suppress-optional-product-ui.mjs
@@ -78,8 +79,10 @@ jobs:
           node --test scripts/component-releases.test.mjs
           node --test scripts/filter-unpublished-component-releases.test.mjs
           node --test scripts/materialize-ci-auth.test.mjs
+          node --test scripts/protected-ci-run-state.test.mjs
           node --test scripts/rebind-workflow.test.mjs
           node --test scripts/retry-transient-rebind-failure.test.mjs
+          node --test scripts/run-protected-ci.test.mjs
           node --test scripts/suppress-optional-product-ui.test.mjs
           node --test scripts/trigger-chatgpt-rebind.test.mjs
           node --test scripts/validate-rebind-binding.test.mjs

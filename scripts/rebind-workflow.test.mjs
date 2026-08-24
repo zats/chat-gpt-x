@@ -190,6 +190,12 @@ test("issue retry repairs publication after its binding reached main", () => {
     /scripts\/filter-unpublished-component-releases\.mjs/g,
   );
   assert.match(protectedCI, /repair_component_releases=true/);
+  assert.match(protectedCI, /MAX_RUNNER_ATTEMPTS=2/);
+  assert.match(protectedCI, /END_TO_END_STALL_SECONDS=900/);
+  assert.match(protectedCI, /protected-ci-run-state\.mjs/);
+  assert.match(protectedCI, /actions\/runs\/\$run_id\/force-cancel/);
+  assert.match(protectedCI, /runner-retry-\$\{attempt\}/);
+  assert.doesNotMatch(protectedCI, /gh run watch/);
 });
 
 test("publication repair accepts an identical immutable release", () => {
