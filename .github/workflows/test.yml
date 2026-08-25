@@ -140,6 +140,57 @@ jobs:
             "/opt/hca/hosted-compute-agent" \
             -date "3024-01-01 00:00:00 +0000"
           /usr/bin/killall cfprefsd 2>/dev/null || true
+      - name: Allow hosted computer control
+        shell: bash
+        run: |
+          # macOS 26 can ask the hosted runner agent for permission to control
+          # SkyComputerUseService. The modal blocks native pointer tests.
+          tcc_db="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          for attempt in {1..5}; do
+            if /usr/bin/sqlite3 "$tcc_db" <<'SQL'
+          PRAGMA busy_timeout = 5000;
+          INSERT OR REPLACE INTO access (
+            service,
+            client,
+            client_type,
+            auth_value,
+            auth_reason,
+            auth_version,
+            csreq,
+            policy_id,
+            indirect_object_identifier_type,
+            indirect_object_identifier,
+            indirect_object_code_identity,
+            flags,
+            last_modified
+          ) VALUES (
+            'kTCCServiceAppleEvents',
+            '/opt/hca/hosted-compute-agent',
+            1,
+            2,
+            0,
+            1,
+            NULL,
+            NULL,
+            0,
+            'com.apple.SkyComputerUseService',
+            NULL,
+            0,
+            strftime('%s', 'now')
+          );
+          SQL
+            then
+              break
+            fi
+            if [[ "$attempt" -eq 5 ]]; then
+              echo "Unable to update the user TCC database" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          [[ "$(/usr/bin/sqlite3 "$tcc_db" \
+            "SELECT auth_value FROM access WHERE service = 'kTCCServiceAppleEvents' AND client = '/opt/hca/hosted-compute-agent' AND indirect_object_identifier = 'com.apple.SkyComputerUseService';")" == "2" ]]
+          /usr/bin/killall tccd 2>/dev/null || true
       - name: Build launcher and run isolated end-to-end suite
         id: end-to-end
         env:
