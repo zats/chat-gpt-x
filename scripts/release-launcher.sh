@@ -177,11 +177,11 @@ APP_PATH="$BUILD_DIR/ChatGPTX.app"
 [[ "$(plutil -extract CFBundleVersion raw "$APP_PATH/Contents/Info.plist")" == "$BUILD_NUMBER" ]]
 [[ "$(plutil -extract SUPublicEDKey raw "$APP_PATH/Contents/Info.plist")" == "$SPARKLE_PUBLIC_KEY" ]]
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-codesign -d --verbose=4 "$APP_PATH" 2>&1 \
-  | rg -q '^Authority=Developer ID Application:' || {
+SIGNING_DETAILS="$(codesign -d --verbose=4 "$APP_PATH" 2>&1)"
+if ! rg -q '^Authority=Developer ID Application:' <<<"$SIGNING_DETAILS"; then
     echo "ChatGPTX.app does not have a Developer ID Application signature." >&2
     exit 1
-  }
+fi
 
 NOTARIZATION_ARCHIVE="$RELEASE_ROOT/ChatGPTX-notarization.zip"
 ditto -c -k --keepParent "$APP_PATH" "$NOTARIZATION_ARCHIVE"
