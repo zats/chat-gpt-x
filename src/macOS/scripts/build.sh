@@ -7,6 +7,21 @@ MACOS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$MACOS_DIR/../.." && pwd)"
 CONFIGURATION="${CHATGPTX_BUILD_CONFIGURATION:-Release}"
 OUTPUT_DIR="${CHATGPTX_BUILD_DIR:-$REPO_ROOT/.builds}"
+XCODEBUILD_SIGNING_ARGUMENTS=(CODE_SIGN_STYLE=Automatic)
+
+if [[ -n "${CHATGPTX_CODESIGN_IDENTITY:-}" ]]; then
+  [[ -n "${CHATGPTX_DEVELOPMENT_TEAM:-}" ]] || {
+    echo "CHATGPTX_DEVELOPMENT_TEAM is required with CHATGPTX_CODESIGN_IDENTITY" >&2
+    exit 1
+  }
+  XCODEBUILD_SIGNING_ARGUMENTS=(
+    CODE_SIGN_STYLE=Manual
+    "CODE_SIGN_IDENTITY=$CHATGPTX_CODESIGN_IDENTITY"
+    "DEVELOPMENT_TEAM=$CHATGPTX_DEVELOPMENT_TEAM"
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
+    "OTHER_CODE_SIGN_FLAGS=--timestamp"
+  )
+fi
 
 command -v xcodegen >/dev/null || {
   echo "xcodegen is required: brew install xcodegen" >&2
@@ -41,6 +56,7 @@ xcodebuild \
   -configuration "$CONFIGURATION" \
   -derivedDataPath "$BUILD_ROOT/DerivedData" \
   CONFIGURATION_BUILD_DIR="$BUILD_OUTPUT_DIR" \
+  "${XCODEBUILD_SIGNING_ARGUMENTS[@]}" \
   build
 
 mkdir -p "$BUILD_ROOT/profiles"

@@ -3,6 +3,8 @@ import AppKit
 final class SystemMenuController: NSObject, NSMenuDelegate {
     private let statusItem: NSStatusItem
     private let openChatGPTItem = NSMenuItem()
+    private let applicationUpdateMenuItemController:
+        ApplicationUpdateMenuItemController
     private let onOpenChatGPT: (Bool) -> Void
     private let onShowSettings: () -> Void
     private var runtimeStatus = ChatGPTRuntimeStatus.notRunning
@@ -12,11 +14,17 @@ final class SystemMenuController: NSObject, NSMenuDelegate {
 
     init(
         onOpenChatGPT: @escaping (Bool) -> Void,
-        onShowSettings: @escaping () -> Void
+        onShowSettings: @escaping () -> Void,
+        onApplicationUpdateAction:
+            @escaping (ApplicationUpdateAction) -> Void
     ) {
         statusItem = NSStatusBar.system.statusItem(
             withLength: NSStatusItem.squareLength
         )
+        applicationUpdateMenuItemController =
+            ApplicationUpdateMenuItemController(
+                perform: onApplicationUpdateAction
+            )
         self.onOpenChatGPT = onOpenChatGPT
         self.onShowSettings = onShowSettings
         super.init()
@@ -37,6 +45,10 @@ final class SystemMenuController: NSObject, NSMenuDelegate {
     func setCheckingForUpdates(_ isCheckingForUpdates: Bool) {
         self.isCheckingForUpdates = isCheckingForUpdates
         updateOpenChatGPTItem()
+    }
+
+    func showApplicationUpdateState(_ state: ApplicationUpdateState) {
+        applicationUpdateMenuItemController.show(state)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -76,6 +88,8 @@ final class SystemMenuController: NSObject, NSMenuDelegate {
         settingsItem.keyEquivalentModifierMask = [.command]
         settingsItem.target = self
         menu.addItem(settingsItem)
+
+        menu.addItem(applicationUpdateMenuItemController.menuItem)
 
         menu.addItem(.separator())
         let quitItem = NSMenuItem(

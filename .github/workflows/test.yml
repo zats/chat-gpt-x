@@ -53,6 +53,7 @@ jobs:
           bash -n scripts/validate-rebind-changes.sh
           bash -n src/extensions/build.sh
           bash -n src/macOS/scripts/build.sh
+          bash -n scripts/release-launcher.sh
           bash -n .agents/skills/manage-platform-api/scripts/extract-app.sh
           node --check scripts/auth-handoff.mjs
           node --check scripts/check-auth-exposure.mjs

@@ -19,8 +19,18 @@
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSAppBundlesUsageDescription</key>
 	<string>ChatGPTX manages ChatGPT app updates.</string>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/zats/chat-gpt-x/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>lkJyHKoZxlwe1nhfrrfLVHvsCnSwX3JLYD9G8XoIw7Y=</string>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>

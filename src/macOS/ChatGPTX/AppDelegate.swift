@@ -48,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: LaunchOptions
     private var componentStore: ComponentStore?
     private var componentUpdateService: ComponentUpdateService?
+    private var applicationUpdateController: ApplicationUpdateController?
+    private var applicationUpdateMenuItemController:
+        ApplicationUpdateMenuItemController?
     private var preparedComponents: PreparedComponentStore?
     private var launchTask: Task<Void, Never>?
     private var updateTask: Task<Void, Never>?
@@ -123,6 +126,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        let applicationUpdateController = ApplicationUpdateController()
+        applicationUpdateController.onStateChange = { [weak self] state in
+            self?.applicationUpdateMenuItemController?.show(state)
+            self?.systemMenuController?.showApplicationUpdateState(state)
+        }
+        self.applicationUpdateController = applicationUpdateController
+
         installMainMenu()
         let windowController = LauncherWindowController()
         windowController.onOpenChatGPT = { [weak self] forceRestart in
@@ -143,9 +153,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onShowSettings: { [weak self] in
                 self?.showLauncher()
+            },
+            onApplicationUpdateAction: { [weak self] action in
+                self?.applicationUpdateController?.perform(action)
             }
         )
         self.systemMenuController = systemMenuController
+        systemMenuController.showApplicationUpdateState(
+            applicationUpdateController.state
+        )
+        applicationUpdateController.start()
 
         let notificationController = InjectionNotificationController()
         notificationController.onRestart = { [weak self] in
@@ -744,6 +761,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             withTitle: "About ChatGPTX",
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
             keyEquivalent: ""
+        )
+        let applicationUpdateMenuItemController =
+            ApplicationUpdateMenuItemController { [weak self] action in
+                self?.applicationUpdateController?.perform(action)
+            }
+        applicationUpdateMenuItemController.show(
+            applicationUpdateController?.state ?? .unavailable
+        )
+        self.applicationUpdateMenuItemController =
+            applicationUpdateMenuItemController
+        applicationMenu.addItem(
+            applicationUpdateMenuItemController.menuItem
         )
         applicationMenu.addItem(.separator())
         applicationMenu.addItem(

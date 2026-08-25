@@ -8,8 +8,9 @@ ChatGPTX installs these components independently from GitHub Releases:
 - Exact ChatGPT-build bindings
 - Public extensions
 
-The launcher application has a separate update mechanism. The launcher bundle
-does not contain a runtime, binding, or extension.
+The launcher application updates separately through Sparkle. See
+[`launcher-updates.md`](launcher-updates.md). The launcher bundle does not
+contain a runtime, binding, or extension.
 
 ## Selection rule
 

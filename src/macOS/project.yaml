@@ -18,6 +18,9 @@ packages:
   SnapKit:
     url: https://github.com/SnapKit/SnapKit.git
     from: 6.0.0
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle.git
+    from: 2.9.3
 
 targets:
   ChatGPTX:
@@ -28,17 +31,25 @@ targets:
       properties:
         CFBundleDisplayName: ChatGPTX
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSAppBundlesUsageDescription: ChatGPTX manages ChatGPT app updates.
+        SUAutomaticallyUpdate: true
+        SUEnableAutomaticChecks: true
+        SUFeedURL: https://raw.githubusercontent.com/zats/chat-gpt-x/main/appcast.xml
+        SUPublicEDKey: lkJyHKoZxlwe1nhfrrfLVHvsCnSwX3JLYD9G8XoIw7Y=
+        SUVerifyUpdateBeforeExtraction: true
     sources:
       - path: ChatGPTX
     dependencies:
       - package: Permiso
       - package: SnapKit
+      - package: Sparkle
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chatgptx.launcher
         PRODUCT_NAME: ChatGPTX
-        MARKETING_VERSION: 1.1.0
+        MARKETING_VERSION: 1.2.0
+        CURRENT_PROJECT_VERSION: 2
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: true
         CODE_SIGN_STYLE: Automatic

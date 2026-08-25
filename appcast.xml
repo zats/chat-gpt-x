@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>ChatGPTX</title>
+        <link>https://raw.githubusercontent.com/zats/chat-gpt-x/main/appcast.xml</link>
+        <description>ChatGPTX launcher updates</description>
+        <language>en</language>
+    </channel>
+</rss>
