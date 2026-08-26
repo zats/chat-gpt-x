@@ -6,6 +6,20 @@
         <description>ChatGPTX launcher updates</description>
         <language>en</language>
         <item>
+            <title>1.2.2</title>
+            <pubDate>Wed, 26 Aug 2026 14:25:02 +0000</pubDate>
+            <link>https://github.com/zats/chat-gpt-x</link>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>1.2.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2 id="changes">Changes</h2>
+<ul>
+<li>Limit launcher appcast history (<code>d1be8cc</code>)</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/zats/chat-gpt-x/releases/download/launcher-v1.2.2/ChatGPTX-1.2.2.zip" length="8250212" type="application/octet-stream" sparkle:edSignature="w3pl7Ebhh1mkcDfOitXViaNEg5XY48gB8H1lQEDpjbfM5sMeJ96QvTccEg9uLu1v28Q1ipi7rB5cgYVLPZQ7Aw=="/>
+        </item>
+        <item>
             <title>1.2.1</title>
             <pubDate>Wed, 26 Aug 2026 14:08:44 +0000</pubDate>
             <link>https://github.com/zats/chat-gpt-x</link>
