@@ -71,15 +71,19 @@ xcodegen generate \
   --project-root "$MACOS_DIR" \
   --project "$BUILD_ROOT/generated"
 
-xcodebuild \
+BUILD_ARGUMENTS=(
   -project "$BUILD_ROOT/generated/ChatGPTX.xcodeproj" \
   -scheme ChatGPTX \
   -configuration "$CONFIGURATION" \
   -derivedDataPath "$BUILD_ROOT/DerivedData" \
   CONFIGURATION_BUILD_DIR="$BUILD_OUTPUT_DIR" \
-  "${XCODEBUILD_SIGNING_ARGUMENTS[@]}" \
-  "${XCODEBUILD_VERSION_ARGUMENTS[@]}" \
-  build
+  "${XCODEBUILD_SIGNING_ARGUMENTS[@]}"
+)
+if ((${#XCODEBUILD_VERSION_ARGUMENTS[@]} > 0)); then
+  BUILD_ARGUMENTS+=("${XCODEBUILD_VERSION_ARGUMENTS[@]}")
+fi
+BUILD_ARGUMENTS+=(build)
+xcodebuild "${BUILD_ARGUMENTS[@]}"
 
 mkdir -p "$BUILD_ROOT/profiles"
 TEST_BUILD_OUTPUT_DIR="$BUILD_ROOT/test-products"
@@ -91,20 +95,26 @@ mkdir -p \
   "$TEST_BUILD_OUTPUT_DIR" \
   "$TEST_HOME_DIR" \
   "$TEST_CODEX_HOME_DIR"
-HOME="$TEST_HOME_DIR" \
-  CODEX_HOME="$TEST_CODEX_HOME_DIR" \
-  CHATGPTX_UNIT_TESTING=1 \
-  LLVM_PROFILE_FILE="$BUILD_ROOT/profiles/%p.profraw" \
-  xcodebuild \
+TEST_ARGUMENTS=(
   -project "$BUILD_ROOT/generated/ChatGPTX.xcodeproj" \
   -scheme ChatGPTX \
   -configuration "$TEST_CONFIGURATION" \
   -derivedDataPath "$BUILD_ROOT/TestDerivedData" \
   CONFIGURATION_BUILD_DIR="$TEST_BUILD_OUTPUT_DIR" \
-  CHATGPTX_TEST_ROOT_PATH="$TEST_ROOT_DIR" \
-  "${XCODEBUILD_VERSION_ARGUMENTS[@]}" \
-  -only-testing:ChatGPTXTests \
+  CHATGPTX_TEST_ROOT_PATH="$TEST_ROOT_DIR"
+)
+if ((${#XCODEBUILD_VERSION_ARGUMENTS[@]} > 0)); then
+  TEST_ARGUMENTS+=("${XCODEBUILD_VERSION_ARGUMENTS[@]}")
+fi
+TEST_ARGUMENTS+=(
+  -only-testing:ChatGPTXTests
   test
+)
+HOME="$TEST_HOME_DIR" \
+  CODEX_HOME="$TEST_CODEX_HOME_DIR" \
+  CHATGPTX_UNIT_TESTING=1 \
+  LLVM_PROFILE_FILE="$BUILD_ROOT/profiles/%p.profraw" \
+  xcodebuild "${TEST_ARGUMENTS[@]}"
 
 [[ -d "$BUILT_APP_PATH" ]] || {
   echo "build succeeded without producing $BUILT_APP_PATH" >&2
