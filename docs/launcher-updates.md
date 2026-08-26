@@ -12,7 +12,8 @@ Release builds pin Sparkle 2.9.3 through SwiftPM. `Info.plist` enables
 automatic checks and automatic installation by default. Sparkle reads the
 checked-in [`appcast.xml`](../appcast.xml) from the repository's `main` branch.
 Each appcast enclosure points to a notarized ZIP in a GitHub Release named
-`launcher-v<version>`.
+`launcher-v<version>`. Appcast generation keeps the latest 10 builds for each
+Sparkle update branch.
 
 Development builds do not start Sparkle. ChatGPTX enables the updater only when
 the application has a Developer ID Application signature. This prevents a

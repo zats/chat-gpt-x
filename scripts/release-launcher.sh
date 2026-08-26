@@ -359,7 +359,7 @@ pandoc --from gfm --to html \
 APPCAST_ARGUMENTS=(
   --download-url-prefix "https://github.com/zats/chat-gpt-x/releases/download/$TAG/"
   --link "https://github.com/zats/chat-gpt-x"
-  --maximum-versions 0
+  --maximum-versions 10
   --maximum-deltas 0
   --embed-release-notes
   "$APPCAST_WORK_DIR"
