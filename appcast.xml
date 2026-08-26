@@ -5,5 +5,25 @@
         <link>https://raw.githubusercontent.com/zats/chat-gpt-x/main/appcast.xml</link>
         <description>ChatGPTX launcher updates</description>
         <language>en</language>
+        <item>
+            <title>1.2.0</title>
+            <pubDate>Tue, 25 Aug 2026 20:25:13 -0400</pubDate>
+            <link>https://github.com/zats/chat-gpt-x</link>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h1 id="chatgptx-120">ChatGPTX 1.2.0</h1>
+<h2 id="automatic-launcher-updates">Automatic launcher updates</h2>
+<p>ChatGPTX now checks for launcher updates automatically. It downloads
+and installs signed updates through Sparkle so that future launcher
+versions can arrive without a manual download.</p>
+<p>The ChatGPTX application menu and status menu now show the current
+update state. You can check again, retry a failed check, or install a
+downloaded update from either menu.</p>
+<p>This release does not change the separate update system for ChatGPT
+API bindings, the runtime, or extensions.</p>
+]]></description>
+            <enclosure url="https://github.com/zats/chat-gpt-x/releases/download/launcher-v1.2.0/ChatGPTX-1.2.0.zip" length="8390256" type="application/octet-stream" sparkle:edSignature="1W2Y/OF2WUGpZGSNjLYiDvLfO/DvH/wgIIFLni31BJ3V/Y93ViZZ9ATae/b4cL1LHnr1E4G2PxwkcAX333W4DQ=="/>
+        </item>
     </channel>
 </rss>
