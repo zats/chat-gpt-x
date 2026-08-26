@@ -53,6 +53,7 @@ jobs:
           bash -n scripts/validate-rebind-changes.sh
           bash -n src/extensions/build.sh
           bash -n src/macOS/scripts/build.sh
+          bash -n scripts/import-release-keychain.sh
           bash -n scripts/release-launcher.sh
           bash -n .agents/skills/manage-platform-api/scripts/extract-app.sh
           node --check scripts/auth-handoff.mjs
@@ -63,6 +64,7 @@ jobs:
           node --check scripts/filter-unpublished-component-releases.mjs
           node --check scripts/materialize-ci-auth.mjs
           node --check scripts/protected-ci-run-state.mjs
+          node --check scripts/prepare-launcher-version.mjs
           node --check scripts/retry-transient-rebind-failure.mjs
           node --check scripts/stage-local-component-store.mjs
           node --check scripts/suppress-optional-product-ui.mjs
@@ -81,6 +83,7 @@ jobs:
           node --test scripts/filter-unpublished-component-releases.test.mjs
           node --test scripts/materialize-ci-auth.test.mjs
           node --test scripts/protected-ci-run-state.test.mjs
+          node --test scripts/prepare-launcher-version.test.mjs
           node --test scripts/rebind-workflow.test.mjs
           node --test scripts/retry-transient-rebind-failure.test.mjs
           node --test scripts/run-protected-ci.test.mjs

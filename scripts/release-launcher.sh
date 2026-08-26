@@ -4,14 +4,22 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/release-launcher.sh <release-notes.md>
+Usage:
+  scripts/release-launcher.sh --local-only [options] <release-notes.md>
+  scripts/release-launcher.sh --publish [options] <release-notes.md>
 
-Builds, signs, notarizes, and publishes the launcher version declared in
-src/macOS/project.yaml. Run it from a clean main branch after pushing the
-release commit.
+Options:
+  --version VERSION       Release version. Defaults to project.yaml.
+  --build-number NUMBER  Release build number. Defaults to project.yaml.
+  --output-dir PATH      Local-only artifact destination.
+
+Both modes build, sign, notarize, staple, package, and generate a signed
+candidate appcast. Publish mode also creates the GitHub Release, updates the
+checked-in appcast, and pushes its publication commit. Run publish mode from a
+clean main branch after pushing the release-version commit.
 
 Required environment:
-  CHATGPTX_CODESIGN_IDENTITY   Developer ID Application identity
+  CHATGPTX_CODESIGN_IDENTITY   Developer ID certificate SHA-1 or identity
   CHATGPTX_DEVELOPMENT_TEAM   Apple Developer team identifier
 
 Notarization requires one of:
@@ -31,15 +39,74 @@ otherwise the script downloads the pinned Sparkle release tools.
 EOF
 }
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  usage
-  exit 0
-fi
+MODE=""
+RELEASE_VERSION=""
+RELEASE_BUILD_NUMBER=""
+LOCAL_OUTPUT_DIR="${CHATGPTX_RELEASE_OUTPUT_DIR:-}"
+RELEASE_NOTES_ARGUMENT=""
 
-[[ $# -eq 1 ]] || {
+while (($# > 0)); do
+  case "$1" in
+    --local-only | --publish)
+      [[ -z "$MODE" ]] || {
+        echo "Select only one release mode." >&2
+        exit 2
+      }
+      MODE="$1"
+      shift
+      ;;
+    --version)
+      [[ $# -ge 2 ]] || {
+        echo "--version requires a value." >&2
+        exit 2
+      }
+      RELEASE_VERSION="$2"
+      shift 2
+      ;;
+    --build-number)
+      [[ $# -ge 2 ]] || {
+        echo "--build-number requires a value." >&2
+        exit 2
+      }
+      RELEASE_BUILD_NUMBER="$2"
+      shift 2
+      ;;
+    --output-dir)
+      [[ $# -ge 2 ]] || {
+        echo "--output-dir requires a value." >&2
+        exit 2
+      }
+      LOCAL_OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --help | -h)
+      usage
+      exit 0
+      ;;
+    --*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      [[ -z "$RELEASE_NOTES_ARGUMENT" ]] || {
+        echo "Only one release-notes file is allowed." >&2
+        exit 2
+      }
+      RELEASE_NOTES_ARGUMENT="$1"
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$MODE" && -n "$RELEASE_NOTES_ARGUMENT" ]] || {
   usage >&2
   exit 2
 }
+if [[ "$MODE" == "--publish" && -n "$LOCAL_OUTPUT_DIR" ]]; then
+  echo "--output-dir is available only with --local-only." >&2
+  exit 2
+fi
 
 [[ "$(uname -s)" == "Darwin" ]] || {
   echo "Launcher releases require macOS." >&2
@@ -50,7 +117,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_FILE="$REPO_ROOT/src/macOS/project.yaml"
 APPCAST_FILE="$REPO_ROOT/appcast.xml"
-RELEASE_NOTES_FILE="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+RELEASE_NOTES_FILE="$(cd "$(dirname "$RELEASE_NOTES_ARGUMENT")" && pwd)/$(basename "$RELEASE_NOTES_ARGUMENT")"
 SPARKLE_VERSION=2.9.3
 SPARKLE_ACCOUNT=com.chatgptx.launcher
 SPARKLE_PUBLIC_KEY=lkJyHKoZxlwe1nhfrrfLVHvsCnSwX3JLYD9G8XoIw7Y=
@@ -81,29 +148,31 @@ done
 
 cd "$REPO_ROOT"
 
-[[ "$(git branch --show-current)" == "main" ]] || {
-  echo "Launcher releases must run from main." >&2
-  exit 1
-}
-[[ -z "$(git status --porcelain)" ]] || {
-  echo "The working tree must be clean." >&2
-  exit 1
-}
-
-git fetch origin main
 HEAD_SHA="$(git rev-parse HEAD)"
-ORIGIN_MAIN_SHA="$(git rev-parse origin/main)"
-[[ "$HEAD_SHA" == "$ORIGIN_MAIN_SHA" ]] || {
-  echo "Local main must match origin/main." >&2
-  exit 1
-}
+if [[ "$MODE" == "--publish" ]]; then
+  [[ "$(git branch --show-current)" == "main" ]] || {
+    echo "Launcher releases must run from main." >&2
+    exit 1
+  }
+  [[ -z "$(git status --porcelain)" ]] || {
+    echo "The working tree must be clean." >&2
+    exit 1
+  }
 
-MARKETING_VERSION="$(
+  git fetch origin main
+  ORIGIN_MAIN_SHA="$(git rev-parse origin/main)"
+  [[ "$HEAD_SHA" == "$ORIGIN_MAIN_SHA" ]] || {
+    echo "Local main must match origin/main." >&2
+    exit 1
+  }
+fi
+
+MARKETING_VERSION="${RELEASE_VERSION:-$(
   awk '$1 == "MARKETING_VERSION:" { print $2; exit }' "$PROJECT_FILE"
-)"
-BUILD_NUMBER="$(
+)}"
+BUILD_NUMBER="${RELEASE_BUILD_NUMBER:-$(
   awk '$1 == "CURRENT_PROJECT_VERSION:" { print $2; exit }' "$PROJECT_FILE"
-)"
+)}"
 
 [[ "$MARKETING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
   echo "MARKETING_VERSION must be a semantic version." >&2
@@ -163,6 +232,8 @@ trap cleanup EXIT INT TERM
 BUILD_DIR="$RELEASE_ROOT/build"
 CHATGPTX_BUILD_DIR="$BUILD_DIR" \
   CHATGPTX_BUILD_CONFIGURATION=Release \
+  CHATGPTX_MARKETING_VERSION="$MARKETING_VERSION" \
+  CHATGPTX_BUILD_NUMBER="$BUILD_NUMBER" \
   CHATGPTX_CODESIGN_IDENTITY="$CHATGPTX_CODESIGN_IDENTITY" \
   CHATGPTX_DEVELOPMENT_TEAM="$CHATGPTX_DEVELOPMENT_TEAM" \
   src/macOS/scripts/build.sh
@@ -316,6 +387,37 @@ rg -q "<sparkle:version>$BUILD_NUMBER</sparkle:version>" \
   "$GENERATED_APPCAST"
 rg -Fq "url=\"$DOWNLOAD_URL\"" "$GENERATED_APPCAST"
 rg -q 'sparkle:edSignature="[^"]+"' "$GENERATED_APPCAST"
+
+if [[ "$MODE" == "--local-only" ]]; then
+  if [[ -z "$LOCAL_OUTPUT_DIR" ]]; then
+    LOCAL_OUTPUT_DIR="${TMPDIR:-/tmp}/ChatGPTX/launcher-release-$MARKETING_VERSION"
+  fi
+  mkdir -p "$LOCAL_OUTPUT_DIR"
+  for output_path in \
+    "$LOCAL_OUTPUT_DIR/ChatGPTX.app" \
+    "$LOCAL_OUTPUT_DIR/$ARCHIVE_NAME" \
+    "$LOCAL_OUTPUT_DIR/appcast.xml"
+  do
+    [[ ! -e "$output_path" ]] || {
+      echo "Local release output already exists: $output_path" >&2
+      exit 1
+    }
+  done
+  ditto "$APP_PATH" "$LOCAL_OUTPUT_DIR/ChatGPTX.app"
+  cp "$ARCHIVE_PATH" "$LOCAL_OUTPUT_DIR/$ARCHIVE_NAME"
+  cp "$GENERATED_APPCAST" "$LOCAL_OUTPUT_DIR/appcast.xml"
+  printf 'Prepared local ChatGPTX %s (%s) release artifacts in %s\n' \
+    "$MARKETING_VERSION" "$BUILD_NUMBER" "$LOCAL_OUTPUT_DIR"
+  exit 0
+fi
+
+git fetch origin main
+CURRENT_ORIGIN_MAIN_SHA="$(git rev-parse origin/main)"
+[[ "$HEAD_SHA" == "$CURRENT_ORIGIN_MAIN_SHA" ]] || {
+  echo "Main changed while the release was prepared. No release was published." >&2
+  exit 1
+}
+
 cp "$GENERATED_APPCAST" "$APPCAST_FILE"
 
 gh release create "$TAG" "$ARCHIVE_PATH#$ARCHIVE_NAME" \
@@ -330,7 +432,7 @@ curl --fail --location --silent --show-error --head "$DOWNLOAD_URL" \
   >/dev/null
 
 git add appcast.xml
-git commit -m "Publish ChatGPTX $MARKETING_VERSION appcast"
+git commit -m "Publish ChatGPTX $MARKETING_VERSION appcast [skip launcher release]"
 git push origin HEAD:main
 
 for attempt in 1 2 3 4 5 6; do

@@ -8,6 +8,27 @@ REPO_ROOT="$(cd "$MACOS_DIR/../.." && pwd)"
 CONFIGURATION="${CHATGPTX_BUILD_CONFIGURATION:-Release}"
 OUTPUT_DIR="${CHATGPTX_BUILD_DIR:-$REPO_ROOT/.builds}"
 XCODEBUILD_SIGNING_ARGUMENTS=(CODE_SIGN_STYLE=Automatic)
+XCODEBUILD_VERSION_ARGUMENTS=()
+
+if [[ -n "${CHATGPTX_MARKETING_VERSION:-}" ]]; then
+  [[ "$CHATGPTX_MARKETING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "CHATGPTX_MARKETING_VERSION must be a semantic version" >&2
+    exit 1
+  }
+  XCODEBUILD_VERSION_ARGUMENTS+=(
+    "MARKETING_VERSION=$CHATGPTX_MARKETING_VERSION"
+  )
+fi
+
+if [[ -n "${CHATGPTX_BUILD_NUMBER:-}" ]]; then
+  [[ "$CHATGPTX_BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]] || {
+    echo "CHATGPTX_BUILD_NUMBER must be a positive integer" >&2
+    exit 1
+  }
+  XCODEBUILD_VERSION_ARGUMENTS+=(
+    "CURRENT_PROJECT_VERSION=$CHATGPTX_BUILD_NUMBER"
+  )
+fi
 
 if [[ -n "${CHATGPTX_CODESIGN_IDENTITY:-}" ]]; then
   [[ -n "${CHATGPTX_DEVELOPMENT_TEAM:-}" ]] || {
@@ -57,6 +78,7 @@ xcodebuild \
   -derivedDataPath "$BUILD_ROOT/DerivedData" \
   CONFIGURATION_BUILD_DIR="$BUILD_OUTPUT_DIR" \
   "${XCODEBUILD_SIGNING_ARGUMENTS[@]}" \
+  "${XCODEBUILD_VERSION_ARGUMENTS[@]}" \
   build
 
 mkdir -p "$BUILD_ROOT/profiles"
@@ -80,6 +102,7 @@ HOME="$TEST_HOME_DIR" \
   -derivedDataPath "$BUILD_ROOT/TestDerivedData" \
   CONFIGURATION_BUILD_DIR="$TEST_BUILD_OUTPUT_DIR" \
   CHATGPTX_TEST_ROOT_PATH="$TEST_ROOT_DIR" \
+  "${XCODEBUILD_VERSION_ARGUMENTS[@]}" \
   -only-testing:ChatGPTXTests \
   test
 

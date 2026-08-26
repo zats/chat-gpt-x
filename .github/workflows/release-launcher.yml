@@ -1,0 +1,154 @@
+name: Release launcher
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out tested source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - name: Check release eligibility
+        id: plan
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          echo "release=false" >> "$GITHUB_OUTPUT"
+          git fetch origin main
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$(git rev-parse origin/main)" != "$SOURCE_SHA" ]]; then
+            echo "A newer main commit exists. This tested commit will not be released."
+            exit 0
+          fi
+          if git log -1 --format=%B "$SOURCE_SHA" \
+              | grep -Fq '[skip launcher release]'; then
+            echo "This automatic release commit does not require another release."
+            exit 0
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+      - name: Set up Node.js 22
+        if: steps.plan.outputs.release == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install release tools
+        if: steps.plan.outputs.release == 'true'
+        run: brew install pandoc ripgrep xcodegen
+      - name: Import Developer ID identity
+        id: signing
+        if: steps.plan.outputs.release == 'true'
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.CHATGPTX_DEVELOPER_ID_P12_BASE64 }}
+          CHATGPTX_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.CHATGPTX_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          [[ -n "$DEVELOPER_ID_P12_BASE64" ]] || {
+            echo "CHATGPTX_DEVELOPER_ID_P12_BASE64 is required." >&2
+            exit 1
+          }
+          [[ -n "$CHATGPTX_DEVELOPER_ID_P12_PASSWORD" ]] || {
+            echo "CHATGPTX_DEVELOPER_ID_P12_PASSWORD is required." >&2
+            exit 1
+          }
+          p12_path="$RUNNER_TEMP/chatgptx-developer-id.p12"
+          keychain_path="$RUNNER_TEMP/chatgptx-release.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$keychain_password"
+          {
+            echo "CHATGPTX_DEVELOPER_ID_P12_PATH=$p12_path"
+            echo "CHATGPTX_RELEASE_KEYCHAIN_PATH=$keychain_path"
+          } >> "$GITHUB_ENV"
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" \
+            | /usr/bin/base64 -D \
+            > "$p12_path"
+          chmod 600 "$p12_path"
+          export CHATGPTX_DEVELOPER_ID_P12_PATH="$p12_path"
+          export CHATGPTX_RELEASE_KEYCHAIN_PATH="$keychain_path"
+          export CHATGPTX_RELEASE_KEYCHAIN_PASSWORD="$keychain_password"
+          scripts/import-release-keychain.sh >> "$GITHUB_OUTPUT"
+      - name: Prepare next launcher version
+        id: version
+        if: steps.plan.outputs.release == 'true'
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git switch -C main "$SOURCE_SHA"
+          version_plan="$(node scripts/prepare-launcher-version.mjs --write)"
+          version="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).version)' "$version_plan")"
+          build="$(node -e 'process.stdout.write(String(JSON.parse(process.argv[1]).build))' "$version_plan")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          git diff --check
+          git diff --exit-code -- . ':(exclude)src/macOS/project.yaml' \
+            >/dev/null
+          git diff -- src/macOS/project.yaml
+      - name: Commit launcher version
+        if: steps.plan.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/macOS/project.yaml
+          git commit -m "Prepare ChatGPTX $VERSION [skip launcher release]"
+          git push origin HEAD:main
+      - name: Create release notes
+        if: steps.plan.outputs.release == 'true'
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          notes_path="$RUNNER_TEMP/chatgptx-launcher-release-notes.md"
+          previous_tag="$(git describe --tags --match 'launcher-v*' --abbrev=0 2>/dev/null || true)"
+          {
+            printf '## Changes\n\n'
+            # The backticks are Markdown, not shell substitutions.
+            # shellcheck disable=SC2016
+            if [[ -n "$previous_tag" ]]; then
+              git log \
+                --format='- %s (`%h`)' \
+                --invert-grep \
+                --grep='\[skip launcher release\]' \
+                "$previous_tag..$SOURCE_SHA"
+            else
+              git log -1 --format='- %s (`%h`)' "$SOURCE_SHA"
+            fi
+          } > "$notes_path"
+          echo "CHATGPTX_RELEASE_NOTES_PATH=$notes_path" >> "$GITHUB_ENV"
+      - name: Build, notarize, and publish launcher
+        if: steps.plan.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHATGPTX_CODESIGN_IDENTITY: ${{ steps.signing.outputs.identity }}
+          CHATGPTX_DEVELOPMENT_TEAM: ${{ steps.signing.outputs.team }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.CHATGPTX_APP_STORE_CONNECT_API_KEY_P8 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.CHATGPTX_APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.CHATGPTX_APP_STORE_CONNECT_ISSUER_ID }}
+          CHATGPTX_SPARKLE_PRIVATE_KEY: ${{ secrets.CHATGPTX_SPARKLE_PRIVATE_KEY }}
+        run: scripts/release-launcher.sh --publish "$CHATGPTX_RELEASE_NOTES_PATH"
+      - name: Remove signing material
+        if: always() && steps.plan.outputs.release == 'true'
+        run: |
+          if [[ -n "${CHATGPTX_RELEASE_KEYCHAIN_PATH:-}" ]]; then
+            security delete-keychain "$CHATGPTX_RELEASE_KEYCHAIN_PATH" \
+              >/dev/null 2>&1 || true
+          fi
+          if [[ -n "${CHATGPTX_DEVELOPER_ID_P12_PATH:-}" ]]; then
+            /bin/unlink "$CHATGPTX_DEVELOPER_ID_P12_PATH" \
+              2>/dev/null || true
+          fi
