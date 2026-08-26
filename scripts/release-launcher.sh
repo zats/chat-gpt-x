@@ -173,15 +173,47 @@ APP_PATH="$BUILD_DIR/ChatGPTX.app"
   exit 1
 }
 
+sign_for_distribution() {
+  local code_path="$1"
+  local signing_details
+
+  codesign --force \
+    --timestamp \
+    --sign "$CHATGPTX_CODESIGN_IDENTITY" \
+    --preserve-metadata=identifier,entitlements,flags,runtime \
+    "$code_path"
+  signing_details="$(codesign -d --verbose=4 "$code_path" 2>&1)"
+  if ! rg -q '^Authority=Developer ID Application:' <<<"$signing_details"; then
+    echo "$code_path does not have a Developer ID Application signature." >&2
+    exit 1
+  fi
+  if ! rg -q '^Timestamp=' <<<"$signing_details"; then
+    echo "$code_path does not have a secure timestamp." >&2
+    exit 1
+  fi
+}
+
+SPARKLE_FRAMEWORK="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+SPARKLE_CONTENTS="$SPARKLE_FRAMEWORK/Versions/Current"
+for sparkle_code in \
+  "$SPARKLE_CONTENTS/XPCServices/Downloader.xpc" \
+  "$SPARKLE_CONTENTS/XPCServices/Installer.xpc" \
+  "$SPARKLE_CONTENTS/Updater.app" \
+  "$SPARKLE_CONTENTS/Autoupdate"
+do
+  [[ -e "$sparkle_code" ]] || {
+    echo "Sparkle distribution code is missing: $sparkle_code" >&2
+    exit 1
+  }
+  sign_for_distribution "$sparkle_code"
+done
+sign_for_distribution "$SPARKLE_FRAMEWORK"
+sign_for_distribution "$APP_PATH"
+
 [[ "$(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Contents/Info.plist")" == "$MARKETING_VERSION" ]]
 [[ "$(plutil -extract CFBundleVersion raw "$APP_PATH/Contents/Info.plist")" == "$BUILD_NUMBER" ]]
 [[ "$(plutil -extract SUPublicEDKey raw "$APP_PATH/Contents/Info.plist")" == "$SPARKLE_PUBLIC_KEY" ]]
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-SIGNING_DETAILS="$(codesign -d --verbose=4 "$APP_PATH" 2>&1)"
-if ! rg -q '^Authority=Developer ID Application:' <<<"$SIGNING_DETAILS"; then
-    echo "ChatGPTX.app does not have a Developer ID Application signature." >&2
-    exit 1
-fi
 
 NOTARIZATION_ARCHIVE="$RELEASE_ROOT/ChatGPTX-notarization.zip"
 ditto -c -k --keepParent "$APP_PATH" "$NOTARIZATION_ARCHIVE"
