@@ -6,6 +6,25 @@
         <description>ChatGPTX launcher updates</description>
         <language>en</language>
         <item>
+            <title>1.2.5</title>
+            <pubDate>Thu, 27 Aug 2026 16:50:35 +0000</pubDate>
+            <link>https://github.com/zats/chat-gpt-x</link>
+            <sparkle:version>7</sparkle:version>
+            <sparkle:shortVersionString>1.2.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2 id="changes">Changes</h2>
+<ul>
+<li>Remove unpublished API catalog entry (<code>a1247ef</code>)</li>
+<li>Show Dock overlay for injected ChatGPT (<code>927bfaa</code>)</li>
+<li>Fix account switching with full app relaunch
+(<code>5d0f6a9</code>)</li>
+<li>Make launcher releases manual (<code>2c831ee</code>)</li>
+<li>Replace duplicate restart notifications (<code>5e723c3</code>)</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/zats/chat-gpt-x/releases/download/launcher-v1.2.5/ChatGPTX-1.2.5.zip" length="10015310" type="application/octet-stream" sparkle:edSignature="qg7X+27FF895jiS2TvBEWkp5Bo5OxtY3wzp03kND63ipHfn7Q0h+++K3+NH4KZeeuoa9WCTBTykJRWdT5EleAA=="/>
+        </item>
+        <item>
             <title>1.2.4</title>
             <pubDate>Thu, 27 Aug 2026 13:09:49 +0000</pubDate>
             <link>https://github.com/zats/chat-gpt-x</link>
