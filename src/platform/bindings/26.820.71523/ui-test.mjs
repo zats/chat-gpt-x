@@ -7,7 +7,6 @@
  *
  * Usage: node src/platform/bindings/26.820.71523/ui-test.mjs [port]
  *   [--expect-native-profile-callback-missing]
- *   [--alternate-auth=/path/to/auth.json]
  *   [--select-thread=<thread-id>]
  *   [--select-thread-kind=remote]
  *   [--public-api-only]
@@ -15,23 +14,12 @@
  * Set CHATGPTX_TEST_NO_PROFILE=1 for API-key authentication.
  */
 
-import { readFile } from 'node:fs/promises';
-
 const port = process.argv[2] ?? '9222';
 const expectNativeProfileCallbackMissing = process.argv.includes(
   '--expect-native-profile-callback-missing',
 );
 const publicAPIOnly = process.argv.includes('--public-api-only');
 const noProfile = process.env.CHATGPTX_TEST_NO_PROFILE === '1';
-const alternateAuthPath = process.argv
-  .find((argument) => argument.startsWith('--alternate-auth='))
-  ?.slice('--alternate-auth='.length);
-const alternateAuthJson = alternateAuthPath
-  ? await readFile(alternateAuthPath, 'utf8')
-  : undefined;
-if (noProfile && alternateAuthJson) {
-  throw new Error('alternate authentication is unavailable without profiles');
-}
 const selectThreadId = process.argv
   .find((argument) => argument.startsWith('--select-thread='))
   ?.slice('--select-thread='.length);
@@ -214,7 +202,6 @@ function findSettingsBackLink() {
 
 async function validateUi(
   expectMissingProfileCallback,
-  alternateAuthentication,
   noProfile,
 ) {
   const checks = [];
@@ -448,18 +435,6 @@ async function validateUi(
         globalThis.__CGPTX_HOST__._debug.lastResponseAnnotationCreation(),
     },
   );
-  const waitForNativeAccount = async (email, timeoutMs = 20000) => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const account = await Promise.race([
-        globalThis.__CGPTX_HOST__._debug.nativeAccount().catch(() => undefined),
-        sleep(1000).then(() => undefined),
-      ]);
-      if (account?.account?.email === email) return account;
-      await sleep(100);
-    }
-    throw new Error(`Timed out waiting for native account ${email}`);
-  };
   const compositeCssColors = (...colors) => {
     const canvas = document.createElement('canvas');
     canvas.width = 1;
@@ -1722,10 +1697,6 @@ async function validateUi(
     globalThis.__CGPTX_HOST__?._debug.authenticationAccountInfoResetCount() >= 1,
     'public credential replacement clears the native account-info query',
   );
-  check(
-    globalThis.__CGPTX_HOST__?._debug.authenticationAppServerRestartCount() >= 1,
-    'public credential replacement restarts ChatGPT\'s native app server',
-  );
   if (expectMissingProfileCallback) {
     check(
       globalThis.__CGPTX_HOST__?._debug.profileMenuHasNativeProfileCallback() ===
@@ -2121,54 +2092,6 @@ async function validateUi(
   );
   profileNavigationRegistration.dispose();
   markProgress('profile-menu');
-
-  if (alternateAuthentication) {
-    let authenticationApi;
-    globalThis.__CGPTX_HOST__.registerExtension('authentication-switch-fixture', {
-      activate(api) {
-        authenticationApi = api.authentication;
-      },
-    });
-    const original = await authenticationApi.getCurrent();
-    const alternate = await authenticationApi.inspect(alternateAuthentication);
-    check(
-      Boolean(original && original.userId !== alternate.userId),
-      'alternate authentication fixture identifies a different account',
-    );
-    if (original && original.userId !== alternate.userId) {
-      try {
-        await authenticationApi.replaceCurrent(alternateAuthentication);
-        const adopted = await authenticationApi.getCurrent();
-        const nativeAccount = await waitForNativeAccount(alternate.label);
-        check(
-          adopted?.userId === alternate.userId &&
-            nativeAccount?.account?.email === alternate.label,
-          'credential replacement makes the native app server adopt the selected account',
-          {
-            selectedUserId: alternate.userId,
-            adoptedUserId: adopted?.userId,
-            selectedLabel: alternate.label,
-            nativeEmail: nativeAccount?.account?.email,
-          },
-        );
-      } finally {
-        await authenticationApi.replaceCurrent(original.authJson);
-      }
-      const restored = await authenticationApi.getCurrent();
-      const restoredNativeAccount = await waitForNativeAccount(original.label);
-      check(
-        restored?.userId === original.userId &&
-          restoredNativeAccount?.account?.email === original.label,
-        'credential replacement restores the original native account',
-        {
-          selectedUserId: original.userId,
-          restoredUserId: restored?.userId,
-          selectedLabel: original.label,
-          nativeEmail: restoredNativeAccount?.account?.email,
-        },
-      );
-    }
-  }
 
   markProgress('settings');
   const settingsFixtureId = 'settings-ui-fixture';
@@ -4647,8 +4570,6 @@ const report = await evaluate(
     validateUi.toString() +
     ')(' +
     JSON.stringify(expectNativeProfileCallbackMissing) +
-    ',' +
-    JSON.stringify(alternateAuthJson) +
     ',' +
     JSON.stringify(noProfile) +
     ')',

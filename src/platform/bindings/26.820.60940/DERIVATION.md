@@ -8,8 +8,8 @@ Pinned build:
 - Electron: `151.0.7922.170`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.820.60940.zip`
 - Binding date: `2026-08-27`
-- Binding version: `1.1.1`
-- ChatGPT API version: `1.5.0`
+- Binding version: `1.1.2`
+- ChatGPT API version: `1.5.1`
 - Version-watcher issue: `#51`
 
 The workflow supplied the exact stock application and a prepared `app.asar`
@@ -25,7 +25,9 @@ research record in `26.818.61809`, which was selected by
 version `1.1.0` advanced the ChatGPTX API from `1.4.0` to `1.5.0` and added
 native `above` and `below` placement to assistant-selection actions. Binding
 version `1.1.1` corrects thread-list leading views without changing the
-ChatGPTX API. Earlier binding directories remain unchanged.
+ChatGPTX API. Binding version `1.1.2` adds complete application relaunch when
+serialized credentials change and selects API `1.5.1`. Earlier binding directories
+remain unchanged.
 
 ## Verified module map
 
@@ -232,6 +234,27 @@ connected indicator to mount at the same height. Selecting the thread applied
 `rgb(58, 131, 247)`. The test app was stopped and all temporary profile,
 build, and extracted-app data was removed.
 
+For the authentication correction, a captured failure showed that the app
+server adopted the selected account while the renderer retained its prior
+`/wham/accounts/check` result and recent-conversation state. The renderer then
+reported `current_account_mismatch`. Source inspection confirmed that export
+`Hct` updates the authentication nonce and uses that nonce as the key for the
+complete application subtree. Calling it after an account replacement
+remounted the subtree before its renderer-wide RPC client was installed and
+caused `AppServerManager RPC is not connected`. Reloading only the renderer
+also retained the old main-process sidebar bootstrap. Calling the app-server
+recent-conversation refresh after its restart did not complete.
+
+The binding now validates and writes replacement credentials atomically. If
+the serialized credentials changed, the version-independent bridge starts the
+same stock executable with the captured launch arguments and injection
+environment, then exits the old process. A same-account token replacement only
+clears the exact native account queries. The isolated live test switched
+between two test accounts and back. Each direction created a new injected
+process, removed `Loading chats`, and showed the selected account's distinct
+recent-chat list without an error boundary. The stable ChatGPT process was not
+controlled or stopped.
+
 ## Failure signatures
 
 - Native installation or readiness timeout: a hashed asset, initializer,
@@ -255,7 +278,8 @@ build, and extracted-app data was removed.
   the Settings chunk split or page/group/row/control ownership changed.
 - An untouched Settings pane consumes renderer resources: a no-op transform
   stopped preserving native descriptor identity.
-- Authentication startup failure: application scope, auth nonce, query key,
-  message bus, browser dispatch, or app-server registry changed.
+- Authentication startup or switch failure: application scope, query key,
+  browser dispatch, app-server registry, relaunch arguments, or injection
+  environment changed.
 - Missing or unpainted header or picker: header topology, current CSS tokens,
   React DOM root, or the controlled picker export changed.

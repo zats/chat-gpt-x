@@ -8,8 +8,8 @@ Pinned build:
 - Electron: `151.0.7922.170`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.820.71523.zip`
 - Binding date: `2026-08-27`
-- Binding version: `1.0.0`
-- ChatGPT API version: `1.5.0`
+- Binding version: `1.1.0`
+- ChatGPT API version: `1.5.1`
 - Version-watcher issue: `#52`
 
 The workflow supplied the exact stock application and a prepared `app.asar`
@@ -19,11 +19,11 @@ Only those supplied target-build inputs were used: no app was downloaded or
 extracted, and the prior stock app was not fetched. The supplied application,
 research tree, opaque authentication source, and user state were not changed.
 
-This is a new binding copied from the API-development implementation in
+This binding started from the API-development implementation in
 `26.820.60940`, which was selected by `src/platform/bindings/manifest.json` at
-the start of the rebind. Its `chatgptApi` remains `1.5.0`; public API files,
-extension source and manifests, and all earlier binding directories remain
-unchanged.
+the start of the rebind. Binding version `1.1.0` selects ChatGPT API `1.5.1`
+and uses its complete application relaunch when serialized credentials change.
+The build-specific anchors remain unchanged from binding version `1.0.0`.
 
 ## Verified module map
 
@@ -209,7 +209,8 @@ identity; that profile behavior is outside the API-key gate.
   the Settings chunk split or page/group/row/control ownership changed.
 - An untouched Settings pane consumes renderer resources: a no-op transform
   stopped preserving native descriptor identity.
-- Authentication startup failure: application scope, auth nonce, query key,
-  message bus, browser dispatch, or app-server registry changed.
+- Authentication startup or switch failure: application scope, query key,
+  browser dispatch, app-server registry, relaunch arguments, or injection
+  environment changed.
 - Missing or unpainted header or picker: header topology, current CSS tokens,
   React DOM root, or the controlled picker export changed.

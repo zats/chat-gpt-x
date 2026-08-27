@@ -225,6 +225,37 @@ test("selecting an account preserves the account being left before replacement",
   assert.deepEqual(store.writes, [[authenticationFileName(current.userId), current.authJson]]);
 });
 
+test("a failed account switch restores the account being left", async () => {
+  const account = storedAccount("other-user", "Other");
+  const current: CurrentAuthentication = {
+    userId: "current-user",
+    label: "Current",
+    authJson: "{\"current\":true}",
+  };
+  const targetAuthJson = "{\"other\":true}";
+  const replacements: string[] = [];
+  const switchError = new Error("saved authentication is no longer accepted");
+
+  await assert.rejects(
+    selectAccount(
+      storage({ [account.fileName]: targetAuthJson }),
+      authentication({
+        async getCurrent() {
+          return current;
+        },
+        async replaceCurrent(value) {
+          replacements.push(value);
+          if (value === targetAuthJson) throw switchError;
+        },
+      }),
+      account,
+    ),
+    switchError,
+  );
+
+  assert.deepEqual(replacements, [targetAuthJson, current.authJson]);
+});
+
 test("a successful authentication change refreshes the current and stored account menu state", async () => {
   deactivate();
   const alphaJson = JSON.stringify({ userId: "alpha", label: "alpha@example.com" });

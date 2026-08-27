@@ -24,7 +24,6 @@
   const TOOLBAR_BREADCRUMB_MODULE =
     "./assets/toolbar-breadcrumb-CqlwZiFF.js";
   const EXTENSIONS_SETTINGS_PANE_ID = "extensions.installed";
-  const AUTHENTICATION_RESTART_TIMEOUT_MS = 20_000;
   const RESPONSE_ANNOTATION_CREATION_TIMEOUT_MS = 10_000;
   const HEADER_BACKGROUND_PROPERTY = "--header-background-color";
   const HEADER_FOREGROUND_PROPERTY = "--header-foreground-color";
@@ -323,7 +322,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let nativeSignInStartCount = 0;
   let authenticationRefreshCount = 0;
   let authenticationAccountInfoResetCount = 0;
-  let authenticationAppServerRestartCount = 0;
   let headerThemeObserver = null;
   let observedHeaderTheme = null;
   let activeColorPicker = null;
@@ -2232,8 +2230,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           return;
         }
         if (typeof refreshAuthentication === "function") {
-          refreshAuthentication();
-          emitAuthenticationChange();
+          void refreshAuthentication()
+            .then(emitAuthenticationChange)
+            .catch((error) =>
+              warn("native post-authentication refresh failed", error),
+            );
         } else {
           warn("native post-authentication refresh is unavailable");
         }
@@ -2246,46 +2247,15 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
   async function replaceCurrentAuthentication(authJson) {
     inspectAuthentication(authJson);
-    if (!native?.messageBus || typeof refreshAuthentication !== "function") {
-      throw new Error("ChatGPT post-authentication refresh is unavailable");
-    }
+    const currentAuthJson = await runtimeRequest("authentication.read-current");
+    const credentialsChanged = currentAuthJson !== authJson;
     await runtimeRequest("authentication.replace-current", { authJson });
-    await new Promise((resolve, reject) => {
-      let unsubscribe;
-      const timeout = setTimeout(() => {
-        unsubscribe?.();
-        reject(
-          new Error(
-            "ChatGPT app server did not restart after authentication changed",
-          ),
-        );
-      }, AUTHENTICATION_RESTART_TIMEOUT_MS);
-      unsubscribe = native.messageBus.subscribe(
-        "codex-app-server-initialized",
-        (message) => {
-          if (message?.hostId !== "local") return;
-          clearTimeout(timeout);
-          unsubscribe();
-          authenticationAppServerRestartCount += 1;
-          try {
-            refreshAuthentication();
-            emitAuthenticationChange();
-            resolve();
-          } catch (error) {
-            reject(error);
-          }
-        },
-      );
-      try {
-        native.messageBus.dispatchMessage("codex-app-server-restart", {
-          hostId: "local",
-        });
-      } catch (error) {
-        clearTimeout(timeout);
-        unsubscribe();
-        reject(error);
-      }
-    });
+    if (credentialsChanged) {
+      await runtimeRequest("application.relaunch");
+    } else if (typeof refreshAuthentication === "function") {
+      await refreshAuthentication();
+    }
+    emitAuthenticationChange();
   }
 
   // ------------------------------------------------------------------
@@ -5183,18 +5153,20 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
     function useNativePostAuthenticationRefresh() {
       nativeApplicationScope = native.useScope(native.ApplicationScope);
-      const updateAuthNonce = native.useUpdateAuthNonce();
       const queryClient = native.useQueryClient();
       const appServerRegistry = native.useAppServerRegistry();
       nativeAppServerRegistry = appServerRegistry;
-      refreshAuthentication = () => {
+      refreshAuthentication = async () => {
         authenticationRefreshCount += 1;
         queryClient.removeQueries({
           queryKey: native.accountInfoQueryKey("account-info"),
           exact: true,
         });
+        queryClient.removeQueries({
+          queryKey: ["accounts", "check"],
+          exact: true,
+        });
         authenticationAccountInfoResetCount += 1;
-        updateAuthNonce();
       };
     }
 
@@ -5865,7 +5837,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       ColorPicker: appInitialModule.ec,
       startChatGptSignIn: authModule.o,
       decorateAuthUrl: authModule.t,
-      useUpdateAuthNonce: appInitialModule.Hct,
       useAppServerRegistry: appInitialModule.Zct,
       useQueryClient: appInitialModule.BKt,
       accountInfoQueryKey: appInitialModule.oFt,
@@ -6663,8 +6634,6 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       authenticationRefreshCount: () => authenticationRefreshCount,
       authenticationAccountInfoResetCount: () =>
         authenticationAccountInfoResetCount,
-      authenticationAppServerRestartCount: () =>
-        authenticationAppServerRestartCount,
       profileMenuHasNativeProfileCallback: () =>
         profileMenuHasNativeProfileCallback,
       profileNavigationAttemptCount: () => profileNavigationAttemptCount,

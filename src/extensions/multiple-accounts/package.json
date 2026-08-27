@@ -1,7 +1,7 @@
 {
   "id": "multiple-accounts",
   "name": "Multiple Accounts",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Adds native profile, add-account, and saved-account actions beneath the profile identity row.",
   "main": "contents/main.js",
   "compatibility": {

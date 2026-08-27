@@ -20,6 +20,8 @@ struct ChatGPTLauncher {
         "CHATGPTX_LAUNCH_CONFIGURATION"
     private static let versionsLockEnvironmentKey =
         "CHATGPTX_VERSIONS_LOCK"
+    private static let relaunchArgumentsEnvironmentKey =
+        "CHATGPTX_RELAUNCH_ARGUMENTS"
     private static let restartCountdown = 10
     private static let quitTimeout: TimeInterval = 10
     private static let asarHashCache = ChatGPTAsarHashCache()
@@ -199,7 +201,8 @@ struct ChatGPTLauncher {
         configuration.environment = Self.environment(
             requiring: bridgeURL,
             launchConfigurationURL: launchConfigurationURL,
-            versionsLockURL: launchVersionsLockURL
+            versionsLockURL: launchVersionsLockURL,
+            arguments: arguments
         )
         configuration.createsNewApplicationInstance = true
         configuration.activates = mode == .normal
@@ -262,6 +265,7 @@ struct ChatGPTLauncher {
         environment.removeValue(forKey: "NODE_OPTIONS")
         environment.removeValue(forKey: launchConfigurationEnvironmentKey)
         environment.removeValue(forKey: versionsLockEnvironmentKey)
+        environment.removeValue(forKey: relaunchArgumentsEnvironmentKey)
         configuration.environment = environment
         do {
             return try await workspace.openApplication(
@@ -637,10 +641,11 @@ struct ChatGPTLauncher {
         }
     }
 
-    private static func environment(
+    static func environment(
         requiring bridgeURL: URL,
         launchConfigurationURL: URL?,
-        versionsLockURL: URL
+        versionsLockURL: URL,
+        arguments: [String]
     ) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let requireOption = "--require \(quoteNodeOption(bridgeURL.path))"
@@ -656,6 +661,11 @@ struct ChatGPTLauncher {
                 launchConfigurationURL.path
         }
         environment[versionsLockEnvironmentKey] = versionsLockURL.path
+        if let data = try? JSONSerialization.data(withJSONObject: arguments),
+            let value = String(data: data, encoding: .utf8)
+        {
+            environment[relaunchArgumentsEnvironmentKey] = value
+        }
 
         return environment
     }

@@ -65,7 +65,20 @@ export async function addAccount(storage: ExtensionStorage, authentication: Auth
 export async function selectAccount(storage: ExtensionStorage, authentication: AuthenticationApi, account: StoredAccount): Promise<void> {
   const current = await authentication.getCurrent();
   if (current) await saveAuthentication(storage, current);
-  await replaceWithStoredAccount(storage, authentication, account);
+  try {
+    await replaceWithStoredAccount(storage, authentication, account);
+  } catch (switchError) {
+    if (!current) throw switchError;
+    try {
+      await authentication.replaceCurrent(current.authJson);
+    } catch (restoreError) {
+      throw new AggregateError(
+        [switchError, restoreError],
+        "Failed to switch accounts and restore the previous account",
+      );
+    }
+    throw switchError;
+  }
 }
 
 async function replaceWithStoredAccount(storage: ExtensionStorage, authentication: AuthenticationApi, account: StoredAccount): Promise<void> {

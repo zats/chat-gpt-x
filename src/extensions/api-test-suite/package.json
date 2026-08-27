@@ -1,7 +1,7 @@
 {
   "id": "api-test-suite",
   "name": "API Test Suite",
-  "version": "0.0.24",
+  "version": "0.0.25",
   "private": true,
   "description": "Mechanical end-to-end test extension for the platform. Exercises every public API path deterministically and defines whether a binding is 'working'. Internal tooling, not a user extension.",
   "main": "contents/main.js",

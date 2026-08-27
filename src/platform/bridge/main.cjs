@@ -27,8 +27,32 @@ if (process.type === "browser") {
 }
 
 function init() {
+  const relaunchArgumentsJson = process.env.CHATGPTX_RELAUNCH_ARGUMENTS;
+  let relaunchArguments;
+  try {
+    relaunchArguments = JSON.parse(relaunchArgumentsJson);
+    if (!Array.isArray(relaunchArguments)) throw new TypeError();
+    if (!relaunchArguments.every((argument) => typeof argument === "string")) {
+      throw new TypeError();
+    }
+  } catch {
+    relaunchArguments = process.argv
+      .slice(1)
+      .filter((argument) => argument !== "electron/js2c/browser_init");
+  }
+  const serializedRelaunchArguments = JSON.stringify(relaunchArguments);
+  const nodeOptions = process.env.NODE_OPTIONS;
+  const versionsLockFile = process.env.CHATGPTX_VERSIONS_LOCK;
+  const launchConfigurationFile =
+    process.env.CHATGPTX_LAUNCH_CONFIGURATION;
+  delete process.env.NODE_OPTIONS;
+  delete process.env.CHATGPTX_VERSIONS_LOCK;
+  delete process.env.CHATGPTX_LAUNCH_CONFIGURATION;
+  delete process.env.CHATGPTX_RELAUNCH_ARGUMENTS;
+
   const fs = require("node:fs");
   const path = require("node:path");
+  const { spawn } = require("node:child_process");
   const {
     resolveCodexHome,
     resolveExtensionsDirectory,
@@ -51,9 +75,8 @@ function init() {
   const STATE_DIR = resolveExtensionsDirectory();
   const LOG_DIR = path.join(STATE_DIR, "log");
   const LOG_FILE = path.join(LOG_DIR, `bridge-${process.pid}.log`);
-  const VERSIONS_LOCK_FILE = process.env.CHATGPTX_VERSIONS_LOCK;
-  const LAUNCH_CONFIGURATION_FILE =
-    process.env.CHATGPTX_LAUNCH_CONFIGURATION;
+  const VERSIONS_LOCK_FILE = versionsLockFile;
+  const LAUNCH_CONFIGURATION_FILE = launchConfigurationFile;
   const RESULTS_DIR = path.join(LOG_DIR, "test-results", String(process.pid));
   const PRELOAD_FILE = path.join(__dirname, "preload.cjs");
   const AUTH_FILE = path.join(CODEX_HOME, "auth.json");
@@ -62,6 +85,25 @@ function init() {
     "chatgptx:renderer-bootstrap-error";
   const extensionManagerAuthorization =
     createExtensionManagerAuthorization();
+  let applicationRelaunchScheduled = false;
+
+  function injectionEnvironment() {
+    const environment = { ...process.env };
+    const variables = {
+      NODE_OPTIONS: nodeOptions,
+      CHATGPTX_VERSIONS_LOCK: versionsLockFile,
+      CHATGPTX_LAUNCH_CONFIGURATION: launchConfigurationFile,
+      CHATGPTX_RELAUNCH_ARGUMENTS: serializedRelaunchArguments,
+    };
+    for (const [name, value] of Object.entries(variables)) {
+      if (typeof value === "string" && value.length > 0) {
+        environment[name] = value;
+      } else {
+        delete environment[name];
+      }
+    }
+    return environment;
+  }
 
   function log(event, data) {
     try {
@@ -385,6 +427,43 @@ function init() {
             throw new TypeError("authJson must contain a JSON object");
           }
           atomicWrite(AUTH_FILE, authJson);
+          return null;
+        }
+        case "application.relaunch": {
+          if (applicationRelaunchScheduled) return null;
+          applicationRelaunchScheduled = true;
+          log("application-relaunch-requested");
+          setTimeout(() => {
+            try {
+              const relaunched = spawn("/bin/sh", [
+                "-c",
+                "parent_pid=$1; shift; " +
+                  "while kill -0 \"$parent_pid\" 2>/dev/null; do " +
+                  "parent_state=$(/bin/ps -p \"$parent_pid\" -o stat=); " +
+                  "case \"$parent_state\" in Z*|'') break ;; esac; " +
+                  "sleep 0.05; done; " +
+                  "exec \"$@\"",
+                "chatgptx-relaunch",
+                String(process.pid),
+                process.execPath,
+                ...relaunchArguments,
+              ], {
+                detached: true,
+                env: injectionEnvironment(),
+                stdio: "ignore",
+              });
+              relaunched.unref();
+              log("application-relaunch-started", { pid: relaunched.pid });
+              app.quit();
+              setTimeout(() => {
+                log("application-relaunch-forced-exit");
+                app.exit(0);
+              }, 1_000);
+            } catch (error) {
+              applicationRelaunchScheduled = false;
+              log("application-relaunch-failed", { error: String(error) });
+            }
+          }, 100);
           return null;
         }
         case "extension-storage.list": {

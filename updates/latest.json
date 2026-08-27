@@ -1,6 +1,6 @@
 {
   "schemaVersion": 3,
-  "generation": 43,
+  "generation": 44,
   "minimumLauncherVersion": "1.1.0",
   "releaseBaseURL": "https://github.com/zats/chat-gpt-x/releases/download",
   "chatgptApis": {
@@ -27,6 +27,10 @@
     "1.5.0": {
       "release": "chatgpt-api-v1.5.0",
       "sha256": "3e9777b141dd88d31bf36eeafd5ff4c0c1615ff9d7935616740c9318c877cce8"
+    },
+    "1.5.1": {
+      "release": "chatgpt-api-v1.5.1",
+      "sha256": "338b2acaf35345a5ba481f469e1d742d0f2d2e75da244252418a531ac411259a"
     }
   },
   "bindings": {
@@ -129,18 +133,18 @@
       "sha256": "c54db52f5d0d3d9c0e3d3c90c08f935e4ca0253d613398e2d6c0d97f57b35fb3"
     },
     "26.820.60940": {
-      "version": "1.1.1",
-      "chatgptApi": "1.5.0",
+      "version": "1.1.2",
+      "chatgptApi": "1.5.1",
       "asarSha256": "c964aebbf9a6a0f70799d01215c611d8ef6ee63f816b3d57beccddd47a811fd9",
-      "release": "binding-26.820.60940-v1.1.1",
-      "sha256": "620af369ec55354c1ec8847e3d66b9ceb04be01df18388efd19d8401a689e8f0"
+      "release": "binding-26.820.60940-v1.1.2",
+      "sha256": "69810615b64060745274ba63e0a0f547b602ff9ff7e071dd08649a2de9ed6dcc"
     },
     "26.820.71523": {
-      "version": "1.0.0",
-      "chatgptApi": "1.5.0",
+      "version": "1.1.0",
+      "chatgptApi": "1.5.1",
       "asarSha256": "659001da13765403fc6e94cc846b4f9ce267d5ca2503432898527bf237b6ed60",
-      "release": "binding-26.820.71523-v1.0.0",
-      "sha256": "20e1f0a2582215a5b4f0e6e0606f7812985401190af5ea0bcd39d75e7adf0bec"
+      "release": "binding-26.820.71523-v1.1.0",
+      "sha256": "394b5fc5e8440276acdd9d132a1e93e8700a896cc6c490e261bff6e41a8b9086"
     }
   },
   "extensions": {
@@ -247,6 +251,13 @@
           },
           "release": "extension-multiple-accounts-v0.1.13",
           "sha256": "3a9f496144dc8c07ea0f5742b233e7b7e4944ca83ee6f3a76c9dbac065444774"
+        },
+        "0.1.14": {
+          "compatibility": {
+            "chatgptApi": "^1.1.2"
+          },
+          "release": "extension-multiple-accounts-v0.1.14",
+          "sha256": "a700ffc4fb10819b5144607e2e2dadd2826aca73f874c418bd764fff37e78057"
         }
       }
     },
