@@ -72,6 +72,11 @@ const knownUnpublishedSchema3ChatGPTAPIs = {
     sha256:
       "99e1691a05f1ee577f9cbeb13c2dbc50fd52631a517dc7ac82a725a157ba385b",
   },
+  "1.5.1": {
+    release: "chatgpt-api-v1.5.1",
+    sha256:
+      "338b2acaf35345a5ba481f469e1d742d0f2d2e75da244252418a531ac411259a",
+  },
 };
 const knownUnpublishedSchema3Extensions = [
   {
