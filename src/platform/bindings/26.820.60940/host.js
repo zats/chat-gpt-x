@@ -290,6 +290,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
   let builtInCache = Object.freeze([]);
   let builtInViews = new Map();
   let activeAssistantSelectionModel = null;
+  let assistantSelectionPositionContext = null;
   let pendingResponseAnnotationCreation = null;
   let responseAnnotationCreationCount = 0;
   let lastResponseAnnotationCreation = null;
@@ -843,7 +844,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     const moved = nestedIds(rawOutput);
     const seen = new Set();
 
-    function normalizeList(rawItems, depth) {
+    function normalizeList(rawItems, depth, inheritedPlacement) {
       const items = [];
       for (const raw of rawItems) {
         if (!raw || typeof raw !== "object" || raw.kind !== "action") continue;
@@ -889,6 +890,14 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         ) {
           continue;
         }
+        if (depth === 0) {
+          item.placement ??= "above";
+          if (item.placement !== "above" && item.placement !== "below") {
+            continue;
+          }
+        } else {
+          item.placement = inheritedPlacement;
+        }
         if (depth >= 1 && Array.isArray(item.items)) {
           warn(
             "dropping unsupported assistant-selection nesting from: " +
@@ -896,7 +905,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           );
           delete item.items;
         } else if (Array.isArray(item.items)) {
-          item.items = normalizeList(item.items, depth + 1);
+          item.items = normalizeList(item.items, depth + 1, item.placement);
         }
         if (
           typeof raw.onClick === "function" &&
@@ -909,7 +918,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       return items;
     }
 
-    return normalizeList(rawOutput, 0);
+    return normalizeList(rawOutput, 0, "above");
   }
 
   function computeEffectiveAssistantSelectionRootItems(model) {
@@ -943,17 +952,45 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return items;
   }
 
-  function computeEffectiveAssistantSelectionItems(model) {
-    const rootItems = computeEffectiveAssistantSelectionRootItems(model);
-    if (model.activePageId === null) return rootItems;
-    const parent = rootItems.find(
-      (item) => item.id === model.activePageId,
+  function computeEffectiveAssistantSelectionPlacementItems(
+    model,
+    rootItems,
+    placement,
+  ) {
+    const placementItems = rootItems.filter(
+      (item) => item.placement === placement,
     );
+    const activePageId = model.activePageIds[placement];
+    if (activePageId === null) return placementItems;
+    const parent = placementItems.find((item) => item.id === activePageId);
     if (parent?.kind === "action" && Array.isArray(parent.items)) {
       return parent.items;
     }
-    model.activePageId = null;
-    return rootItems;
+    model.activePageIds[placement] = null;
+    return placementItems;
+  }
+
+  function computeEffectiveAssistantSelectionPages(model) {
+    const rootItems = computeEffectiveAssistantSelectionRootItems(model);
+    const above = computeEffectiveAssistantSelectionPlacementItems(
+      model,
+      rootItems,
+      "above",
+    );
+    const below = computeEffectiveAssistantSelectionPlacementItems(
+      model,
+      rootItems,
+      "below",
+    );
+    return {
+      above,
+      below,
+      visible: Object.freeze([...above, ...below]),
+    };
+  }
+
+  function computeEffectiveAssistantSelectionItems(model) {
+    return computeEffectiveAssistantSelectionPages(model).visible;
   }
 
   function dismissAssistantSelection() {
@@ -980,14 +1017,14 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
         Array.isArray(item.items) &&
         item.items.length > 0
       ) {
-        model.activePageId = item.id;
+        model.activePageIds[item.placement] = item.id;
         emitAssistantSelectionChange();
         return true;
       }
       return false;
     }
     if (Array.isArray(item.items) && item.items.length > 0) {
-      model.activePageId = item.id;
+      model.activePageIds[item.placement] = item.id;
       emitAssistantSelectionChange();
       return true;
     }
@@ -4208,7 +4245,10 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           },
         })
       : model.context;
-    if (selectionChanged) model.activePageId = null;
+    if (selectionChanged) {
+      model.activePageIds.above = null;
+      model.activePageIds.below = null;
+    }
     const views = new Map();
     const builtIns = [];
     let actionType = null;
@@ -4227,6 +4267,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           kind: "action",
           id: message.id,
           label: intl.formatMessage(message),
+          placement: "above",
           disabled: props.disabled === true,
           onClick:
             typeof props.onClick === "function"
@@ -4274,6 +4315,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     }
     props["data-cgptx-id"] = item.id;
     props["data-cgptx-origin"] = item.origin ?? "";
+    props["data-cgptx-placement"] = item.placement;
     props["data-cgptx-assistant-selection-action"] = "";
     if (
       Array.isArray(item.items) ||
@@ -4297,21 +4339,107 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     return native.jsx(type, props, item.id);
   }
 
-  function renderAssistantSelectionTree(tree, model) {
+  function renderAssistantSelectionMenu(tree, model, items) {
     if (!isElement(tree)) return tree;
-    const items = computeEffectiveAssistantSelectionItems(model);
     if (items.length === 0) return null;
     return native.jsx(
       tree.type,
       {
         ...tree.props,
-        "data-cgptx-assistant-selection-menu": "",
         children: items
           .map((item) => renderAssistantSelectionAction(model, item))
           .filter(Boolean),
       },
       tree.key ?? undefined,
     );
+  }
+
+  function positionAssistantSelectionBelowSurface(element, position) {
+    const info = position.getPositionInfo();
+    const offsetParent = element.offsetParent;
+    if (!info || !(offsetParent instanceof HTMLElement)) return;
+
+    const zoom =
+      position.selection.portalTarget == null && info.windowZoom > 0
+        ? info.windowZoom
+        : 1;
+    const portalRect =
+      position.selection.portalTarget?.getBoundingClientRect() ?? null;
+    const boundsLeft =
+      portalRect == null
+        ? position.selection.horizontalBounds.left
+        : portalRect.left +
+          position.selection.horizontalBounds.left * info.windowZoom;
+    const boundsRight =
+      portalRect == null
+        ? position.selection.horizontalBounds.right
+        : portalRect.left +
+          position.selection.horizontalBounds.right * info.windowZoom;
+    const availableWidth = Math.max(0, boundsRight - boundsLeft - 16);
+    element.style.maxWidth = `${availableWidth / zoom}px`;
+
+    const elementRect = element.getBoundingClientRect();
+    const parentRect = offsetParent.getBoundingClientRect();
+    const desiredLeft = Math.min(
+      Math.max(
+        info.selectionRect.x + info.selectionRect.width / 2 -
+          elementRect.width / 2,
+        boundsLeft + 8,
+      ),
+      boundsRight - 8 - elementRect.width,
+    );
+    const desiredTop =
+      info.selectionRect.y + info.selectionRect.height + 8;
+    element.style.left = `${(desiredLeft - parentRect.left) / zoom}px`;
+    element.style.top = `${(desiredTop - parentRect.top) / zoom}px`;
+    element.style.visibility = "visible";
+  }
+
+  function AssistantSelectionBelowSurface({ tree, model, items, position }) {
+    const elementRef = native.React.useRef(null);
+    native.React.useLayoutEffect(() => {
+      const element = elementRef.current;
+      if (!(element instanceof HTMLElement)) return undefined;
+      const place = () =>
+        positionAssistantSelectionBelowSurface(element, position);
+      place();
+      const observer = new ResizeObserver(place);
+      observer.observe(element);
+      return () => observer.disconnect();
+    }, [items, position]);
+    return native.jsx("div", {
+      ref: elementRef,
+      "data-cgptx-assistant-selection-below-surface": "",
+      style: {
+        position: "absolute",
+        width: "max-content",
+        visibility: "hidden",
+        pointerEvents: "none",
+      },
+      children: renderAssistantSelectionMenu(tree, model, items),
+    });
+  }
+
+  function renderAssistantSelectionTree(tree, model, position) {
+    if (!isElement(tree)) return tree;
+    const pages = computeEffectiveAssistantSelectionPages(model);
+    if (pages.above.length === 0 && pages.below.length === 0) return null;
+    const above = renderAssistantSelectionMenu(
+      tree,
+      model,
+      pages.above,
+    );
+    if (pages.below.length === 0 || position == null) return above;
+    return native.jsx(native.React.Fragment, {
+      children: [
+        above,
+        native.jsx(
+          AssistantSelectionBelowSurface,
+          { tree, model, items: pages.below, position },
+          "cgptx-assistant-selection-below",
+        ),
+      ],
+    });
   }
 
   function genericThreadDescriptor(raw, shortcuts, views, state, intl) {
@@ -5123,9 +5251,33 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       );
     }
 
+    function isAssistantSelectionPositioner(type, props) {
+      return (
+        type === native.SelectedTextPositioner &&
+        props?.bottomBoundarySelector ===
+          "[data-thread-scroll-footer='true']" &&
+        typeof props?.children === "function"
+      );
+    }
+
+    function wrapAssistantSelectionPositionerProps(props) {
+      const render = props.children;
+      return {
+        ...props,
+        children(selection, getPositionInfo) {
+          const value = Object.freeze({ selection, getPositionInfo });
+          return originalJsx(assistantSelectionPositionContext.Provider, {
+            value,
+            children: render(selection, getPositionInfo),
+          });
+        },
+      };
+    }
+
     function AssistantSelectionBoundary({ child }) {
       assistantSelectionBoundaryRenderCount += 1;
       const intl = native.useIntl();
+      const position = React.useContext(assistantSelectionPositionContext);
       React.useSyncExternalStore(
         subscribeAssistantSelection,
         () => assistantSelectionRenderVersion,
@@ -5134,7 +5286,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       const modelRef = React.useRef(null);
       if (modelRef.current === null) {
         modelRef.current = {
-          activePageId: null,
+          activePageIds: { above: null, below: null },
           activatingLeaf: false,
           context: null,
           builtInCache: Object.freeze([]),
@@ -5157,7 +5309,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
           }
         };
       }, [model]);
-      return renderAssistantSelectionTree(tree, model);
+      return renderAssistantSelectionTree(tree, model, position);
     }
 
     function isResponseAnnotationLayer(type, props) {
@@ -5475,6 +5627,9 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
 
     function wrap(original) {
       return function cgptxJsx(type, props, key) {
+        if (isAssistantSelectionPositioner(type, props)) {
+          props = wrapAssistantSelectionPositionerProps(props);
+        }
         if (
           type === native.Item ||
           type === native.FlyoutSubmenuItem ||
@@ -5704,6 +5859,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       FlyoutSubmenuItem: appInitialModule.a4.FlyoutSubmenuItem,
       MenuRoot: appInitialModule.r4,
       SelectedTextOverlay: appInitialModule.RI,
+      SelectedTextPositioner: appInitialModule.jX,
       ThreadMenuAdapter: appInitialModule.b0,
       ThreadMenu: threadMenuModule.t,
       ColorPicker: appInitialModule.ec,
@@ -5747,6 +5903,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       });
     };
     settingsPageCaptureContext = native.React.createContext(null);
+    assistantSelectionPositionContext = native.React.createContext(null);
     installJsxHook();
     await reconcileApplicationTree();
     mountColorPickerHost();

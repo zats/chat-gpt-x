@@ -8,9 +8,6 @@ import type {
 import { sharedReactionSettings } from "./reaction-settings";
 
 const EXTENSION_ID = "reactions";
-const ADD_TO_CHAT_ID = "selectedTextOverlay.addToCodex";
-
-export const REACTION_ACTION_ID = `${EXTENSION_ID}.react`;
 
 export const REACTIONS = Object.freeze(["👍", "👎", "🤔", "🤬"]);
 
@@ -34,6 +31,7 @@ function reactionItems(
     kind: "action" as const,
     id: `${EXTENSION_ID}.reaction-${index + 1}`,
     label: emoji,
+    placement: "below",
     labelScale: 2,
     verticalPadding: 4,
     onClick: (activation) =>
@@ -46,19 +44,7 @@ export function transformAssistantSelectionItems(
   context: AssistantSelectionContext,
   emojis: readonly string[] = REACTIONS,
 ): readonly AssistantSelectionMenuItem[] {
-  const addToChatIndex = items.findIndex((item) => item.id === ADD_TO_CHAT_ID);
-  if (addToChatIndex < 0) return items;
-  const reactAction: AssistantSelectionMenuActionItem = {
-    kind: "action",
-    id: REACTION_ACTION_ID,
-    label: "React",
-    items: reactionItems(context, emojis),
-  };
-  return [
-    ...items.slice(0, addToChatIndex + 1),
-    reactAction,
-    ...items.slice(addToChatIndex + 1),
-  ];
+  return [...items, ...reactionItems(context, emojis)];
 }
 
 let registration: Disposable | undefined;

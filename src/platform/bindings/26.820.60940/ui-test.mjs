@@ -255,6 +255,26 @@ async function validateUi(
   const assistantSelectionActions = Array.from(
     document.querySelectorAll('[data-cgptx-assistant-selection-action]'),
   );
+  const assistantSelectionAboveAction = assistantSelectionActions.find(
+    (action) => action.getAttribute('data-cgptx-placement') === 'above',
+  );
+  const assistantSelectionBelowAction = assistantSelectionActions.find(
+    (action) => action.getAttribute('data-cgptx-placement') === 'below',
+  );
+  const assistantSelectionAboveMenu =
+    assistantSelectionAboveAction?.closest('[role="presentation"]');
+  const assistantSelectionBelowMenu =
+    assistantSelectionBelowAction?.closest('[role="presentation"]');
+  const assistantSelectionAboveLabels = Array.from(
+    assistantSelectionAboveMenu?.querySelectorAll(
+      '[data-cgptx-assistant-selection-action]',
+    ) ?? [],
+  ).map((action) => action.textContent?.trim());
+  const assistantSelectionBelowLabels = Array.from(
+    assistantSelectionBelowMenu?.querySelectorAll(
+      '[data-cgptx-assistant-selection-action]',
+    ) ?? [],
+  ).map((action) => action.textContent?.trim());
   const assistantSelectionLabels = assistantSelectionActions.map((action) =>
     action.textContent?.trim(),
   );
@@ -263,10 +283,20 @@ async function validateUi(
     : ['Add to chat', 'More details', 'Ask in side chat'];
   check(
     expectedAssistantSelectionLabels.every((label) =>
-      assistantSelectionLabels.includes(label),
+      assistantSelectionAboveLabels.includes(label),
     ),
-    'assistant selection keeps all native actions',
-    { labels: assistantSelectionLabels },
+    'assistant selection keeps all native actions above the selection',
+    { labels: assistantSelectionAboveLabels },
+  );
+  check(
+    ['👍', '👎', '🤷', '🤬'].every((label) =>
+      assistantSelectionBelowLabels.includes(label),
+    ) && !assistantSelectionAboveLabels.includes('React'),
+    'assistant selection shows direct emoji actions below the selection',
+    {
+      aboveLabels: assistantSelectionAboveLabels,
+      belowLabels: assistantSelectionBelowLabels,
+    },
   );
   const assistantSelectionBuiltIn = assistantSelectionActions.find(
     (action) => action.getAttribute('data-cgptx-origin') === 'app',
@@ -317,52 +347,27 @@ async function validateUi(
     'normal response annotation creation stays in the composer',
     standardAnnotationCreation,
   );
-  const assistantSelectionParentClickCount = Number(
-    globalThis.__CGPTX_ASSISTANT_SELECTION_PARENT_CLICK_COUNT__ ?? 0,
-  );
-  assistantSelectionExtension?.click();
-  await waitUntil(
-    () =>
-      Array.from(
-        document.querySelectorAll(
-          '[data-cgptx-assistant-selection-action]',
-        ),
-      ).some(
-        (action) =>
-          action.getAttribute('data-cgptx-id') ===
-          'api-test-suite.assistant-selection-visual-child',
-      ),
-  );
+  const selectionRange = window.getSelection()?.getRangeAt(0);
+  const selectionRect = selectionRange?.getBoundingClientRect();
+  const aboveRect = assistantSelectionAboveMenu?.getBoundingClientRect();
+  const belowRect = assistantSelectionBelowMenu?.getBoundingClientRect();
   check(
-    Number(
-      globalThis.__CGPTX_ASSISTANT_SELECTION_PARENT_CLICK_COUNT__ ?? 0,
-    ) === assistantSelectionParentClickCount &&
-      window.getSelection()?.isCollapsed === false,
-    'assistant selection parent replaces the toolbar without activation or dismissal',
+    aboveRect &&
+      belowRect &&
+      selectionRect &&
+      Math.abs(selectionRect.top - aboveRect.bottom - 8) < 1 &&
+      Math.abs(belowRect.top - selectionRect.bottom - 8) < 1,
+    'assistant selection native toolbars stay 8 px above and below the selection',
+    { aboveRect, belowRect, selectionRect },
   );
-  const assistantSelectionChildren = Array.from(
-    document.querySelectorAll('[data-cgptx-assistant-selection-action]'),
-  );
-  const assistantSelectionChildLabels = assistantSelectionChildren.map(
-    (action) => action.textContent?.trim(),
-  );
-  check(
-    ['👍', '👎', '🤷', '🤬'].every((label) =>
-      assistantSelectionChildLabels.includes(label),
-    ),
-    'assistant selection parent shows its replacement action page',
-    { labels: assistantSelectionChildLabels },
-  );
-  const assistantSelectionChild = assistantSelectionChildren.find(
-    (action) =>
-      action.getAttribute('data-cgptx-id') ===
-      'api-test-suite.assistant-selection-visual-child',
-  );
-  const assistantSelectionScaledChildren = assistantSelectionChildren.filter(
-    (action) =>
-      action.getAttribute('data-cgptx-id')?.startsWith(
-        'api-test-suite.assistant-selection-visual-',
-      ),
+  const assistantSelectionScaledChildren = assistantSelectionActions.filter(
+    (action) => {
+      const id = action.getAttribute('data-cgptx-id');
+      return (
+        id === 'api-test-suite.assistant-selection-visual' ||
+        id?.startsWith('api-test-suite.assistant-selection-visual-')
+      );
+    },
   );
   const assistantSelectionScaledFontSizes =
     assistantSelectionScaledChildren.map((action) => {
@@ -410,13 +415,15 @@ async function validateUi(
     },
   );
   check(
-    assistantSelectionBuiltIn?.tagName === assistantSelectionChild?.tagName &&
-      assistantSelectionBuiltIn?.className === assistantSelectionChild?.className,
-    'assistant selection child reuses the native button component',
+    assistantSelectionBuiltIn?.tagName ===
+      assistantSelectionExtension?.tagName &&
+      assistantSelectionBuiltIn?.className ===
+        assistantSelectionExtension?.className,
+    'assistant selection below action reuses the native button component',
   );
   const responseAnnotationCreationCount =
     globalThis.__CGPTX_HOST__._debug.responseAnnotationCreationCount();
-  assistantSelectionChild?.dispatchEvent(
+  assistantSelectionExtension?.dispatchEvent(
     new MouseEvent('click', { bubbles: true, metaKey: true }),
   );
   await waitUntil(

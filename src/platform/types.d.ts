@@ -1120,9 +1120,11 @@ export interface MenusApi {
 }
 
 /**
- * APIs for the native action toolbar that ChatGPT shows when the user selects
- * text in an assistant response. ChatGPT owns the toolbar position, selection
- * lifecycle, focus behavior, and native action buttons.
+ * APIs for the native action toolbars that ChatGPTX shows when the user
+ * selects text in an assistant response. ChatGPT owns the selection lifecycle,
+ * the native toolbar and action components, focus behavior, and the toolbar
+ * above the selection. ChatGPTX can place a second native toolbar below the
+ * same selection.
  *
  * @group Menus
  */
@@ -1140,7 +1142,7 @@ export interface AssistantSelectionMenuApi {
    * `"selectedTextOverlay.moreDetails"`, and
    * `"selectedTextOverlay.askInSideChat"`. Returning a descriptor with a
    * built-in id replaces that action and inherits omitted fields, including
-   * its native `onClick`. Extension-created ids must use
+   * its native `onClick` and placement. Extension-created ids must use
    * `"<extension-id>.<name>"`; foreign and duplicate ids are dropped and
    * logged.
    *
@@ -1168,10 +1170,12 @@ export interface AssistantSelectionMenuApi {
   transformItems(transform: AssistantSelectionMenuTransform): Disposable;
 
   /**
-   * Return the active toolbar page's effective action list in display order.
-   * The root page includes every registered transform. After a parent action
-   * expands, this returns that parent's child actions. Returns an empty list
-   * when no assistant-text selection toolbar is mounted.
+   * Return the effective actions on all visible toolbar pages. Actions in the
+   * toolbar above the selection come first, followed by actions in the toolbar
+   * below it. Within each toolbar, actions remain in transformer order.
+   * Expanding a parent replaces only that parent's toolbar page and leaves the
+   * other placement visible. Returns an empty list when no assistant-text
+   * selection toolbar is mounted.
    *
    * The snapshot updates when the selected text, native actions, or active
    * transformers change. It includes all extensions' contributions.
@@ -1181,7 +1185,7 @@ export interface AssistantSelectionMenuApi {
   /**
    * Programmatically activate an effective toolbar action.
    *
-   * A parent action replaces the toolbar page with its children without
+   * A parent action replaces its placement's toolbar page with its children without
    * dismissing the browser selection or invoking `onClick`. A leaf action
    * invokes its isolated `onClick` and dismisses the browser selection like a
    * click on ChatGPT's native buttons. Unknown, disabled, non-activatable, or
@@ -1286,6 +1290,18 @@ export interface AssistantSelectionMenuActionItem {
   readonly label: string;
 
   /**
+   * Place this root action in the native toolbar above or below the selected
+   * text. ChatGPT's built-in actions use `"above"`. An extension action also
+   * defaults to `"above"` when this field is omitted.
+   *
+   * A parent action and all its children use one placement. A child inherits
+   * its parent's placement; a placement supplied on a child is ignored.
+   * Actions from all extensions that select the same placement share one
+   * native toolbar in transformer order.
+   */
+  readonly placement?: "above" | "below";
+
+  /**
    * Scale the visible label relative to ChatGPT's native action-text size.
    *
    * The action keeps ChatGPT's native button, focus behavior, hit target, and
@@ -1319,7 +1335,7 @@ export interface AssistantSelectionMenuActionItem {
   readonly onClick?: (activation: AssistantSelectionActionActivation) => void;
 
   /**
-   * Child actions shown as a replacement toolbar page when this action is
+   * Child actions shown as a replacement page in this action's toolbar when
    * activated. ChatGPTX keeps the assistant-text selection active and renders
    * every child through ChatGPT's native selected-text action component.
    *

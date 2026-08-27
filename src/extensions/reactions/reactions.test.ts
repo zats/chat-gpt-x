@@ -4,13 +4,12 @@ import type {
   AssistantSelectionMenuItem,
 } from "../../platform/types";
 import {
-  REACTION_ACTION_ID,
   REACTIONS,
   transformAssistantSelectionItems,
 } from "./reactions";
 
 describe("reactions extension", () => {
-  test("places React after Add to chat and creates the selected reaction", async () => {
+  test("adds direct reactions below the native toolbar", async () => {
     const createResponseAnnotation = mock(
       async (_annotation: string, _options?: { submit?: boolean }) => {},
     );
@@ -36,31 +35,33 @@ describe("reactions extension", () => {
     const transformed = transformAssistantSelectionItems(builtIns, context);
     expect(transformed.map((item) => item.id)).toEqual([
       "selectedTextOverlay.addToCodex",
-      REACTION_ACTION_ID,
       "selectedTextOverlay.moreDetails",
+      "reactions.reaction-1",
+      "reactions.reaction-2",
+      "reactions.reaction-3",
+      "reactions.reaction-4",
     ]);
 
-    const parent = transformed[1];
-    expect(parent.kind).toBe("action");
-    if (parent.kind !== "action") throw new Error("React action is missing");
-    expect(parent.items?.map((item) => item.label)).toEqual(
-      REACTIONS,
+    const reactions = transformed.slice(builtIns.length);
+    expect(reactions.map((item) => item.label)).toEqual(REACTIONS);
+    expect(reactions.map((item) => item.placement)).toEqual(
+      REACTIONS.map(() => "below"),
     );
-    expect(parent.items?.map((item) => item.labelScale)).toEqual(
+    expect(reactions.map((item) => item.labelScale)).toEqual(
       REACTIONS.map(() => 2),
     );
-    expect(parent.items?.map((item) => item.verticalPadding)).toEqual(
+    expect(reactions.map((item) => item.verticalPadding)).toEqual(
       REACTIONS.map(() => 4),
     );
 
-    parent.items?.[0]?.onClick?.({ metaKey: false });
+    reactions[0]?.onClick?.({ metaKey: false });
     await Promise.resolve();
     expect(createResponseAnnotation).toHaveBeenCalledWith(
       `User reacted with ${REACTIONS[0]}`,
       { submit: false },
     );
 
-    parent.items?.[1]?.onClick?.({ metaKey: true });
+    reactions[1]?.onClick?.({ metaKey: true });
     await Promise.resolve();
     expect(createResponseAnnotation).toHaveBeenLastCalledWith(
       `User reacted with ${REACTIONS[1]}`,
@@ -86,16 +87,13 @@ describe("reactions extension", () => {
       "🎉",
       "👨‍👩‍👧‍👦",
     ]);
-    const parent = transformed[1];
-    expect(parent?.kind).toBe("action");
-    if (parent?.kind !== "action") throw new Error("React action is missing");
-    expect(parent.items?.map((item) => item.label)).toEqual([
+    expect(transformed.slice(items.length).map((item) => item.label)).toEqual([
       "🎉",
       "👨‍👩‍👧‍👦",
     ]);
   });
 
-  test("keeps the menu unchanged when Add to chat is unavailable", () => {
+  test("adds reactions when the assistant toolbar has another native action", () => {
     const createResponseAnnotation = mock(
       async (_annotation: string, _options?: { submit?: boolean }) => {},
     );
@@ -112,6 +110,10 @@ describe("reactions extension", () => {
       },
     ];
 
-    expect(transformAssistantSelectionItems(items, context)).toBe(items);
+    expect(
+      transformAssistantSelectionItems(items, context)
+        .slice(items.length)
+        .map((item) => item.label),
+    ).toEqual(REACTIONS);
   });
 });

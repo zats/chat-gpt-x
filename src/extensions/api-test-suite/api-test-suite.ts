@@ -157,6 +157,7 @@ const ASSISTANT_SELECTION_CHAIN_B_ID = `${EXT_ID}.assistant-selection-chain-b`;
 const ASSISTANT_SELECTION_DISABLED_ID = `${EXT_ID}.assistant-selection-disabled`;
 const ASSISTANT_SELECTION_PARENT_ID = `${EXT_ID}.assistant-selection-parent`;
 const ASSISTANT_SELECTION_CHILD_ID = `${EXT_ID}.assistant-selection-child`;
+const ASSISTANT_SELECTION_BELOW_ID = `${EXT_ID}.assistant-selection-below`;
 
 test("assistant-selection-menu: exposes selected text and native actions", () => {
   assert(observedAssistantSelectionContext, "selection context was observed");
@@ -261,6 +262,42 @@ test("assistant-selection-menu: contributes an action and dispose removes it", (
   assert(
     !assistantSelectionById(ASSISTANT_SELECTION_BASIC_ID),
     "selection contribution is removed",
+  );
+  registration.dispose();
+});
+
+test("assistant-selection-menu: places actions below and rejects invalid placement", () => {
+  const registration = registerAssistantSelection((items) => [
+    ...items,
+    {
+      kind: "action",
+      id: ASSISTANT_SELECTION_BELOW_ID,
+      label: "Selection Below",
+      placement: "below",
+    },
+    {
+      kind: "action",
+      id: `${EXT_ID}.assistant-selection-invalid-placement`,
+      label: "Selection Invalid Placement",
+      placement: "sideways",
+    } as unknown as AssistantSelectionMenuItem,
+  ]);
+  assert(
+    assistantSelectionById(ASSISTANT_SELECTION_BELOW_ID)?.placement ===
+      "below",
+    "selection contribution retains below placement",
+  );
+  assert(
+    assistantSelectionItems()
+      .filter((item) => item.origin === "app")
+      .every((item) => item.placement === "above"),
+    "native selection actions use above placement",
+  );
+  assert(
+    !assistantSelectionById(
+      `${EXT_ID}.assistant-selection-invalid-placement`,
+    ),
+    "invalid selection placement is dropped",
   );
   registration.dispose();
 });
@@ -400,6 +437,7 @@ test("assistant-selection-menu: expands children and creates a response annotati
       kind: "action",
       id: ASSISTANT_SELECTION_PARENT_ID,
       label: "Selection Parent",
+      placement: "below",
       onClick: () => {
         clicks += 100;
       },
@@ -431,6 +469,17 @@ test("assistant-selection-menu: expands children and creates a response annotati
       ],
     },
   ]);
+  const parent = assistantSelectionById(ASSISTANT_SELECTION_PARENT_ID);
+  assert(
+    parent?.placement === "below" && parent.items?.length === 2,
+    `below parent is effective before expansion: ${JSON.stringify(
+      assistantSelectionItems().map((item) => ({
+        id: item.id,
+        placement: item.placement,
+        childCount: item.items?.length ?? 0,
+      })),
+    )}`,
+  );
   assert(
     api.menus.assistantSelection.activateItem(ASSISTANT_SELECTION_PARENT_ID),
     "parent selection action expands",
@@ -440,10 +489,18 @@ test("assistant-selection-menu: expands children and creates a response annotati
     !assistantSelectionById(ASSISTANT_SELECTION_PARENT_ID),
     "expanded parent is replaced by its child page",
   );
+  assert(
+    assistantSelectionItems().some((item) => item.origin === "app"),
+    "expanding a below parent keeps the native above toolbar page",
+  );
   const child = assistantSelectionById(ASSISTANT_SELECTION_CHILD_ID);
   assert(child?.origin === EXT_ID, "selection child is effective and attributed");
   assert(Object.isFrozen(child), "selection child descriptor is immutable");
   assert(child?.labelScale === 2, "selection child retains 2× label scale");
+  assert(
+    child?.placement === "below",
+    "selection child inherits its parent placement",
+  );
   assert(
     child?.verticalPadding === 4,
     "selection child retains 4 px vertical padding",
@@ -2464,7 +2521,6 @@ let threadListVisualFixture: Disposable | undefined;
 let assistantSelectionReadiness: Disposable | undefined;
 
 const ASSISTANT_SELECTION_VISUAL_ID = `${EXT_ID}.assistant-selection-visual`;
-const ASSISTANT_SELECTION_VISUAL_CHILD_ID = `${ASSISTANT_SELECTION_VISUAL_ID}-child`;
 
 function removeThreadListVisualFixture(): void {
   threadListVisualFixture?.dispose();
@@ -2568,62 +2624,50 @@ function installVisualFixture(): void {
       {
         kind: "action",
         id: ASSISTANT_SELECTION_VISUAL_ID,
-        label: "React",
-        onClick: () => {
+        label: "👍",
+        placement: "below",
+        labelScale: 2,
+        verticalPadding: 4,
+        onClick: (activation) => {
           const fixture = globalThis as Record<string, unknown>;
-          fixture.__CGPTX_ASSISTANT_SELECTION_PARENT_CLICK_COUNT__ =
+          fixture.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ =
             Number(
-              fixture.__CGPTX_ASSISTANT_SELECTION_PARENT_CLICK_COUNT__ ?? 0,
+              fixture.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ ?? 0,
             ) + 1;
+          fixture.__CGPTX_ASSISTANT_SELECTION_META_KEY__ = activation.metaKey;
+          fixture.__CGPTX_ASSISTANT_SELECTION_ANNOTATION_PROMISE__ = context
+            .createResponseAnnotation("User reacted with 👍", {
+              submit: activation.metaKey,
+            })
+            .catch((error: unknown) => {
+              fixture.__CGPTX_ASSISTANT_SELECTION_ANNOTATION_ERROR__ =
+                String(error);
+            });
         },
-        items: [
-          {
-            kind: "action",
-            id: ASSISTANT_SELECTION_VISUAL_CHILD_ID,
-            label: "👍",
-            labelScale: 2,
-            verticalPadding: 4,
-            onClick: (activation) => {
-              const fixture = globalThis as Record<string, unknown>;
-              fixture.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ =
-                Number(
-                  fixture.__CGPTX_ASSISTANT_SELECTION_CLICK_COUNT__ ?? 0,
-                ) + 1;
-              fixture.__CGPTX_ASSISTANT_SELECTION_META_KEY__ =
-                activation.metaKey;
-              fixture.__CGPTX_ASSISTANT_SELECTION_ANNOTATION_PROMISE__ =
-                context
-                  .createResponseAnnotation("User reacted with 👍", {
-                    submit: activation.metaKey,
-                  })
-                  .catch((error: unknown) => {
-                    fixture.__CGPTX_ASSISTANT_SELECTION_ANNOTATION_ERROR__ =
-                      String(error);
-                  });
-            },
-          },
-          {
-            kind: "action",
-            id: `${ASSISTANT_SELECTION_VISUAL_ID}-down`,
-            label: "👎",
-            labelScale: 2,
-            verticalPadding: 4,
-          },
-          {
-            kind: "action",
-            id: `${ASSISTANT_SELECTION_VISUAL_ID}-unsure`,
-            label: "🤷",
-            labelScale: 2,
-            verticalPadding: 4,
-          },
-          {
-            kind: "action",
-            id: `${ASSISTANT_SELECTION_VISUAL_ID}-angry`,
-            label: "🤬",
-            labelScale: 2,
-            verticalPadding: 4,
-          },
-        ],
+      },
+      {
+        kind: "action",
+        id: `${ASSISTANT_SELECTION_VISUAL_ID}-down`,
+        label: "👎",
+        placement: "below",
+        labelScale: 2,
+        verticalPadding: 4,
+      },
+      {
+        kind: "action",
+        id: `${ASSISTANT_SELECTION_VISUAL_ID}-unsure`,
+        label: "🤷",
+        placement: "below",
+        labelScale: 2,
+        verticalPadding: 4,
+      },
+      {
+        kind: "action",
+        id: `${ASSISTANT_SELECTION_VISUAL_ID}-angry`,
+        label: "🤬",
+        placement: "below",
+        labelScale: 2,
+        verticalPadding: 4,
       },
     ]),
   );

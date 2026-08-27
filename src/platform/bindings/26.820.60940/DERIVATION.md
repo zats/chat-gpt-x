@@ -8,8 +8,8 @@ Pinned build:
 - Electron: `151.0.7922.170`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.820.60940.zip`
 - Binding date: `2026-08-25`
-- Binding version: `1.0.0`
-- ChatGPT API version: `1.4.0`
+- Binding version: `1.1.0`
+- ChatGPT API version: `1.5.0`
 - Version-watcher issue: `#51`
 
 The workflow supplied the exact stock application and a prepared `app.asar`
@@ -19,12 +19,12 @@ Only those supplied target-build inputs were used: no app was downloaded or
 extracted, and the prior stock app was not fetched. The supplied application,
 research tree, opaque authentication source, and user state were not changed.
 
-The new binding starts from the API-development implementation and research
-record in `26.818.61809`, which was selected by
-`src/platform/bindings/manifest.json` at the start of the rebind. It preserves
-that implementation's ChatGPTX API `1.4.0`. Public API declarations, the API
-test extension, public extension sources and manifests, and all earlier
-binding directories are unchanged.
+The initial binding started from the API-development implementation and
+research record in `26.818.61809`, which was selected by
+`src/platform/bindings/manifest.json` at the start of the rebind. Binding
+version `1.1.0` advances the ChatGPTX API from `1.4.0` to `1.5.0`. It adds
+native `above` and `below` placement to assistant-selection actions. Earlier
+binding directories remain unchanged.
 
 ## Verified module map
 
@@ -37,7 +37,7 @@ its current definition, importer, semantic caller, or live behavior.
 | React, JSX, and React DOM | `app-initial-CmWKLN1D.js` | `XKt()` supplies React; `VKt()` supplies mutable `jsx` and `jsxs`; `Kzt()` supplies `createRoot` |
 | Native menus | `app-initial-CmWKLN1D.js` | initializer `c4`; namespace `a4`; `a4.Item`, `a4.Separator`, `a4.SubmenuItem`, and `a4.FlyoutSubmenuItem`; `r4` dropdown root |
 | Generic app menu | `app-initial-CmWKLN1D.js` | initializer `x0`; `r4` is the generic menu adapter root and `Pzt` is its current internationalization hook |
-| Assistant-selection toolbar | `app-initial-CmWKLN1D.js` | initializer `zI`; `RI` is the selected-text overlay and composes the current native container and action wrapper |
+| Assistant-selection toolbars | `app-initial-CmWKLN1D.js` | initializer `zI`; `RI` is the selected-text overlay and composes the current native container and action wrapper; `jX` is the native selected-text positioner |
 | Native icons | `app-initial-CmWKLN1D.js` | initializer `n4` and chevron-right `t4`; initializer `rh` and Profile icon `nh`; initializer `V8` and Settings icon `B8` |
 | Native color picker | `app-initial-CmWKLN1D.js` | initializer `tc`; controlled picker `ec` |
 | Settings shell and search | `settings-page-CrglwAgp.js` | native categories, sidebar rows, search results, pane selection, unsaved-navigation handling, and Suspense ownership |
@@ -102,12 +102,26 @@ still compares the complete rendered action order with the public effective
 model, excluding only the separately rendered, `aria-hidden` shortcut.
 
 The assistant-selection boundary continues to capture the native toolbar
-container and action wrapper. Parent actions retain the browser selection and
-open their one-level child page; leaves dismiss selection and receive an
-immutable activation containing only the native event's Command-key state.
-`labelScale: 2`, `verticalPadding: 4`, native response-annotation creation,
-composer-preserving normal creation, and the native direct-submit path are
-unchanged and were exercised live.
+container and action wrapper. The current native positioner export `jX`
+provides the selected-text rectangle, horizontal bounds, portal target, and a
+live viewport-position callback. It places its native toolbar 8 px above the
+selection. Its pointer-down owner keeps a selection only when the event target
+is inside the positioner's wrapper. ChatGPTX therefore renders the optional
+lower native toolbar as an absolute descendant of that same wrapper. It uses
+the same container and action component, clamps to the positioner's horizontal
+bounds, and stays 8 px below the selected-text rectangle. It does not create a
+second selection owner.
+
+Root assistant-selection actions now have normalized `above` or `below`
+placement. Built-ins and omitted placements use `above`. Child actions inherit
+their parent's placement. Each placement has its own active child page, so a
+parent replaces only its toolbar and the other toolbar stays visible. Actions
+from concurrent extensions still pass through one ordered transformer chain
+and actions in the same placement share one native toolbar. Leaves dismiss the
+selection and receive an immutable activation that contains only the native
+event's Command-key state. `labelScale: 2`, `verticalPadding: 4`, native
+response-annotation creation, composer-preserving normal creation, and the
+native direct-submit path remain unchanged.
 
 Settings loading moved out of app-initial to
 `settings-loading-row-CxXZN8qu.js`. The remaining Settings page, group, rows,
@@ -181,7 +195,7 @@ CHATGPT_APP_PATH="/path/to/the/supplied/ChatGPT.app" \
   scripts/run-local-ci.sh /path/to/the/opaque/api-key-auth.json
 ```
 
-The exact build passed `43` extension and utility unit checks, `33/33`
+The exact build passed `43` extension and utility unit checks, `34/34`
 applicable public API checks with a fresh persisted renderer result, and
 `45/45` native UI and shipped-extension composition checks. The Release
 launcher built and signed successfully and contained no bundled platform
