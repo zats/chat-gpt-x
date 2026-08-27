@@ -1,6 +1,6 @@
 {
   "schemaVersion": 3,
-  "generation": 41,
+  "generation": 42,
   "minimumLauncherVersion": "1.1.0",
   "releaseBaseURL": "https://github.com/zats/chat-gpt-x/releases/download",
   "chatgptApis": {
@@ -134,6 +134,13 @@
       "asarSha256": "c964aebbf9a6a0f70799d01215c611d8ef6ee63f816b3d57beccddd47a811fd9",
       "release": "binding-26.820.60940-v1.1.0",
       "sha256": "cd40c56a9fc0d9da3cf34e4148e30e93450398c2b9c400b0997ec0e2b868c69a"
+    },
+    "26.820.71523": {
+      "version": "1.0.0",
+      "chatgptApi": "1.5.0",
+      "asarSha256": "659001da13765403fc6e94cc846b4f9ce267d5ca2503432898527bf237b6ed60",
+      "release": "binding-26.820.71523-v1.0.0",
+      "sha256": "20e1f0a2582215a5b4f0e6e0606f7812985401190af5ea0bcd39d75e7adf0bec"
     }
   },
   "extensions": {
