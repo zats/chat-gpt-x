@@ -26,6 +26,7 @@ Options:
 The script creates a temporary directory for each unspecified directory.`;
 
 const clearedEnvironmentVariables = [
+  "CHATGPTX_ICON_OVERLAY",
   "CHATGPTX_LAUNCH_CONFIGURATION",
   "CHATGPTX_VERSIONS_LOCK",
   "DYLD_FRAMEWORK_PATH",

@@ -2,9 +2,9 @@
  * Platform bridge — main-process injection entry.
  *
  * Loaded into the ChatGPT app's main process via `NODE_OPTIONS=--require`
- * before any app code runs. Strict no-op in every non-browser process (the
- * guard runs before any require — e.g. node:fs is unavailable in sandboxed
- * renderer contexts).
+ * before any app code runs. Strict no-op outside the ChatGPT main thread (the
+ * guard runs before general imports — e.g. node:fs is unavailable in
+ * sandboxed renderer contexts).
  *
  * Responsibilities:
  *  - load the exact API, binding, and extension set selected by the launch
@@ -12,13 +12,18 @@
  *  - install the binding host from the external preload before app page code
  *    (webFrame.executeJavaScript is privileged and bypasses the page CSP)
  *  - activate enabled extensions in deterministic id order through the host
+ *  - mark injected launches by overlaying every ChatGPT Dock icon update
  *  - report api-test-suite results in separate files per launch and renderer
  *
  * Logs JSON lines beneath the resolved Codex home.
  */
 "use strict";
 
-if (process.type === "browser") {
+if (
+  process.type === "browser" &&
+  /[/\\]ChatGPT(?:\.exe)?$/.test(process.execPath) &&
+  require("node:worker_threads").isMainThread
+) {
   try {
     init();
   } catch {
@@ -45,9 +50,11 @@ function init() {
   const versionsLockFile = process.env.CHATGPTX_VERSIONS_LOCK;
   const launchConfigurationFile =
     process.env.CHATGPTX_LAUNCH_CONFIGURATION;
+  const iconOverlayFile = process.env.CHATGPTX_ICON_OVERLAY;
   delete process.env.NODE_OPTIONS;
   delete process.env.CHATGPTX_VERSIONS_LOCK;
   delete process.env.CHATGPTX_LAUNCH_CONFIGURATION;
+  delete process.env.CHATGPTX_ICON_OVERLAY;
   delete process.env.CHATGPTX_RELAUNCH_ARGUMENTS;
 
   const fs = require("node:fs");
@@ -70,6 +77,9 @@ function init() {
     wrapExtensionSource,
     wrapExtensionSettingsSource,
   } = require("../runtime/extension-manager-authorization.cjs");
+  const {
+    installDockIconOverlay,
+  } = require("../runtime/dock-icon-overlay.cjs");
 
   const CODEX_HOME = resolveCodexHome();
   const STATE_DIR = resolveExtensionsDirectory();
@@ -77,6 +87,7 @@ function init() {
   const LOG_FILE = path.join(LOG_DIR, `bridge-${process.pid}.log`);
   const VERSIONS_LOCK_FILE = versionsLockFile;
   const LAUNCH_CONFIGURATION_FILE = launchConfigurationFile;
+  const ICON_OVERLAY_FILE = iconOverlayFile;
   const RESULTS_DIR = path.join(LOG_DIR, "test-results", String(process.pid));
   const PRELOAD_FILE = path.join(__dirname, "preload.cjs");
   const AUTH_FILE = path.join(CODEX_HOME, "auth.json");
@@ -93,6 +104,7 @@ function init() {
       NODE_OPTIONS: nodeOptions,
       CHATGPTX_VERSIONS_LOCK: versionsLockFile,
       CHATGPTX_LAUNCH_CONFIGURATION: launchConfigurationFile,
+      CHATGPTX_ICON_OVERLAY: iconOverlayFile,
       CHATGPTX_RELAUNCH_ARGUMENTS: serializedRelaunchArguments,
     };
     for (const [name, value] of Object.entries(variables)) {
@@ -242,8 +254,26 @@ function init() {
 
   function patchElectron(electron) {
     log("electron-intercepted");
-    const { app, BrowserWindow, ipcMain, session } = electron;
+    const { app, BrowserWindow, ipcMain, nativeImage, session } = electron;
     if (!app || !BrowserWindow) return undefined;
+
+    if (ICON_OVERLAY_FILE && nativeImage) {
+      try {
+        installDockIconOverlay({
+          app,
+          nativeImage,
+          overlayFile: ICON_OVERLAY_FILE,
+          log,
+        });
+      } catch (error) {
+        log("dock-icon-overlay-install-failed", { error: String(error) });
+      }
+    } else {
+      log("dock-icon-overlay-unavailable", {
+        hasFile: Boolean(ICON_OVERLAY_FILE),
+        hasNativeImage: Boolean(nativeImage),
+      });
+    }
 
     const version = app.getVersion();
     const hostFile = path.join(componentPath(versions.binding.path), "host.js");

@@ -92,6 +92,7 @@ jobs:
           node --test scripts/trigger-chatgpt-rebind.test.mjs
           node --test scripts/validate-rebind-binding.test.mjs
           node --test scripts/wait-for-chatgpt-product-shell.test.mjs
+          node --test src/platform/runtime/dock-icon-overlay.test.cjs
           node --test src/platform/runtime/extension-launch-config.test.cjs
 
   end-to-end:

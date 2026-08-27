@@ -104,7 +104,7 @@ Confirm only the isolation-related environment values:
 ```sh
 ps eww -p <process-id> \
   | tr ' ' '\n' \
-  | rg '^(CODEX_HOME|NODE_OPTIONS|DYLD_INSERT_LIBRARIES|CHATGPTX_LAUNCH_CONFIGURATION|CHATGPTX_VERSIONS_LOCK|SKY_CUA_SERVICE_PATH)='
+  | rg '^(CODEX_HOME|NODE_OPTIONS|DYLD_INSERT_LIBRARIES|CHATGPTX_ICON_OVERLAY|CHATGPTX_LAUNCH_CONFIGURATION|CHATGPTX_VERSIONS_LOCK|SKY_CUA_SERVICE_PATH)='
 ```
 
 The output must show the new `CODEX_HOME`. The injection variables must be

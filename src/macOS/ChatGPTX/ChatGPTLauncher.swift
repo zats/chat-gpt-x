@@ -22,6 +22,10 @@ struct ChatGPTLauncher {
         "CHATGPTX_VERSIONS_LOCK"
     private static let relaunchArgumentsEnvironmentKey =
         "CHATGPTX_RELAUNCH_ARGUMENTS"
+    private static let iconOverlayEnvironmentKey =
+        "CHATGPTX_ICON_OVERLAY"
+    private static let iconOverlayResourceName =
+        "InjectedDockIconOverlay"
     private static let restartCountdown = 10
     private static let quitTimeout: TimeInterval = 10
     private static let asarHashCache = ChatGPTAsarHashCache()
@@ -115,6 +119,12 @@ struct ChatGPTLauncher {
         guard FileManager.default.fileExists(atPath: bridgeURL.path) else {
             throw LaunchError.bridgeMissing
         }
+        guard let iconOverlayURL = Bundle.main.url(
+            forResource: Self.iconOverlayResourceName,
+            withExtension: "png"
+        ), FileManager.default.fileExists(atPath: iconOverlayURL.path) else {
+            throw LaunchError.iconOverlayMissing
+        }
 
         if mode == .normal {
             switch runningApplicationPolicy {
@@ -202,6 +212,7 @@ struct ChatGPTLauncher {
             requiring: bridgeURL,
             launchConfigurationURL: launchConfigurationURL,
             versionsLockURL: launchVersionsLockURL,
+            iconOverlayURL: iconOverlayURL,
             arguments: arguments
         )
         configuration.createsNewApplicationInstance = true
@@ -266,6 +277,7 @@ struct ChatGPTLauncher {
         environment.removeValue(forKey: launchConfigurationEnvironmentKey)
         environment.removeValue(forKey: versionsLockEnvironmentKey)
         environment.removeValue(forKey: relaunchArgumentsEnvironmentKey)
+        environment.removeValue(forKey: iconOverlayEnvironmentKey)
         configuration.environment = environment
         do {
             return try await workspace.openApplication(
@@ -645,6 +657,7 @@ struct ChatGPTLauncher {
         requiring bridgeURL: URL,
         launchConfigurationURL: URL?,
         versionsLockURL: URL,
+        iconOverlayURL: URL,
         arguments: [String]
     ) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
@@ -661,6 +674,7 @@ struct ChatGPTLauncher {
                 launchConfigurationURL.path
         }
         environment[versionsLockEnvironmentKey] = versionsLockURL.path
+        environment[iconOverlayEnvironmentKey] = iconOverlayURL.path
         if let data = try? JSONSerialization.data(withJSONObject: arguments),
             let value = String(data: data, encoding: .utf8)
         {
@@ -915,6 +929,7 @@ private enum LaunchError: LocalizedError {
     case bindingMissing(installed: String, available: String)
     case bindingBuildMismatch(String)
     case bridgeMissing
+    case iconOverlayMissing
     case apiTestUserDataDirectoryMissing
     case apiTestExtensionRequired
     case chatGPTAlreadyRunning
@@ -942,6 +957,8 @@ private enum LaunchError: LocalizedError {
             "The active binding does not match the installed ChatGPT \(version) build."
         case .bridgeMissing:
             "The platform bridge is missing from ChatGPTX."
+        case .iconOverlayMissing:
+            "The injected Dock icon overlay is missing from ChatGPTX."
         case .apiTestUserDataDirectoryMissing:
             "API tests require an isolated absolute --user-data-dir."
         case .apiTestExtensionRequired:

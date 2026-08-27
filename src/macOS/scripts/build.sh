@@ -85,6 +85,17 @@ fi
 BUILD_ARGUMENTS+=(build)
 xcodebuild "${BUILD_ARGUMENTS[@]}"
 
+BUNDLED_ICON_OVERLAY="$BUILT_APP_PATH/Contents/Resources/InjectedDockIconOverlay.png"
+SOURCE_ICON_OVERLAY="$MACOS_DIR/ChatGPTX/Resources/InjectedDockIconOverlay.png"
+[[ -f "$BUNDLED_ICON_OVERLAY" ]] || {
+  echo "build did not bundle $BUNDLED_ICON_OVERLAY" >&2
+  exit 1
+}
+cmp -s "$SOURCE_ICON_OVERLAY" "$BUNDLED_ICON_OVERLAY" || {
+  echo "bundled Dock icon overlay does not match its source asset" >&2
+  exit 1
+}
+
 mkdir -p "$BUILD_ROOT/profiles"
 TEST_BUILD_OUTPUT_DIR="$BUILD_ROOT/test-products"
 TEST_CONFIGURATION="Debug"
