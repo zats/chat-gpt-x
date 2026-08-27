@@ -6,6 +6,21 @@
         <description>ChatGPTX launcher updates</description>
         <language>en</language>
         <item>
+            <title>1.2.4</title>
+            <pubDate>Thu, 27 Aug 2026 13:09:49 +0000</pubDate>
+            <link>https://github.com/zats/chat-gpt-x</link>
+            <sparkle:version>6</sparkle:version>
+            <sparkle:shortVersionString>1.2.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2 id="changes">Changes</h2>
+<ul>
+<li>Fix thread color bars in activity rows (<code>2cbd722</code>)</li>
+<li>Create bindings for ChatGPT 26.820.71523 (<code>c46a8b6</code>)</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/zats/chat-gpt-x/releases/download/launcher-v1.2.4/ChatGPTX-1.2.4.zip" length="8250232" type="application/octet-stream" sparkle:edSignature="3AcTHFzEBa3DpzGnrnwQC5KYjXTQfuVN/RjW3IE2+ubWK0j5w70XTjSVOhifWvaURTg0/5pLo2xM6WrH7VNtDQ=="/>
+        </item>
+        <item>
             <title>1.2.3</title>
             <pubDate>Thu, 27 Aug 2026 01:23:04 +0000</pubDate>
             <link>https://github.com/zats/chat-gpt-x</link>
