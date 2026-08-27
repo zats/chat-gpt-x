@@ -44,13 +44,20 @@ the `CHATGPTX_SPARKLE_PRIVATE_KEY` repository secret.
 
 ## Release flow
 
-A successful `CI` push run for the current `main` commit starts
-`.github/workflows/release-launcher.yml`. A failed CI run and a successful run
-for a stale `main` commit do not publish a launcher.
+Launcher releases start only when a maintainer runs the `Release launcher`
+workflow manually from GitHub Actions and selects `main`. Normal `main` pushes
+do not start a launcher release. The workflow requires the selected commit to
+be current `main` and requires its push `CI` run to have succeeded.
+
+To start a release from the command line after CI succeeds, run:
+
+```shell
+gh workflow run release-launcher.yml --ref main
+```
 
 The workflow manages versions as follows:
 
-- For a normal `main` commit, it increments the patch part of
+- For a manually requested release, it increments the patch part of
   `MARKETING_VERSION`.
 - To start a new minor or major series, change `MARKETING_VERSION` in
   `src/macOS/project.yaml` before the commit reaches `main`. The workflow keeps

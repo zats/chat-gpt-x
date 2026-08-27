@@ -84,6 +84,7 @@ jobs:
           node --test scripts/materialize-ci-auth.test.mjs
           node --test scripts/protected-ci-run-state.test.mjs
           node --test scripts/prepare-launcher-version.test.mjs
+          node --test scripts/release-launcher-workflow.test.mjs
           node --test scripts/rebind-workflow.test.mjs
           node --test scripts/retry-transient-rebind-failure.test.mjs
           node --test scripts/run-protected-ci.test.mjs
