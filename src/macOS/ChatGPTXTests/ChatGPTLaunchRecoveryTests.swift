@@ -336,6 +336,20 @@ final class ChatGPTLaunchRecoveryTests: XCTestCase {
     }
 
     @MainActor
+    func testRestartNotificationsUseOneReplaceableIdentifier() {
+        let firstFailureIdentifier = InjectionNotificationController
+            .notificationIdentifier(for: .extensionsDisabled(123))
+        let secondFailureIdentifier = InjectionNotificationController
+            .notificationIdentifier(for: .extensionsDisabled(456))
+
+        XCTAssertEqual(firstFailureIdentifier, secondFailureIdentifier)
+        XCTAssertEqual(
+            firstFailureIdentifier,
+            InjectionNotificationController.restartNotificationIdentifier
+        )
+    }
+
+    @MainActor
     func testApprovalRefreshRecoversFinishedUpdatedLaunchAndWaitsForUpdate()
         async
     {

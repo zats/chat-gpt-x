@@ -8,6 +8,8 @@ final class InjectionNotificationController: NSObject,
     private static let updateAction = "check-for-updates"
     private static let restartCategory = "extensions-disabled"
     private static let updateCategory = "binding-missing"
+    static let restartNotificationIdentifier =
+        "chatgptx-restart-required"
 
     var onRestart: (() -> Void)?
     var onCheckForUpdates: (() -> Void)?
@@ -46,19 +48,16 @@ final class InjectionNotificationController: NSObject,
         let notificationText = Self.notificationText(for: failure)
         content.title = notificationText.title
         content.body = notificationText.body
-        let processIdentifier: pid_t
         switch failure {
-        case .extensionsDisabled(let pid):
-            processIdentifier = pid
+        case .extensionsDisabled:
             content.categoryIdentifier = Self.restartCategory
-        case .bindingMissing(let pid):
-            processIdentifier = pid
+        case .bindingMissing:
             content.categoryIdentifier = Self.updateCategory
         }
 
         deliver(
             content,
-            identifier: "chatgptx-injection-\(processIdentifier)"
+            identifier: Self.notificationIdentifier(for: failure)
         )
     }
 
@@ -73,7 +72,7 @@ final class InjectionNotificationController: NSObject,
 
         deliver(
             content,
-            identifier: "chatgptx-runtime-ready-\(chatgptVersion)"
+            identifier: Self.restartNotificationIdentifier
         )
     }
 
@@ -89,14 +88,14 @@ final class InjectionNotificationController: NSObject,
                     options: [.alert, .sound]
                 ) { granted, _ in
                     guard granted else { return }
-                    Self.add(
+                    Self.replace(
                         content,
                         identifier: identifier,
                         to: center
                     )
                 }
             case .authorized, .provisional, .ephemeral:
-                Self.add(
+                Self.replace(
                     content,
                     identifier: identifier,
                     to: center
@@ -135,11 +134,28 @@ final class InjectionNotificationController: NSObject,
         }
     }
 
-    private nonisolated static func add(
+    static func notificationIdentifier(
+        for failure: ChatGPTInjectionFailure
+    ) -> String {
+        switch failure {
+        case .extensionsDisabled:
+            Self.restartNotificationIdentifier
+        case .bindingMissing(let processIdentifier):
+            "chatgptx-injection-\(processIdentifier)"
+        }
+    }
+
+    private nonisolated static func replace(
         _ content: UNNotificationContent,
         identifier: String,
         to center: UNUserNotificationCenter
     ) {
+        center.removePendingNotificationRequests(
+            withIdentifiers: [identifier]
+        )
+        center.removeDeliveredNotifications(
+            withIdentifiers: [identifier]
+        )
         center.add(
             UNNotificationRequest(
                 identifier: identifier,
