@@ -6,6 +6,20 @@
         <description>ChatGPTX launcher updates</description>
         <language>en</language>
         <item>
+            <title>1.2.3</title>
+            <pubDate>Thu, 27 Aug 2026 01:23:04 +0000</pubDate>
+            <link>https://github.com/zats/chat-gpt-x</link>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>1.2.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2 id="changes">Changes</h2>
+<ul>
+<li>Add below-selection reaction toolbar (<code>3293813</code>)</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/zats/chat-gpt-x/releases/download/launcher-v1.2.3/ChatGPTX-1.2.3.zip" length="8250185" type="application/octet-stream" sparkle:edSignature="DP2dcOCZcMWWtSEyWVy1g83bPxht8Lk1Jk3IcVb0F/Ns4/PQi1HqN/W655GCVVRvh/LokS+EQL3yX9VTQaYRCg=="/>
+        </item>
+        <item>
             <title>1.2.2</title>
             <pubDate>Wed, 26 Aug 2026 14:25:02 +0000</pubDate>
             <link>https://github.com/zats/chat-gpt-x</link>
