@@ -1632,6 +1632,12 @@ async function validateUi(
   const blueThreadIndicator = findThreadRow(threadId)?.querySelector(
     '[data-thread-colors-indicator]',
   );
+  const blueThreadTitleTrigger = blueThreadIndicator
+    ?.closest('[data-app-action-sidebar-thread-row]')
+    ?.querySelector('[data-thread-title-trigger]');
+  const blueThreadIndicatorRect = blueThreadIndicator?.getBoundingClientRect();
+  const blueThreadTitleTriggerRect =
+    blueThreadTitleTrigger?.getBoundingClientRect();
   check(
     JSON.stringify(headerAppearance.getProperties()) ===
       JSON.stringify({
@@ -1646,11 +1652,40 @@ async function validateUi(
     Boolean(
       blueThreadIndicator?.closest(
         '[data-cgptx-thread-list-leading-views]',
-      ),
+      ) &&
+        blueThreadIndicatorRect &&
+        blueThreadTitleTriggerRect,
     ) &&
       getComputedStyle(blueThreadIndicator).backgroundColor ===
-        'rgb(58, 131, 247)',
-    'selecting Blue adds the thread indicator at the native row edge',
+        'rgb(58, 131, 247)' &&
+      blueThreadIndicatorRect.height > 0 &&
+      Math.abs(
+        blueThreadIndicatorRect.height - blueThreadTitleTriggerRect.height,
+      ) <= 0.5,
+    'selecting Blue adds a full-height thread indicator at the native row edge',
+    {
+      indicatorRect: blueThreadIndicatorRect?.toJSON(),
+      titleTriggerRect: blueThreadTitleTriggerRect?.toJSON(),
+    },
+  );
+
+  const detachedThreadListHost = blueThreadIndicator?.closest(
+    '[data-cgptx-thread-list-leading-views]',
+  );
+  detachedThreadListHost?.remove();
+  await waitUntil(() => {
+    const indicator = findThreadRow(threadId)?.querySelector(
+      '[data-thread-colors-indicator]',
+    );
+    return indicator != null && indicator !== blueThreadIndicator;
+  });
+  const remountedThreadIndicator = findThreadRow(threadId)?.querySelector(
+    '[data-thread-colors-indicator]',
+  );
+  check(
+    remountedThreadIndicator?.isConnected === true &&
+      remountedThreadIndicator !== blueThreadIndicator,
+    'thread indicator remounts after ChatGPT replaces its native row content',
   );
 
   threadMenu = await openThreadMenu();

@@ -406,7 +406,7 @@ function createThreadColorView(colors: HeaderThemeColor): HTMLElement {
   bar.setAttribute("data-thread-colors-indicator", "");
   bar.style.display = "block";
   bar.style.width = "3px";
-  bar.style.height = "14px";
+  bar.style.height = "100%";
   bar.style.flex = "none";
   bar.style.borderRadius = "9999px";
   bar.style.backgroundColor = `light-dark(${colors.light}, ${colors.dark})`;

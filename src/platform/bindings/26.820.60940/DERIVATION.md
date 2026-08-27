@@ -7,8 +7,8 @@ Pinned build:
 - app.asar SHA-256: `c964aebbf9a6a0f70799d01215c611d8ef6ee63f816b3d57beccddd47a811fd9`
 - Electron: `151.0.7922.170`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.820.60940.zip`
-- Binding date: `2026-08-25`
-- Binding version: `1.1.0`
+- Binding date: `2026-08-27`
+- Binding version: `1.1.1`
 - ChatGPT API version: `1.5.0`
 - Version-watcher issue: `#51`
 
@@ -22,9 +22,10 @@ research tree, opaque authentication source, and user state were not changed.
 The initial binding started from the API-development implementation and
 research record in `26.818.61809`, which was selected by
 `src/platform/bindings/manifest.json` at the start of the rebind. Binding
-version `1.1.0` advances the ChatGPTX API from `1.4.0` to `1.5.0`. It adds
-native `above` and `below` placement to assistant-selection actions. Earlier
-binding directories remain unchanged.
+version `1.1.0` advanced the ChatGPTX API from `1.4.0` to `1.5.0` and added
+native `above` and `below` placement to assistant-selection actions. Binding
+version `1.1.1` corrects thread-list leading views without changing the
+ChatGPTX API. Earlier binding directories remain unchanged.
 
 ## Verified module map
 
@@ -100,6 +101,16 @@ now supplies that state. Native shortcut text also moved inside the outer
 label container. The driver reads the nested native `span.truncate` label and
 still compares the complete rendered action order with the public effective
 model, excluding only the separately rendered, `aria-hidden` shortcut.
+
+Persisted-thread leading views use the native `data-thread-title-trigger` as
+their height boundary. That trigger is `self-stretch` and becomes a vertical
+layout when activity view adds secondary content. The binding positions the
+leading-view host from the trigger's top edge to its bottom edge, so a view
+with `height: 100%` follows both the compact and activity layouts. A cached
+mount remains valid only while its host is still a direct child of the native
+trigger. If a React row update removes that host but retains the row and
+trigger elements, the next mutation refresh mounts a fresh view instead of
+accepting the disconnected cache record.
 
 The assistant-selection boundary continues to capture the native toolbar
 container and action wrapper. The current native positioner export `jX`
@@ -210,6 +221,17 @@ appearance, color picker, storage utility, and all native Settings controls
 coexisted. Multiple Accounts appropriately remained unavailable without a
 ChatGPT account identity; that profile behavior is outside the API-key gate.
 
+For the `1.1.1` thread-list correction, the extraction script confirmed the
+same installed app version, Electron version, and app.asar hash. The Thread
+Colors unit suite passed all `6` checks. A direct source-binding composition
+run used a temporary profile against this exact stock app. In activity view,
+the native row measured `53.5` px and its title trigger and blue indicator
+both measured `39.5` px. Removing the leading-view host caused a fresh,
+connected indicator to mount at the same height. Selecting the thread applied
+`#3A83F7` and `#FFFFFF` to the header while its sidebar indicator remained
+`rgb(58, 131, 247)`. The test app was stopped and all temporary profile,
+build, and extracted-app data was removed.
+
 ## Failure signatures
 
 - Native installation or readiness timeout: a hashed asset, initializer,
@@ -221,6 +243,8 @@ ChatGPT account identity; that profile behavior is outside the API-key gate.
   dropdown ownership changed.
 - Thread order includes shortcut glyphs in labels: the target nested shortcut
   markup is being read as the semantic row label.
+- Missing or short thread-list indicator: the cached host is disconnected or
+  no longer spans the native title trigger from top to bottom.
 - Empty browser-toolbar foreground sample: the selected Browser tab has not
   committed its content toolbar yet.
 - Empty or reordered thread model: the generic adapter, raw descriptors,

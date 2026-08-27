@@ -292,7 +292,7 @@ test("thread changes and color choices apply complete foreground/background pair
   try {
     threadListProvider?.({ threadId: "thread-1", title: "First" })?.view();
     assert.equal(indicator.style.width, "3px");
-    assert.equal(indicator.style.height, "14px");
+    assert.equal(indicator.style.height, "100%");
   } finally {
     if (originalDocument === undefined) {
       Reflect.deleteProperty(globalThis, "document");

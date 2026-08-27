@@ -2007,6 +2007,7 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     if (
       current &&
       current.target === target &&
+      current.host.parentElement === target &&
       sameThreadContext(current.context, context) &&
       sameThreadListItems(current.items, items)
     ) {
@@ -2016,12 +2017,11 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
     if (items.length === 0) return;
 
     const host = document.createElement("span");
-    host.className =
-      "flex h-4 items-center gap-0.5 overflow-visible";
+    host.className = "flex items-center gap-0.5 overflow-visible";
     host.setAttribute("data-cgptx-thread-list-leading-views", "");
     host.style.cssText =
-      "position:absolute;right:calc(100% + 3px);top:50%;" +
-      "transform:translateY(-50%);flex-direction:row-reverse;" +
+      "position:absolute;right:calc(100% + 3px);top:0;bottom:0;" +
+      "flex-direction:row-reverse;" +
       "pointer-events:none;z-index:1";
     for (const item of items) {
       let element;
