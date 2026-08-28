@@ -8,7 +8,7 @@ Pinned build:
 - Electron: `151.0.7922.174`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.825.32147.zip`
 - Binding date: `2026-08-28`
-- Binding version: `1.0.1`
+- Binding version: `1.0.2`
 - ChatGPT API version: `1.5.2`
 - Version-watcher issue: `#55`
 
@@ -121,6 +121,15 @@ frame. The native check requires the surface to be visible and exactly `8` px
 below the selected range, so the deferred pass synchronizes with the native
 owner without weakening the layout contract.
 
+The target native UI validation re-resolves the thread and Color flyout rows
+after its forced appearance change. ChatGPT can remount these native menu
+portals when the root appearance classes change. Focus and activation checks
+now use the connected replacement rows and compare their cursor with a current
+connected native thread row instead of detached pre-change elements. This
+validation correction is binding `1.0.2`. The selection-toolbar validation
+also waits for the deferred surface to become visible before it records the
+same exact `8` px geometry contract.
+
 Settings page, group, rows, row, toggle, select, button, input, title, loading,
 icon, visibility, breadcrumb, search, and route contracts retain native
 ownership. No-op transforms preserve native descriptor identity so dynamic
@@ -210,6 +219,8 @@ profile-dependent gates.
   overlay, native container, action wrapper, or annotation callbacks moved.
 - Hidden below-selection surface at the above toolbar's bottom edge: the
   deferred position pass did not run after the native positioner's ref attached.
+- Empty native cursor or a Color activation timeout after the appearance check:
+  the validation retained menu rows across a native portal remount.
 - Missing Settings control, loading row, search entry, or child navigation:
   the Settings chunk split or page/group/row/control ownership changed.
 - An untouched Settings pane consumes renderer resources: a no-op transform

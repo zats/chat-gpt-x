@@ -236,9 +236,18 @@ async function validateUi(
     ).some(
       (action) =>
         action.getAttribute('data-cgptx-id') ===
-        'api-test-suite.assistant-selection-visual',
+      'api-test-suite.assistant-selection-visual',
     ),
   );
+  await waitUntil(() => {
+    const belowAction = Array.from(
+      document.querySelectorAll('[data-cgptx-assistant-selection-action]'),
+    ).find((action) => action.getAttribute('data-cgptx-placement') === 'below');
+    const belowMenu = belowAction?.closest('[role="presentation"]');
+    return (
+      belowMenu != null && getComputedStyle(belowMenu).visibility === 'visible'
+    );
+  });
   const assistantSelectionActions = Array.from(
     document.querySelectorAll('[data-cgptx-assistant-selection-action]'),
   );
@@ -1407,7 +1416,6 @@ async function validateUi(
   const threadRows = Array.from(threadMenu.children).filter(
     (child) => child.getAttribute('role') === 'menuitem',
   );
-  const nativeThreadItemCursor = getComputedStyle(threadRows[0]).cursor;
   const threadRowLabel = (row) => {
     const labelContainer = row?.querySelector(
       'span.flex-1.min-w-0.truncate, span.min-w-0.flex-1.truncate',
@@ -1514,14 +1522,15 @@ async function validateUi(
     { name: 'Black', light: 'rgb(0, 0, 0)', dark: 'rgb(0, 0, 0)' },
   ];
   const colorNames = [...expectedColors.map(({ name }) => name), 'Custom'];
-  let colorFlyout = Array.from(document.querySelectorAll('[role="menu"]')).find(
-    (menu) =>
-      menu !== threadMenu &&
-      JSON.stringify(
-        menuRows(menu).map(threadRowLabel),
-      ) === JSON.stringify(colorNames),
-  );
-  const colorRows = menuRows(colorFlyout);
+  const findColorFlyout = () =>
+    Array.from(document.querySelectorAll('[role="menu"]')).find(
+      (menu) =>
+        menu !== threadMenu &&
+        JSON.stringify(menuRows(menu).map(threadRowLabel)) ===
+          JSON.stringify(colorNames),
+    );
+  let colorFlyout = findColorFlyout();
+  let colorRows = menuRows(colorFlyout);
   const colorIcons = colorRows.map((row) =>
     row.querySelector('[data-cgptx-thread-menu-color-icon]'),
   );
@@ -1589,11 +1598,28 @@ async function validateUi(
   );
   root.classList.toggle('electron-dark', originalHeaderTheme === 'dark');
   root.classList.toggle('electron-light', originalHeaderTheme === 'light');
-  await sleep(50);
+  await waitUntil(() => menuRows(findColorFlyout()).length === colorNames.length);
+  colorFlyout = findColorFlyout();
+  colorRows = menuRows(colorFlyout);
+  const currentThreadMenu = Array.from(
+    document.querySelectorAll('[role="menu"]'),
+  ).find(
+    (menu) =>
+      menu !== colorFlyout &&
+      menuRows(menu).some((row) => threadRowLabel(row) === 'Color'),
+  );
+  const currentNativeThreadRow = menuRows(currentThreadMenu).find((row) =>
+    row.className.includes('cursor-interaction'),
+  );
+  const nativeThreadItemCursor = currentNativeThreadRow
+    ? getComputedStyle(currentNativeThreadRow).cursor
+    : undefined;
   colorRows[0]?.focus();
   const focusedColorStyle = getComputedStyle(document.activeElement);
   check(
-    focusedColorStyle.cursor === nativeThreadItemCursor &&
+    document.activeElement === colorRows[0] &&
+      Boolean(currentNativeThreadRow) &&
+      focusedColorStyle.cursor === nativeThreadItemCursor &&
       colorRows[0]?.className.includes(
         'hover:bg-primary-ghost-hover',
       ) &&
@@ -1614,7 +1640,11 @@ async function validateUi(
       cancelable: true,
     }),
   );
-  await sleep(100);
+  await waitUntil(
+    () => document.activeElement === menuRows(findColorFlyout())[1],
+  );
+  colorFlyout = findColorFlyout();
+  colorRows = menuRows(colorFlyout);
   check(
     document.activeElement === colorRows[1],
     'Color flyout participates in native keyboard navigation',
