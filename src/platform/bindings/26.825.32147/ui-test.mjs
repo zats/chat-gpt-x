@@ -1529,11 +1529,28 @@ async function validateUi(
         JSON.stringify(menuRows(menu).map(threadRowLabel)) ===
           JSON.stringify(colorNames),
     );
-  let colorFlyout = findColorFlyout();
+  const openColorFlyout = async () => {
+    if (!findColorFlyout()) {
+      const activated = threadMenuApi.activateItem(
+        threadId,
+        'thread-colors.color',
+      );
+      if (!activated) {
+        throw new Error('Could not reopen the native Color flyout');
+      }
+    }
+    await waitUntil(
+      () => menuRows(findColorFlyout()).length === colorNames.length,
+    );
+    return findColorFlyout();
+  };
+  const colorIconsFor = (rows) =>
+    rows.map((row) =>
+      row.querySelector('[data-cgptx-thread-menu-color-icon]'),
+    );
+  let colorFlyout = await openColorFlyout();
   let colorRows = menuRows(colorFlyout);
-  const colorIcons = colorRows.map((row) =>
-    row.querySelector('[data-cgptx-thread-menu-color-icon]'),
-  );
+  let colorIcons = colorIconsFor(colorRows);
   check(
     Boolean(colorFlyout) &&
       colorFlyout.parentElement?.hasAttribute('data-radix-popper-content-wrapper') ===
@@ -1584,6 +1601,9 @@ async function validateUi(
   root.classList.toggle('electron-dark', alternateHeaderTheme === 'dark');
   root.classList.toggle('electron-light', alternateHeaderTheme === 'light');
   await sleep(50);
+  colorFlyout = await openColorFlyout();
+  colorRows = menuRows(colorFlyout);
+  colorIcons = colorIconsFor(colorRows);
   check(
     colorIcons.slice(0, expectedColors.length).every(
       (icon, index) =>
@@ -1598,8 +1618,8 @@ async function validateUi(
   );
   root.classList.toggle('electron-dark', originalHeaderTheme === 'dark');
   root.classList.toggle('electron-light', originalHeaderTheme === 'light');
-  await waitUntil(() => menuRows(findColorFlyout()).length === colorNames.length);
-  colorFlyout = findColorFlyout();
+  await sleep(50);
+  colorFlyout = await openColorFlyout();
   colorRows = menuRows(colorFlyout);
   const currentThreadMenu = Array.from(
     document.querySelectorAll('[role="menu"]'),
