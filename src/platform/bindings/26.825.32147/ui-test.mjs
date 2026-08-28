@@ -338,6 +338,9 @@ async function validateUi(
   const selectionRect = selectionRange?.getBoundingClientRect();
   const aboveRect = assistantSelectionAboveMenu?.getBoundingClientRect();
   const belowRect = assistantSelectionBelowMenu?.getBoundingClientRect();
+  const belowVisibility = assistantSelectionBelowMenu
+    ? getComputedStyle(assistantSelectionBelowMenu).visibility
+    : null;
   const serializeRect = (rect) =>
     rect
       ? {
@@ -355,12 +358,14 @@ async function validateUi(
     aboveRect &&
       belowRect &&
       selectionRect &&
+      belowVisibility === 'visible' &&
       Math.abs(selectionRect.top - aboveRect.bottom - 8) < 1 &&
       Math.abs(belowRect.top - selectionRect.bottom - 8) < 1,
     'assistant selection native toolbars stay 8 px above and below the selection',
     {
       aboveRect: serializeRect(aboveRect),
       belowRect: serializeRect(belowRect),
+      belowVisibility,
       selectionRect: serializeRect(selectionRect),
     },
   );

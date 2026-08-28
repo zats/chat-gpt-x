@@ -4373,9 +4373,13 @@ html.electron-dark [data-cgptx-thread-menu-color-icon] {
       const place = () =>
         positionAssistantSelectionBelowSurface(element, position);
       place();
+      const animationFrame = requestAnimationFrame(place);
       const observer = new ResizeObserver(place);
       observer.observe(element);
-      return () => observer.disconnect();
+      return () => {
+        cancelAnimationFrame(animationFrame);
+        observer.disconnect();
+      };
     }, [items, position]);
     return native.jsx("div", {
       ref: elementRef,
