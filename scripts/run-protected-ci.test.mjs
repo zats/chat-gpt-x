@@ -12,7 +12,7 @@ const baseSha = "1".repeat(40);
 const headSha = "2".repeat(40);
 const validationId = "binding-26.818.61809";
 
-async function runProtectedCI(scenario) {
+async function runProtectedCI(scenario, mode = "") {
   const directory = await mkdtemp(join(tmpdir(), "chatgptx-protected-ci-"));
   const ghPath = join(directory, "gh");
   const logPath = join(directory, "gh.log");
@@ -32,10 +32,14 @@ fi
 
 if [[ "$1 $2" == "run list" ]]; then
   count="$(<"$GH_COUNT")"
+  run_head="${headSha}"
+  if [[ "$GH_SCENARIO" == "moving-main" ]]; then
+    run_head="${"3".repeat(40)}"
+  fi
   if [[ "$count" == "1" ]]; then
-    printf '[{"databaseId":101,"displayTitle":"CI (${validationId})","headSha":"${headSha}"}]\\n'
+    printf '[{"databaseId":101,"displayTitle":"CI (${validationId})","headSha":"%s"}]\\n' "$run_head"
   else
-    printf '[{"databaseId":102,"displayTitle":"CI (${validationId}-runner-retry-2)","headSha":"${headSha}"}]\\n'
+    printf '[{"databaseId":102,"displayTitle":"CI (${validationId}-runner-retry-2)","headSha":"%s"}]\\n' "$run_head"
   fi
   exit 0
 fi
@@ -45,7 +49,7 @@ if [[ "$1 $2" == "run view" ]]; then
     echo completed
   elif [[ "$GH_SCENARIO" == "failure" ]]; then
     printf '{"status":"completed","conclusion":"failure","jobs":[]}\\n'
-  elif [[ "$3" == "101" ]]; then
+  elif [[ "$GH_SCENARIO" == "stall-once" && "$3" == "101" ]]; then
     printf '{"status":"in_progress","conclusion":"","jobs":[{"name":"test / end-to-end","status":"in_progress","startedAt":"2000-01-01T00:00:00Z"}]}\\n'
   else
     printf '{"status":"completed","conclusion":"success","jobs":[]}\\n'
@@ -65,7 +69,7 @@ exit 1
 
   const result = spawnSync(
     "bash",
-    ["scripts/run-protected-ci.sh", validationId, baseSha, headSha],
+    ["scripts/run-protected-ci.sh", validationId, baseSha, headSha, mode].filter(Boolean),
     {
       cwd: new URL("..", import.meta.url),
       encoding: "utf8",
@@ -104,5 +108,21 @@ test("does not retry a completed test failure", async () => {
 
   assert.equal(result.status, 1);
   assert.equal(result.log.match(/workflow run ci\.yml/g)?.length, 1);
+  assert.doesNotMatch(result.log, /force-cancel/);
+});
+
+test("rejects a protected candidate when main moved before dispatch", async () => {
+  const result = await runProtectedCI("moving-main");
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Main changed before protected CI started/);
+  assert.match(result.log, /force-cancel/);
+});
+
+test("repairs publication on the current main commit", async () => {
+  const result = await runProtectedCI("moving-main", "--repair-components");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.log, /repair_component_releases=true/);
   assert.doesNotMatch(result.log, /force-cancel/);
 });

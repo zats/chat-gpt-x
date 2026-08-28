@@ -12,16 +12,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    runs-on: macos-26
-    timeout-minutes: 45
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
     steps:
       - name: Check out selected source
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - name: Verify current main passed CI
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Wait for exact-source push CI
+        id: source
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
@@ -32,23 +39,25 @@ jobs:
             exit 1
           fi
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          git fetch origin "$DEFAULT_BRANCH"
-          if [[ "$(git rev-parse "origin/$DEFAULT_BRANCH")" != "$SOURCE_SHA" ]]; then
-            echo "The selected commit is not current $DEFAULT_BRANCH." >&2
-            exit 1
-          fi
-          ci_result="$(gh run list \
-            --workflow ci.yml \
-            --commit "$SOURCE_SHA" \
-            --event push \
-            --limit 1 \
-            --json status,conclusion,headSha \
-            --jq '.[0] | "\(.status):\(.conclusion):\(.headSha)"')"
-          if [[ "$ci_result" != "completed:success:$SOURCE_SHA" ]]; then
-            echo "Current $DEFAULT_BRANCH must have a successful push CI run." >&2
-            echo "CI result: ${ci_result:-none}" >&2
-            exit 1
-          fi
+          node scripts/wait-for-push-ci.mjs \
+            "$GITHUB_REPOSITORY" \
+            "$DEFAULT_BRANCH" \
+            "$SOURCE_SHA"
+          echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: preflight
+    runs-on: macos-26
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build: ${{ steps.version.outputs.build }}
+    steps:
+      - name: Check out verified source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          fetch-depth: 0
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -88,7 +97,7 @@ jobs:
       - name: Prepare next launcher version
         id: version
         env:
-          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
         run: |
           git switch -C main "$SOURCE_SHA"
           version_plan="$(node scripts/prepare-launcher-version.mjs --write)"
@@ -104,6 +113,10 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          if git diff --quiet -- src/macOS/project.yaml; then
+            echo "Resuming the prepared ChatGPTX $VERSION release."
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/macOS/project.yaml
@@ -111,7 +124,7 @@ jobs:
           git push origin HEAD:main
       - name: Create release notes
         env:
-          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
         run: |
           notes_path="$RUNNER_TEMP/chatgptx-launcher-release-notes.md"
           previous_tag="$(git describe --tags --match 'launcher-v*' --abbrev=0 2>/dev/null || true)"
@@ -151,3 +164,29 @@ jobs:
             /bin/unlink "$CHATGPTX_DEVELOPER_ID_P12_PATH" \
               2>/dev/null || true
           fi
+
+  verify-publication:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Verify public archive and appcast
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          BUILD: ${{ needs.release.outputs.build }}
+        run: |
+          archive_url="https://github.com/zats/chat-gpt-x/releases/download/launcher-v$VERSION/ChatGPTX-$VERSION.zip"
+          feed_url="https://raw.githubusercontent.com/zats/chat-gpt-x/main/appcast.xml"
+          for attempt in {1..60}; do
+            if curl --fail --location --silent --show-error --head "$archive_url" \
+                >/dev/null 2>&1 \
+              && curl --fail --location --silent --show-error "$feed_url" \
+                | grep -q "<sparkle:version>$BUILD</sparkle:version>"; then
+              echo "Verified public ChatGPTX $VERSION ($BUILD)."
+              exit 0
+            fi
+            (( attempt < 60 )) || break
+            sleep 10
+          done
+          echo "Public ChatGPTX $VERSION ($BUILD) did not become available." >&2
+          exit 1

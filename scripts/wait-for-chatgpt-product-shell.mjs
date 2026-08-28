@@ -3,6 +3,13 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  CdpTransportError,
+  closeCdpSocket,
+  connectCdpPage,
+  sendCdpCommand,
+} from "./cdp-client.mjs";
+
 const optionalProductUiMarkers = Object.freeze([
   Object.freeze({
     name: "work-role onboarding",
@@ -29,82 +36,63 @@ export function productShellStatus({
   return Object.freeze({ ready: hasMainSurface });
 }
 
-async function waitForProductShell(port, timeoutMs) {
-  const targets = await fetch(`http://127.0.0.1:${port}/json`).then((response) =>
-    response.json(),
-  );
-  const page = targets.find(
-    (target) => target.type === "page" && target.url === "app://-/index.html",
-  );
-  if (!page) throw new Error(`No ChatGPT page target on CDP port ${port}`);
-
-  const socket = new WebSocket(page.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    socket.addEventListener("open", resolve, { once: true });
-    socket.addEventListener("error", reject, { once: true });
-  });
-
+export async function waitForProductShell(port, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
   let nextId = 0;
-  function evaluate(expression) {
-    return new Promise((resolve, reject) => {
-      const id = ++nextId;
-      const onMessage = (event) => {
-        const message = JSON.parse(event.data);
-        if (message.id !== id) return;
-        socket.removeEventListener("message", onMessage);
-        if (message.error) {
-          reject(new Error(JSON.stringify(message.error)));
-          return;
-        }
-        if (message.result.exceptionDetails) {
-          reject(
-            new Error(
-              message.result.exceptionDetails.exception?.description ??
-                message.result.exceptionDetails.text ??
-                "Renderer evaluation failed",
-            ),
-          );
-          return;
-        }
-        resolve(message.result.result.value);
-      };
-      socket.addEventListener("message", onMessage);
-      socket.send(
-        JSON.stringify({
-          id,
-          method: "Runtime.evaluate",
-          params: { expression, returnByValue: true },
-        }),
-      );
-    });
-  }
+  let lastTransportError;
 
-  try {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const snapshot = await evaluate(`({
-        hasMainSurface: document.querySelector(
-          "[data-app-shell-main-surface]",
-        ) !== null,
-        hasVisibleDialog: [...document.querySelectorAll('[role="dialog"]')]
-          .some((element) => element.getClientRects().length > 0),
-        pageText: document.body?.innerText ?? "",
-      })`);
-      const status = productShellStatus(snapshot);
-      if (status.ready) return;
-      if (status.blocker) {
-        throw new Error(
-          `ChatGPT startup UI blocked the product shell: ${status.blocker}`,
+  while (Date.now() < deadline) {
+    let socket;
+    try {
+      socket = await connectCdpPage(port, "app://-/index.html", deadline);
+      while (Date.now() < deadline) {
+        const result = await sendCdpCommand(
+          socket,
+          ++nextId,
+          "Runtime.evaluate",
+          {
+            expression: `({
+              hasMainSurface: document.querySelector(
+                "[data-app-shell-main-surface]",
+              ) !== null,
+              hasVisibleDialog: [...document.querySelectorAll('[role="dialog"]')]
+                .some((element) => element.getClientRects().length > 0),
+              pageText: document.body?.innerText ?? "",
+            })`,
+            returnByValue: true,
+          },
+          deadline,
         );
+        if (result.exceptionDetails) {
+          throw new Error(
+            result.exceptionDetails.exception?.description ??
+              result.exceptionDetails.text ??
+              "Renderer evaluation failed",
+          );
+        }
+        const status = productShellStatus(result.result.value);
+        if (status.ready) return;
+        if (status.blocker) {
+          throw new Error(
+            `ChatGPT startup UI blocked the product shell: ${status.blocker}`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    } catch (error) {
+      if (!(error instanceof CdpTransportError)) throw error;
+      lastTransportError = error;
+    } finally {
+      closeCdpSocket(socket);
     }
-  } finally {
-    socket.close();
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
+  const transportDetail = lastTransportError
+    ? ` Last CDP error: ${lastTransportError.message}.`
+    : "";
   throw new Error(
-    `ChatGPT did not expose its product shell within ${timeoutMs}ms. An unknown product interstitial or an app-shell change can cause this failure.`,
+    `ChatGPT did not expose its product shell within ${timeoutMs}ms. An unknown product interstitial or an app-shell change can cause this failure.${transportDetail}`,
   );
 }
 

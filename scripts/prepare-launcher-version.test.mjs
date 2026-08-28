@@ -44,6 +44,7 @@ test("increments the patch in the current release series", (context) => {
     version: "1.2.1",
     build: 3,
     manuallyChangedSeries: false,
+    resumesPreparedVersion: false,
   });
   const project = fs.readFileSync(path.join(root, "src/macOS/project.yaml"), "utf8");
   assert.match(project, /MARKETING_VERSION: 1\.2\.1/);
@@ -65,6 +66,7 @@ test("preserves a manual minor-version change", (context) => {
     version: "1.3.0",
     build: 13,
     manuallyChangedSeries: true,
+    resumesPreparedVersion: false,
   });
 });
 
@@ -91,4 +93,26 @@ test("rejects a manual series regression", (context) => {
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /older than released series/);
+});
+
+test("resumes a prepared release without consuming another version", (context) => {
+  const { root, result } = runVersionPreparation({
+    declaredVersion: "1.2.7",
+    declaredBuild: 9,
+    releasedVersion: "1.2.6",
+    releasedBuild: 8,
+  });
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    previousVersion: "1.2.6",
+    previousBuild: 8,
+    version: "1.2.7",
+    build: 9,
+    manuallyChangedSeries: false,
+    resumesPreparedVersion: true,
+  });
+  const project = fs.readFileSync(path.join(root, "src/macOS/project.yaml"), "utf8");
+  assert.match(project, /MARKETING_VERSION: 1\.2\.7/);
+  assert.match(project, /CURRENT_PROJECT_VERSION: 9/);
 });

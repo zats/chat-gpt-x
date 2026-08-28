@@ -58,18 +58,32 @@ for (( attempt = 1; attempt <= MAX_RUNNER_ATTEMPTS; attempt += 1 )); do
       > "$run_list_path"
     run_id="$(
       jq -r \
-        --arg headSha "$RELEASE_HEAD_SHA" \
         --arg title "$validation_title" \
-        '[.[] | select(.headSha == $headSha and .displayTitle == $title)][0].databaseId // empty' \
+        '[.[] | select(.displayTitle == $title)][0].databaseId // empty' \
         "$run_list_path"
     )"
     [[ -z "$run_id" ]] || break
     sleep 2
   done
   [[ -n "$run_id" ]] || {
-    echo "Protected CI did not appear for $RELEASE_HEAD_SHA" >&2
+    echo "Protected CI did not appear for $validation_title" >&2
     exit 1
   }
+
+  run_head_sha="$(
+    jq -r \
+      --arg title "$validation_title" \
+      '[.[] | select(.displayTitle == $title)][0].headSha // empty' \
+      "$run_list_path"
+  )"
+  if [[ "$MODE" != "--repair-components" && "$run_head_sha" != "$RELEASE_HEAD_SHA" ]]; then
+    echo "Main changed before protected CI started: expected $RELEASE_HEAD_SHA, received $run_head_sha." >&2
+    gh api \
+      --method POST \
+      "repos/$REPOSITORY/actions/runs/$run_id/force-cancel" \
+      >/dev/null 2>&1 || true
+    exit 1
+  fi
 
   while true; do
     if ! gh run view "$run_id" \
