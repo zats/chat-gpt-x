@@ -188,25 +188,47 @@ ARCHIVE_NAME="ChatGPTX-$MARKETING_VERSION.zip"
 DOWNLOAD_URL="https://github.com/zats/chat-gpt-x/releases/download/$TAG/$ARCHIVE_NAME"
 FEED_URL="https://raw.githubusercontent.com/zats/chat-gpt-x/main/appcast.xml"
 
-if git ls-remote --exit-code --tags origin "refs/tags/$TAG" \
-    >/dev/null 2>&1; then
-  echo "Tag already exists: $TAG" >&2
+TAG_EXISTS=0
+RELEASE_EXISTS=0
+APPCAST_BUILD_EXISTS=0
+APPCAST_VERSION_EXISTS=0
+git ls-remote --exit-code --tags origin "refs/tags/$TAG" \
+  >/dev/null 2>&1 && TAG_EXISTS=1
+RELEASE_JSON="$(
+  gh release view "$TAG" \
+    --repo zats/chat-gpt-x \
+    --json isDraft \
+    2>/dev/null || true
+)"
+[[ -z "$RELEASE_JSON" ]] || RELEASE_EXISTS=1
+rg -q "<sparkle:version>$BUILD_NUMBER</sparkle:version>" "$APPCAST_FILE" \
+  && APPCAST_BUILD_EXISTS=1
+rg -q \
+  "<sparkle:shortVersionString>$MARKETING_VERSION</sparkle:shortVersionString>" \
+  "$APPCAST_FILE" && APPCAST_VERSION_EXISTS=1
+
+if [[ "$APPCAST_BUILD_EXISTS" != "$APPCAST_VERSION_EXISTS" ]]; then
+  echo "appcast.xml has an incomplete identity for ChatGPTX $MARKETING_VERSION ($BUILD_NUMBER)." >&2
   exit 1
 fi
-if gh release view "$TAG" --repo zats/chat-gpt-x >/dev/null 2>&1; then
-  echo "GitHub Release already exists: $TAG" >&2
+if [[ "$APPCAST_BUILD_EXISTS" == "1" ]]; then
+  [[ "$RELEASE_EXISTS" == "1" && "$TAG_EXISTS" == "1" ]] || {
+    echo "appcast.xml names ChatGPTX $MARKETING_VERSION, but its release is missing." >&2
+    exit 1
+  }
+  curl --fail --location --silent --show-error --head "$DOWNLOAD_URL" \
+    >/dev/null
+  curl --fail --location --silent --show-error "$FEED_URL" \
+    | rg -q "<sparkle:version>$BUILD_NUMBER</sparkle:version>"
+  printf 'ChatGPTX %s (%s) is already published.\n' \
+    "$MARKETING_VERSION" "$BUILD_NUMBER"
+  exit 0
+fi
+if [[ "$TAG_EXISTS" == "1" && "$RELEASE_EXISTS" == "0" ]]; then
+  echo "Tag $TAG exists without a GitHub Release." >&2
   exit 1
 fi
-if rg -q "<sparkle:version>$BUILD_NUMBER</sparkle:version>" "$APPCAST_FILE"; then
-  echo "Build $BUILD_NUMBER already exists in appcast.xml." >&2
-  exit 1
-fi
-if rg -q \
-    "<sparkle:shortVersionString>$MARKETING_VERSION</sparkle:shortVersionString>" \
-    "$APPCAST_FILE"; then
-  echo "Version $MARKETING_VERSION already exists in appcast.xml." >&2
-  exit 1
-fi
+RESUME_PUBLICATION="$RELEASE_EXISTS"
 LATEST_BUILD_NUMBER="$(
   rg -o '<sparkle:version>[0-9]+' "$APPCAST_FILE" \
     | rg -o '[0-9]+' \
@@ -229,6 +251,44 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+ARCHIVE_PATH="$RELEASE_ROOT/$ARCHIVE_NAME"
+if [[ "$RESUME_PUBLICATION" == "1" ]]; then
+  echo "Resuming publication of existing release $TAG."
+  gh release download "$TAG" \
+    --repo zats/chat-gpt-x \
+    --pattern "$ARCHIVE_NAME" \
+    --dir "$RELEASE_ROOT"
+  [[ -f "$ARCHIVE_PATH" ]] || {
+    echo "Existing release $TAG does not contain $ARCHIVE_NAME." >&2
+    exit 1
+  }
+
+  RELEASE_NOTES_FILE="$RELEASE_ROOT/existing-release-notes.md"
+  gh release view "$TAG" \
+    --repo zats/chat-gpt-x \
+    --json body \
+    --jq .body \
+    > "$RELEASE_NOTES_FILE"
+  [[ -s "$RELEASE_NOTES_FILE" ]] || {
+    echo "Existing release $TAG has empty release notes." >&2
+    exit 1
+  }
+
+  EXTRACTED_ARCHIVE="$RELEASE_ROOT/existing-release"
+  mkdir -p "$EXTRACTED_ARCHIVE"
+  ditto -x -k "$ARCHIVE_PATH" "$EXTRACTED_ARCHIVE"
+  APP_PATH="$EXTRACTED_ARCHIVE/ChatGPTX.app"
+  [[ -d "$APP_PATH" ]] || {
+    echo "Existing release archive does not contain ChatGPTX.app." >&2
+    exit 1
+  }
+  [[ "$(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Contents/Info.plist")" == "$MARKETING_VERSION" ]]
+  [[ "$(plutil -extract CFBundleVersion raw "$APP_PATH/Contents/Info.plist")" == "$BUILD_NUMBER" ]]
+  [[ "$(plutil -extract SUPublicEDKey raw "$APP_PATH/Contents/Info.plist")" == "$SPARKLE_PUBLIC_KEY" ]]
+  codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+  xcrun stapler validate "$APP_PATH"
+  spctl --assess --type execute --verbose=2 "$APP_PATH"
+else
 BUILD_DIR="$RELEASE_ROOT/build"
 CHATGPTX_BUILD_DIR="$BUILD_DIR" \
   CHATGPTX_BUILD_CONFIGURATION=Release \
@@ -325,8 +385,8 @@ xcrun stapler validate "$APP_PATH"
 spctl --assess --type execute --verbose=2 "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
-ARCHIVE_PATH="$RELEASE_ROOT/$ARCHIVE_NAME"
 ditto -c -k --keepParent "$APP_PATH" "$ARCHIVE_PATH"
+fi
 
 SPARKLE_TOOLS_DIR="${CHATGPTX_SPARKLE_TOOLS_DIR:-}"
 if [[ -z "$SPARKLE_TOOLS_DIR" ]]; then
@@ -420,12 +480,14 @@ CURRENT_ORIGIN_MAIN_SHA="$(git rev-parse origin/main)"
 
 cp "$GENERATED_APPCAST" "$APPCAST_FILE"
 
-gh release create "$TAG" "$ARCHIVE_PATH#$ARCHIVE_NAME" \
-  --repo zats/chat-gpt-x \
-  --target "$HEAD_SHA" \
-  --title "ChatGPTX $MARKETING_VERSION" \
-  --notes-file "$RELEASE_NOTES_FILE" \
-  --draft
+if [[ "$RESUME_PUBLICATION" == "0" ]]; then
+  gh release create "$TAG" "$ARCHIVE_PATH#$ARCHIVE_NAME" \
+    --repo zats/chat-gpt-x \
+    --target "$HEAD_SHA" \
+    --title "ChatGPTX $MARKETING_VERSION" \
+    --notes-file "$RELEASE_NOTES_FILE" \
+    --draft
+fi
 gh release edit "$TAG" --repo zats/chat-gpt-x --draft=false --latest=false
 
 curl --fail --location --silent --show-error --head "$DOWNLOAD_URL" \
@@ -435,17 +497,5 @@ git add appcast.xml
 git commit -m "Publish ChatGPTX $MARKETING_VERSION appcast [skip launcher release]"
 git push origin HEAD:main
 
-for attempt in 1 2 3 4 5 6; do
-  if curl --fail --location --silent --show-error "$FEED_URL" \
-      | rg -q "<sparkle:version>$BUILD_NUMBER</sparkle:version>"; then
-    printf 'Published ChatGPTX %s (%s).\n' \
-      "$MARKETING_VERSION" "$BUILD_NUMBER"
-    exit 0
-  fi
-  if ((attempt < 6)); then
-    sleep 5
-  fi
-done
-
-echo "The release is public, but the raw appcast did not refresh in time." >&2
-exit 1
+printf 'Published ChatGPTX %s (%s); public verification runs separately.\n' \
+  "$MARKETING_VERSION" "$BUILD_NUMBER"

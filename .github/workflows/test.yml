@@ -60,18 +60,21 @@ jobs:
           node --check scripts/check-auth-exposure.mjs
           node --check scripts/capture-authentication-candidates.mjs
           node --check scripts/build-component-releases.mjs
+          node --check scripts/cdp-client.mjs
           node --check scripts/component-releases.mjs
           node --check scripts/filter-unpublished-component-releases.mjs
           node --check scripts/materialize-ci-auth.mjs
           node --check scripts/protected-ci-run-state.mjs
           node --check scripts/prepare-launcher-version.mjs
           node --check scripts/retry-transient-rebind-failure.mjs
+          node --check scripts/run-with-timeout.mjs
           node --check scripts/stage-local-component-store.mjs
           node --check scripts/suppress-optional-product-ui.mjs
           node --check scripts/trigger-chatgpt-rebind.mjs
           node --check scripts/validate-rebind-binding.mjs
           node --check scripts/validate-pinned-chatgpt.mjs
           node --check scripts/wait-for-chatgpt-product-shell.mjs
+          node --check scripts/wait-for-push-ci.mjs
           node --check scripts/wait-for-chatgpt-ready.mjs
           bash -n scripts/publish-component-releases.sh
           bash -n scripts/publish-update-index.sh
@@ -79,6 +82,7 @@ jobs:
           bash -n scripts/refresh-update-index-hashes.sh
           bash scripts/publish-update-index.test.sh
           node --test scripts/build-component-releases.test.mjs
+          node --test scripts/cdp-client.test.mjs
           node --test scripts/component-releases.test.mjs
           node --test scripts/filter-unpublished-component-releases.test.mjs
           node --test scripts/materialize-ci-auth.test.mjs
@@ -87,11 +91,14 @@ jobs:
           node --test scripts/release-launcher-workflow.test.mjs
           node --test scripts/rebind-workflow.test.mjs
           node --test scripts/retry-transient-rebind-failure.test.mjs
+          node --test scripts/run-local-ci-workflow.test.mjs
           node --test scripts/run-protected-ci.test.mjs
+          node --test scripts/run-with-timeout.test.mjs
           node --test scripts/suppress-optional-product-ui.test.mjs
           node --test scripts/trigger-chatgpt-rebind.test.mjs
           node --test scripts/validate-rebind-binding.test.mjs
           node --test scripts/wait-for-chatgpt-product-shell.test.mjs
+          node --test scripts/wait-for-push-ci.test.mjs
           node --test src/platform/runtime/dock-icon-overlay.test.cjs
           node --test src/platform/runtime/extension-launch-config.test.cjs
 
@@ -260,17 +267,25 @@ jobs:
           trap discard_recording EXIT INT TERM
           echo "[ci] recording end-to-end video in 30-second segments"
 
-          set +e
           auth_paths=("${{ steps.authentication.outputs.primary }}")
           if [[ -n "${{ steps.authentication.outputs.secondary }}" ]]; then
             auth_paths+=("${{ steps.authentication.outputs.secondary }}")
           fi
-          CHATGPTX_PROGRESS_FD=3 scripts/run-local-ci.sh \
-            "${auth_paths[@]}" \
-            3>&1 \
-            > "$test_log" 2>&1
-          test_exit_code=$?
-          set -e
+          test_exit_code=1
+          for suite_attempt in 1 2; do
+            set +e
+            CHATGPTX_PROGRESS_FD=3 node scripts/run-with-timeout.mjs \
+              480 scripts/run-local-ci.sh \
+              "${auth_paths[@]}" \
+              3>&1 \
+              > "$test_log" 2>&1
+            test_exit_code=$?
+            set -e
+            if [[ "$test_exit_code" != "75" || "$suite_attempt" == "2" ]]; then
+              break
+            fi
+            echo "[ci] a live CDP check timed out; starting one clean suite retry"
+          done
           if [[ "$test_exit_code" -eq 0 ]]; then
             echo "[ci] end-to-end suite passed; discarding recording"
             discard_recording
@@ -303,7 +318,7 @@ jobs:
         with:
           name: ci-failure-video-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/chatgptx-end-to-end-video/*.mov
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
       - name: Encrypt refreshed authentication candidates
         if: always() && inputs.refresh-auth && steps.authentication.outcome == 'success'

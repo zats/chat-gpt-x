@@ -135,8 +135,6 @@ jobs:
       needs.refresh-component-hashes.result == 'success' &&
       needs.refresh-component-hashes.outputs.updated != 'true'
     runs-on: ubuntu-latest
-    outputs:
-      has_components: ${{ steps.plan.outputs.has_components }}
     steps:
       - name: Check out component source
         uses: actions/checkout@v4
@@ -150,7 +148,6 @@ jobs:
         with:
           bun-version: 1.4.0
       - name: Validate affected components
-        id: plan
         env:
           BASE_SHA: ${{ inputs.release_base_sha || github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ inputs.release_head_sha || github.event.pull_request.head.sha || github.sha }}
@@ -159,38 +156,23 @@ jobs:
           REPAIR_COMPONENT_RELEASES: ${{ inputs.repair_component_releases }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ -n "$RELEASE_BASE_SHA" || -n "$RELEASE_HEAD_SHA" ]]; then
+          if [[ "$REPAIR_COMPONENT_RELEASES" == "true" ]]; then
+            BASE_SHA="$(git rev-parse "$GITHUB_SHA^")"
+            HEAD_SHA="$GITHUB_SHA"
+          elif [[ -n "$RELEASE_BASE_SHA" || -n "$RELEASE_HEAD_SHA" ]]; then
             [[ "$RELEASE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
             [[ "$RELEASE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
             [[ "$RELEASE_HEAD_SHA" == "$GITHUB_SHA" ]]
             git merge-base --is-ancestor "$RELEASE_BASE_SHA" "$RELEASE_HEAD_SHA"
             [[ "$RELEASE_BASE_SHA" != "$RELEASE_HEAD_SHA" ]]
           fi
-          repair_arguments=()
-          if [[ "$REPAIR_COMPONENT_RELEASES" == "true" ]]; then
-            [[ -n "$RELEASE_BASE_SHA" && -n "$RELEASE_HEAD_SHA" ]]
-            repair_arguments+=(--repair)
-          fi
           plan_path="$RUNNER_TEMP/component-releases.json"
           node scripts/component-releases.mjs \
-            "$BASE_SHA" "$HEAD_SHA" "${repair_arguments[@]}" \
+            "$BASE_SHA" "$HEAD_SHA" \
             > "$plan_path"
-          if [[ "$REPAIR_COMPONENT_RELEASES" == "true" ]]; then
-            filtered_plan="$RUNNER_TEMP/unpublished-component-releases.json"
-            node scripts/filter-unpublished-component-releases.mjs \
-              "$plan_path" "$filtered_plan"
-            plan_path="$filtered_plan"
-          fi
           node scripts/build-component-releases.mjs \
             "$plan_path" \
             "$RUNNER_TEMP/component-release-artifacts"
-          echo "has_components=$(
-            jq -r '
-              (.chatgptApi != null) or
-              (.bindings | length > 0) or
-              (.extensions | length > 0)
-            ' "$plan_path"
-          )" >> "$GITHUB_OUTPUT"
           jq \
             '{generation, chatgptApi, bindings, extensions}' \
             "$plan_path"
@@ -209,14 +191,7 @@ jobs:
           inputs.release_head_sha != ''
         )
       ) &&
-      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
-      (
-        needs.component-release-plan.outputs.has_components == 'true' ||
-        (
-          github.event_name == 'workflow_dispatch' &&
-          inputs.repair_component_releases
-        )
-      )
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     needs:
       - test
       - component-release-plan
@@ -243,20 +218,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           command -v zip >/dev/null
-          repair_arguments=()
           if [[ "$REPAIR_COMPONENT_RELEASES" == "true" ]]; then
-            repair_arguments+=(--repair)
+            BASE_SHA="$(git rev-parse "$GITHUB_SHA^")"
+            HEAD_SHA="$GITHUB_SHA"
           fi
           plan_path="$RUNNER_TEMP/component-releases.json"
           node scripts/component-releases.mjs \
-            "$BASE_SHA" "$HEAD_SHA" "${repair_arguments[@]}" \
+            "$BASE_SHA" "$HEAD_SHA" --repair \
             > "$plan_path"
-          if [[ "$REPAIR_COMPONENT_RELEASES" == "true" ]]; then
-            filtered_plan="$RUNNER_TEMP/unpublished-component-releases.json"
-            node scripts/filter-unpublished-component-releases.mjs \
-              "$plan_path" "$filtered_plan"
-            plan_path="$filtered_plan"
-          fi
+          filtered_plan="$RUNNER_TEMP/unpublished-component-releases.json"
+          node scripts/filter-unpublished-component-releases.mjs \
+            "$plan_path" "$filtered_plan"
+          plan_path="$filtered_plan"
           node scripts/build-component-releases.mjs \
             "$plan_path" \
             "$RUNNER_TEMP/component-release-artifacts"

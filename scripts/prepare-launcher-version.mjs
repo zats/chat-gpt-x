@@ -77,7 +77,10 @@ if (!Number.isSafeInteger(declaredBuild) || declaredBuild < 1) {
 const declaredSeries = declared.slice(0, 2);
 const latestSeries = latest.parsedVersion.slice(0, 2);
 const seriesOrder = compareVersions([...declaredSeries, 0], [...latestSeries, 0]);
+const versionOrder = compareVersions(declared, latest.parsedVersion);
+const resumesPreparedVersion = versionOrder > 0 && declaredBuild > latest.build;
 let nextVersion;
+let nextBuild;
 
 if (seriesOrder < 0) {
   throw new Error(
@@ -85,16 +88,19 @@ if (seriesOrder < 0) {
   );
 }
 
-if (seriesOrder > 0) {
+if (resumesPreparedVersion) {
+  nextVersion = declaredVersion;
+  nextBuild = declaredBuild;
+} else if (seriesOrder > 0) {
   if (compareVersions(declared, latest.parsedVersion) <= 0) {
     throw new Error(`Declared version ${declaredVersion} must be newer than ${latest.version}`);
   }
   nextVersion = declaredVersion;
+  nextBuild = Math.max(declaredBuild, latest.build) + 1;
 } else {
   nextVersion = `${declared[0]}.${declared[1]}.${Math.max(declared[2], latest.parsedVersion[2]) + 1}`;
+  nextBuild = Math.max(declaredBuild, latest.build) + 1;
 }
-
-const nextBuild = Math.max(declaredBuild, latest.build) + 1;
 
 if (write) {
   const nextProjectSource = projectSource
@@ -116,5 +122,6 @@ process.stdout.write(
     version: nextVersion,
     build: nextBuild,
     manuallyChangedSeries: seriesOrder > 0,
+    resumesPreparedVersion,
   })}\n`,
 );

@@ -185,6 +185,7 @@ test("issue retry repairs publication after its binding reached main", () => {
   );
   assert.match(ciWorkflow, /repair_component_releases:/);
   assert.match(ciWorkflow, /--repair/);
+  assert.doesNotMatch(ciWorkflow, /has_components/);
   assert.match(
     ciWorkflow,
     /scripts\/filter-unpublished-component-releases\.mjs/g,

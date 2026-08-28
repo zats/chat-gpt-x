@@ -287,6 +287,52 @@ run_logged() {
   return 1
 }
 
+run_logged_bounded() {
+  local timeout_seconds="$1"
+  local name="$2"
+  shift 2
+  local log_file="$LOG_ROOT/$name.log"
+  local started_at="$SECONDS"
+  local command_pid
+  local command_status
+  local deadline
+  [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] || {
+    echo "run_logged_bounded requires a positive timeout" >&2
+    return 1
+  }
+
+  progress "starting $name"
+  "$@" >"$log_file" 2>&1 &
+  command_pid=$!
+  deadline=$((SECONDS + timeout_seconds))
+  while kill -0 "$command_pid" 2>/dev/null; do
+    [[ "$(ps -o state= -p "$command_pid" | tr -d ' ')" == Z ]] && break
+    if (( SECONDS >= deadline )); then
+      kill -TERM "$command_pid" 2>/dev/null || true
+      wait "$command_pid" 2>/dev/null || true
+      progress "timed out $name after ${timeout_seconds}s"
+      {
+        echo "$name did not finish within ${timeout_seconds}s; complete captured output follows:"
+        cat "$log_file"
+      } >&2
+      return 75
+    fi
+    sleep 0.1
+  done
+  if wait "$command_pid"; then
+    progress "passed $name ($((SECONDS - started_at))s)"
+    return
+  else
+    command_status=$?
+  fi
+  progress "failed $name ($((SECONDS - started_at))s)"
+  {
+    echo "$name failed; complete captured output follows:"
+    cat "$log_file"
+  } >&2
+  return "$command_status"
+}
+
 wait_for_process_exit() {
   local process_id="$1"
   local deadline="$2"
@@ -514,7 +560,9 @@ stop_app
 if [[ "$NO_PROFILE" == "0" ]]; then
   launch_app accounts
   run_logged accounts-readiness node "$REPO_ROOT/scripts/wait-for-chatgpt-ready.mjs" "$PORT"
-  run_logged multiple-accounts-e2e node "$REPO_ROOT/src/extensions/multiple-accounts/multiple-accounts.e2e.mjs" "$PORT"
+  run_logged_bounded 120 multiple-accounts-e2e node \
+    "$REPO_ROOT/src/extensions/multiple-accounts/multiple-accounts.e2e.mjs" \
+    "$PORT"
   stop_app
 fi
 
@@ -711,7 +759,7 @@ fi
 
 launch_app public-api api-test
 PUBLIC_API_PID="$APP_PID"
-run_logged public-api node "$BINDING_DIR/ui-test.mjs" "$PORT" \
+run_logged_bounded 120 public-api node "$BINDING_DIR/ui-test.mjs" "$PORT" \
   --public-api-only "$THREAD_SELECTION"
 
 PUBLIC_TOTAL="$(jq -er '.total' "$LOG_ROOT/public-api.log")"
@@ -749,10 +797,10 @@ stop_app
 
 launch_app validation composition
 if [[ "$NO_PROFILE" == "1" ]]; then
-  run_logged native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \
+  run_logged_bounded 120 native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \
     "$THREAD_SELECTION"
 else
-  run_logged native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \
+  run_logged_bounded 120 native-ui node "$BINDING_DIR/ui-test.mjs" "$PORT" \
     "--alternate-auth=$SECONDARY_AUTH" "$THREAD_SELECTION"
 fi
 stop_app
