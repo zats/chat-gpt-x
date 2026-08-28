@@ -98,4 +98,29 @@ final class ApplicationUpdatesTests: XCTestCase {
         controller.performCurrentAction()
         XCTAssertEqual(actions, [.check, .install])
     }
+
+    func testNoUpdateAbortKeepsUpToDateState() {
+        let error = NSError(
+            domain: "SUSparkleErrorDomain",
+            code: 1001
+        )
+
+        XCTAssertEqual(
+            ApplicationUpdateController.stateForAbortedUpdate(error),
+            .upToDate
+        )
+    }
+
+    func testRealAbortShowsFailureState() {
+        let error = NSError(
+            domain: NSURLErrorDomain,
+            code: NSURLErrorCannotConnectToHost,
+            userInfo: [NSLocalizedDescriptionKey: "The appcast is invalid."]
+        )
+
+        XCTAssertEqual(
+            ApplicationUpdateController.stateForAbortedUpdate(error),
+            .failed(message: "The appcast is invalid.")
+        )
+    }
 }

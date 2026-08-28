@@ -285,10 +285,23 @@ final class ApplicationUpdateController: NSObject, SPUUpdaterDelegate {
         didAbortWithError error: any Error
     ) {
         _ = updater
+        let state = Self.stateForAbortedUpdate(error)
         Task { @MainActor in
             self.clearPendingInstallation()
-            self.setState(.failed(message: error.localizedDescription))
+            self.setState(state)
         }
+    }
+
+    static func stateForAbortedUpdate(
+        _ error: any Error
+    ) -> ApplicationUpdateState {
+        let error = error as NSError
+        if error.domain == SUSparkleErrorDomain,
+            error.code == Int(SUError.noUpdateError.rawValue)
+        {
+            return .upToDate
+        }
+        return .failed(message: error.localizedDescription)
     }
 
     nonisolated func updater(
