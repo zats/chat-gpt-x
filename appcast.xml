@@ -6,6 +6,32 @@
         <description>ChatGPTX launcher updates</description>
         <language>en</language>
         <item>
+            <title>1.2.6</title>
+            <pubDate>Fri, 28 Aug 2026 14:03:18 +0000</pubDate>
+            <link>https://github.com/zats/chat-gpt-x</link>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>1.2.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2 id="changes">Changes</h2>
+<ul>
+<li>Merge pull request #58 from
+zats/codex/fix-app-update-no-update-state (<code>51a14c6</code>)</li>
+<li>Fix no-update menu state (<code>219e96c</code>)</li>
+<li>Merge pull request #57 from
+zats/codex/stabilize-color-flyout-validation (<code>0e12171</code>)</li>
+<li>Stabilize native Color flyout validation (<code>01a0925</code>)</li>
+<li>Merge pull request #56 from
+zats/codex/fix-selection-toolbar-placement (<code>6bcba8c</code>)</li>
+<li>Fix below-selection toolbar placement race
+(<code>ec6ebdd</code>)</li>
+<li>Create bindings for ChatGPT 26.825.32147 (<code>41d067e</code>)</li>
+<li>Create bindings for ChatGPT 26.825.31414 (<code>549cb93</code>)</li>
+<li>Create bindings for ChatGPT 26.820.80927 (<code>972ae08</code>)</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/zats/chat-gpt-x/releases/download/launcher-v1.2.6/ChatGPTX-1.2.6.zip" length="10015630" type="application/octet-stream" sparkle:edSignature="0u7WYnOBZMaMM+YCUHTCqTapKNx4/Lu83wXFpel5yrG+AH6NU9uPc4+dbqaMnA0cLROilotcHPw3wO8H3tt4Dg=="/>
+        </item>
+        <item>
             <title>1.2.5</title>
             <pubDate>Thu, 27 Aug 2026 16:50:35 +0000</pubDate>
             <link>https://github.com/zats/chat-gpt-x</link>
