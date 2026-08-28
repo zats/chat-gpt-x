@@ -6,6 +6,27 @@
         <description>ChatGPTX launcher updates</description>
         <language>en</language>
         <item>
+            <title>1.2.7</title>
+            <pubDate>Fri, 28 Aug 2026 18:54:13 +0000</pubDate>
+            <link>https://github.com/zats/chat-gpt-x</link>
+            <sparkle:version>9</sparkle:version>
+            <sparkle:shortVersionString>1.2.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2 id="changes">Changes</h2>
+<ul>
+<li>Merge pull request #60 from zats/codex/bulletproof-rollouts
+(<code>977c8dc</code>)</li>
+<li>Make runtime and launcher rollouts recoverable
+(<code>32b587c</code>)</li>
+<li>Merge pull request #59 from
+zats/codex/stabilize-color-flyout-appearance (<code>c3acb61</code>)</li>
+<li>Reopen Color flyout after appearance changes
+(<code>9eb92ad</code>)</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/zats/chat-gpt-x/releases/download/launcher-v1.2.7/ChatGPTX-1.2.7.zip" length="10015613" type="application/octet-stream" sparkle:edSignature="KczNU0rHfY1Vg0OEaMuNaMpPorz89OZUA5DJgl7xoXbahyw3RnzueOJo2PQ2c//HvHkQqe0njoiMw/tI4rgDDg=="/>
+        </item>
+        <item>
             <title>1.2.6</title>
             <pubDate>Fri, 28 Aug 2026 14:03:18 +0000</pubDate>
             <link>https://github.com/zats/chat-gpt-x</link>
