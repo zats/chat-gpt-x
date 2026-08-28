@@ -8,7 +8,7 @@ Pinned build:
 - Electron: `151.0.7922.174`
 - Sparkle enclosure: `https://persistent.oaistatic.com/codex-app-prod/ChatGPT-darwin-arm64-26.825.32147.zip`
 - Binding date: `2026-08-28`
-- Binding version: `1.0.0`
+- Binding version: `1.0.1`
 - ChatGPT API version: `1.5.2`
 - Version-watcher issue: `#55`
 
@@ -112,6 +112,15 @@ placement's toolbar. Leaves dismiss the selection and receive an immutable
 Command-key activation. Native response-annotation creation, composer-
 preserving normal creation, and native direct submission passed unchanged.
 
+Binding `1.0.1` corrects a first-layout race in the below-selection surface.
+The descendant layout effect can run before the native positioner's outer ref
+is available, which leaves the surface hidden at its static absolute position
+when no resize follows. The binding still places the surface immediately and
+also repeats the same exact native-geometry calculation in the first animation
+frame. The native check requires the surface to be visible and exactly `8` px
+below the selected range, so the deferred pass synchronizes with the native
+owner without weakening the layout contract.
+
 Settings page, group, rows, row, toggle, select, button, input, title, loading,
 icon, visibility, breadcrumb, search, and route contracts retain native
 ownership. No-op transforms preserve native descriptor identity so dynamic
@@ -199,6 +208,8 @@ profile-dependent gates.
   action ids, or source-position reinsertion changed.
 - Empty assistant-selection model or non-native layout: the selected-text
   overlay, native container, action wrapper, or annotation callbacks moved.
+- Hidden below-selection surface at the above toolbar's bottom edge: the
+  deferred position pass did not run after the native positioner's ref attached.
 - Missing Settings control, loading row, search entry, or child navigation:
   the Settings chunk split or page/group/row/control ownership changed.
 - An untouched Settings pane consumes renderer resources: a no-op transform
