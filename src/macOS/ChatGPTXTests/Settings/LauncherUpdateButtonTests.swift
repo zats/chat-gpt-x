@@ -14,7 +14,7 @@ final class LauncherUpdateButtonTests: XCTestCase {
         )
         XCTAssertEqual(
             UpdateButtonFeedbackState.reload.systemSymbolName,
-            "arrow.clockwise.circle.fill"
+            "arrow.clockwise"
         )
         XCTAssertEqual(
             UpdateButtonFeedbackState.reload.accessibilityLabel,
@@ -22,7 +22,7 @@ final class LauncherUpdateButtonTests: XCTestCase {
         )
         XCTAssertEqual(
             UpdateButtonFeedbackState.result(.noUpdates).systemSymbolName,
-            "checkmark.circle.fill"
+            "checkmark"
         )
         XCTAssertEqual(
             UpdateButtonFeedbackState.result(.noUpdates)
@@ -32,7 +32,7 @@ final class LauncherUpdateButtonTests: XCTestCase {
         XCTAssertEqual(
             UpdateButtonFeedbackState.result(.updateAvailable)
                 .systemSymbolName,
-            "gift.fill"
+            "gift"
         )
         XCTAssertEqual(
             UpdateButtonFeedbackState.result(.updateAvailable)
@@ -41,7 +41,7 @@ final class LauncherUpdateButtonTests: XCTestCase {
         )
         XCTAssertEqual(
             UpdateButtonFeedbackState.result(.failure).systemSymbolName,
-            "exclamationmark.circle.fill"
+            "exclamationmark"
         )
         XCTAssertEqual(
             UpdateButtonFeedbackState.result(.failure)
