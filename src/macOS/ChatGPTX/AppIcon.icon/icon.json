@@ -4,36 +4,15 @@
   },
   "groups" : [
     {
-      "hidden" : false,
       "layers" : [
         {
-          "glass" : false,
-          "hidden-specializations" : [
-            {
-              "appearance" : "dark",
-              "value" : true
-            }
-          ],
-          "image-name" : "zats_dramatic_photo_from_a_space_mission_fly_by_of_the_sun_-__0a12a612-1b16-4eed-ab58-de610ceb1c45_1.png",
-          "name" : "day",
-          "opacity" : 1,
+          "image-name" : "ChatGPTX.png",
+          "name" : "ChatGPTX",
           "position" : {
-            "scale" : 1.43,
+            "scale" : 1,
             "translation-in-points" : [
-              -10,
-              -71
-            ]
-          }
-        },
-        {
-          "glass" : false,
-          "image-name" : "zats_dramatic_photo_from_a_space_mission_fly_by_of_the_sun_-__55ad4b3a-6e47-42ee-83f9-9938ee11b6ec_0.png",
-          "name" : "night",
-          "position" : {
-            "scale" : 1.5,
-            "translation-in-points" : [
-              -5,
-              18
+              19,
+              0
             ]
           }
         }
@@ -43,7 +22,7 @@
         "opacity" : 0.5
       },
       "translucency" : {
-        "enabled" : false,
+        "enabled" : true,
         "value" : 0.3
       }
     }

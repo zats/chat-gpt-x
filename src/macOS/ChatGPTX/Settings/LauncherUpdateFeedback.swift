@@ -14,15 +14,15 @@ enum UpdateButtonFeedbackState: Equatable {
     var systemSymbolName: String? {
         switch self {
         case .reload:
-            "arrow.clockwise.circle.fill"
+            "arrow.clockwise"
         case .checking:
             nil
         case .result(.noUpdates):
-            "checkmark.circle.fill"
+            "checkmark"
         case .result(.updateAvailable):
-            "gift.fill"
+            "gift"
         case .result(.failure):
-            "exclamationmark.circle.fill"
+            "exclamationmark"
         }
     }
 

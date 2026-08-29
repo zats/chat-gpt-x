@@ -96,6 +96,7 @@ private struct LauncherComponentsHeader: View {
                         .controlSize(.small)
                 } else if let systemSymbolName = self.model.updateFeedbackState.systemSymbolName {
                     Image(systemName: systemSymbolName)
+                        .font(.callout)
                         .foregroundStyle(
                             Color(
                                 nsColor: self.model.updateFeedbackState
