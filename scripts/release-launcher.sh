@@ -185,7 +185,9 @@ BUILD_NUMBER="${RELEASE_BUILD_NUMBER:-$(
 
 TAG="launcher-v$MARKETING_VERSION"
 ARCHIVE_NAME="ChatGPTX-$MARKETING_VERSION.zip"
+LATEST_ARCHIVE_NAME="ChatGPTX.zip"
 DOWNLOAD_URL="https://github.com/zats/chat-gpt-x/releases/download/$TAG/$ARCHIVE_NAME"
+LATEST_DOWNLOAD_URL="https://github.com/zats/chat-gpt-x/releases/latest/download/$LATEST_ARCHIVE_NAME"
 FEED_URL="https://raw.githubusercontent.com/zats/chat-gpt-x/main/appcast.xml"
 
 TAG_EXISTS=0
@@ -252,6 +254,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 ARCHIVE_PATH="$RELEASE_ROOT/$ARCHIVE_NAME"
+LATEST_ARCHIVE_PATH="$RELEASE_ROOT/$LATEST_ARCHIVE_NAME"
 if [[ "$RESUME_PUBLICATION" == "1" ]]; then
   echo "Resuming publication of existing release $TAG."
   gh release download "$TAG" \
@@ -387,6 +390,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 ditto -c -k --keepParent "$APP_PATH" "$ARCHIVE_PATH"
 fi
+cp "$ARCHIVE_PATH" "$LATEST_ARCHIVE_PATH"
 
 SPARKLE_TOOLS_DIR="${CHATGPTX_SPARKLE_TOOLS_DIR:-}"
 if [[ -z "$SPARKLE_TOOLS_DIR" ]]; then
@@ -481,16 +485,32 @@ CURRENT_ORIGIN_MAIN_SHA="$(git rev-parse origin/main)"
 cp "$GENERATED_APPCAST" "$APPCAST_FILE"
 
 if [[ "$RESUME_PUBLICATION" == "0" ]]; then
-  gh release create "$TAG" "$ARCHIVE_PATH#$ARCHIVE_NAME" \
+  gh release create \
+    "$TAG" \
+    "$ARCHIVE_PATH#$ARCHIVE_NAME" \
+    "$LATEST_ARCHIVE_PATH#$LATEST_ARCHIVE_NAME" \
     --repo zats/chat-gpt-x \
     --target "$HEAD_SHA" \
     --title "ChatGPTX $MARKETING_VERSION" \
     --notes-file "$RELEASE_NOTES_FILE" \
     --draft
+elif ! gh release view "$TAG" \
+  --repo zats/chat-gpt-x \
+  --json assets \
+  --jq '.assets[].name' \
+  | rg -Fxq "$LATEST_ARCHIVE_NAME"
+then
+  gh release upload \
+    "$TAG" \
+    "$LATEST_ARCHIVE_PATH#$LATEST_ARCHIVE_NAME" \
+    --repo zats/chat-gpt-x
 fi
-gh release edit "$TAG" --repo zats/chat-gpt-x --draft=false --latest=false
+gh release edit "$TAG" --repo zats/chat-gpt-x --draft=false --latest
 
 curl --fail --location --silent --show-error --head "$DOWNLOAD_URL" \
+  >/dev/null
+[[ "$(gh api repos/zats/chat-gpt-x/releases/latest --jq .tag_name)" == "$TAG" ]]
+curl --fail --location --silent --show-error --head "$LATEST_DOWNLOAD_URL" \
   >/dev/null
 
 git add appcast.xml

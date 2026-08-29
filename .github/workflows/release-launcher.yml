@@ -176,9 +176,18 @@ jobs:
           BUILD: ${{ needs.release.outputs.build }}
         run: |
           archive_url="https://github.com/zats/chat-gpt-x/releases/download/launcher-v$VERSION/ChatGPTX-$VERSION.zip"
+          latest_archive_url="https://github.com/zats/chat-gpt-x/releases/latest/download/ChatGPTX.zip"
           feed_url="https://raw.githubusercontent.com/zats/chat-gpt-x/main/appcast.xml"
           for attempt in {1..60}; do
-            if curl --fail --location --silent --show-error --head "$archive_url" \
+            latest_tag="$(
+              curl --fail --location --silent --show-error \
+                https://api.github.com/repos/zats/chat-gpt-x/releases/latest \
+                | jq -r .tag_name
+            )"
+            if [[ "$latest_tag" == "launcher-v$VERSION" ]] \
+              && curl --fail --location --silent --show-error --head "$archive_url" \
+                >/dev/null 2>&1 \
+              && curl --fail --location --silent --show-error --head "$latest_archive_url" \
                 >/dev/null 2>&1 \
               && curl --fail --location --silent --show-error "$feed_url" \
                 | grep -q "<sparkle:version>$BUILD</sparkle:version>"; then

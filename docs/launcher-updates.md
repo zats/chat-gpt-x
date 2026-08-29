@@ -85,11 +85,13 @@ The release path then:
    Developer ID signatures.
 4. Submits the application to Apple's notarization service, staples the
    ticket, and validates Gatekeeper acceptance.
-5. Creates `ChatGPTX-<version>.zip` and signs it with the Sparkle key.
+5. Creates the signed `ChatGPTX-<version>.zip` Sparkle archive and the stable
+   `ChatGPTX.zip` download alias.
 6. Uses Pandoc to convert the Markdown notes to HTML, then uses Sparkle's
    `generate_appcast` tool to add the release to `appcast.xml`.
-7. Creates `launcher-v<version>` as a draft GitHub Release, uploads the ZIP,
-   publishes the release, and then pushes the appcast commit to `main`.
+7. Creates `launcher-v<version>` as a draft GitHub Release, uploads both ZIP
+   names, publishes it as GitHub's latest release, and then pushes the appcast
+   commit to `main`.
 8. Verifies that the public feed contains the new build and that its enclosure
    is reachable.
 

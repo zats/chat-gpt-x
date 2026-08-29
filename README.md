@@ -1,3 +1,3 @@
 # ChatGPTX
 
-[Download](../../releases/latest)
+[Download](../../releases/latest/download/ChatGPTX.zip)
