@@ -71,10 +71,15 @@ navigation.
 Run the packaged launcher with `--test-api` and an explicit locally built
 `api-test-suite` to restart ChatGPT with only that suite. Pass
 `--extension <absolute-package-directory-or-main.js>` to override an installed
-extension or load a development extension for that launch. CI builds
-the current components into an isolated versioned store and passes its local
-`api-test-suite` through `--extension`. Additional arguments are forwarded to
-ChatGPT in test mode for isolated profiles and CDP.
+extension or load a development extension for that launch. Agents that run in
+ChatGPT must use the bundled `build-chatgptx-extensions` skill and
+`--test-extension` mode. That flow uses a separate Electron profile, a
+temporary Codex home, an exact private copy of the active components, the
+primary Computer Use service, a test-only package copy, and a cleanup lease.
+It does not run the component updater. Do not enable remote debugging for that
+signed-in profile. CI builds the current components into an isolated versioned store and
+passes its local `api-test-suite` through `--extension`. Additional arguments
+are forwarded to ChatGPT in isolated test modes.
 
 To start a stock ChatGPT instance with separate Electron and Codex data,
 optional product UI suppression, and no ChatGPTX injection, use

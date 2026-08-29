@@ -1,7 +1,7 @@
 name: ChatGPTX
 
 options:
-  createIntermediateGroups: true
+  defaultSourceDirectoryType: syncedFolder
   deploymentTarget:
     macOS: "26.0"
 
@@ -40,6 +40,9 @@ targets:
         SUVerifyUpdateBeforeExtraction: true
     sources:
       - path: ChatGPTX
+        type: syncedFolder
+        explicitFolders:
+          - Resources/Skills
     dependencies:
       - package: Permiso
       - package: SnapKit
@@ -59,6 +62,7 @@ targets:
     platform: macOS
     sources:
       - path: ChatGPTXTests
+        type: syncedFolder
     dependencies:
       - target: ChatGPTX
     settings:

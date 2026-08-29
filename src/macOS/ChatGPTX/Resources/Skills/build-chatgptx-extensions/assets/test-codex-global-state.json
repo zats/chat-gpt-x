@@ -1,0 +1,7 @@
+{
+  "electron-persisted-atom-state": {
+    "electron:onboarding-override": "app",
+    "electron:onboarding-projectless-completed": true,
+    "electron:onboarding-welcome-pending": false
+  }
+}

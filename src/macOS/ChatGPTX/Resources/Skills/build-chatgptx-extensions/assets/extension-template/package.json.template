@@ -1,0 +1,11 @@
+{
+  "id": "__EXTENSION_ID__",
+  "name": "__EXTENSION_NAME__",
+  "version": "0.1.0",
+  "description": "A local ChatGPTX extension.",
+  "main": "contents/main.js",
+  "compatibility": {
+    "chatgptApi": "^__CHATGPTX_API_VERSION__"
+  },
+  "capabilities": []
+}

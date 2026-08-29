@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build ChatGPTX Extensions"
+  short_description: "Build and test local ChatGPTX extensions"
+  default_prompt: "Use $build-chatgptx-extensions to create and test a local ChatGPTX extension."

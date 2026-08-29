@@ -1,0 +1,1776 @@
+/**
+ * ChatGPT Extension Platform — stable public API.
+ *
+ * The only surface through which extensions access ChatGPT capabilities. App
+ * internals are minified and re-scrambled every build; bindings in
+ * `src/platform/bindings/<version>/` bridge them to this API, so this file
+ * stays stable across app updates. ChatGPTX-owned utilities live separately
+ * under `src/platform/utilities/`. Its semantic version is declared in
+ * `src/platform/manifest.json`.
+ *
+ * Rules for anything exported here:
+ * - Declarations only: no implementations, app internals, DOM/Electron
+ *   shapes, or minified identifiers.
+ * - Full TSDoc required: intent, behavior, parameter semantics,
+ *   multi-consumer semantics, `@example`, and exactly one `@group`:
+ *   Lifecycle | Menus | Authentication | Appearance | Settings | Threads | Commands | Windows | Events.
+ * - Designed for N concurrent extensions: transformers for state-shaping
+ *   APIs (full state in, new state out, chained in load order), registration
+ *   for notifications (invoked in load order, isolated). Extensions never
+ *   detect or depend on each other.
+ * - Native by construction: APIs expose the app's OWN components and
+ *   behaviors — never re-implement existing controls. If the app has a
+ *   component that does the thing, the binding reuses or exposes it, so
+ *   extensions are indistinguishable from first-party UI in look AND
+ *   behavior. Replication is a last resort and must be justified.
+ * - No backward compatibility: APIs change in place, one way. No deprecation
+ *   shims, aliases, or legacy paths.
+ *
+ * All changes follow `.agents/skills/manage-platform-api/SKILL.md`.
+ */
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
+
+/**
+ * Entry point an extension module must export as `activate`.
+ *
+ * Called exactly once when the platform loads the extension, receiving the
+ * platform API object. The extension registers all of its contributions
+ * (menu transformers, event listeners, …) from inside this call.
+ *
+ * Multi-consumer: every extension gets the same `api` object; contributions
+ * are attributed to the extension by the platform.
+ *
+ * @group Lifecycle
+ * @example
+ * export function activate(api: PlatformApi) {
+ *   api.menus.profile.transformItems((items) => items);
+ * }
+ */
+export type ExtensionActivate = (api: PlatformApi) => void;
+
+/**
+ * A handle that undoes a registration.
+ *
+ * Calling `dispose()` removes the contribution made at registration time
+ * (e.g. unregisters a menu transformer). Safe to call more than once.
+ *
+ * @group Lifecycle
+ */
+export interface Disposable {
+  dispose(): void;
+}
+
+// ---------------------------------------------------------------------------
+// Menus
+// ---------------------------------------------------------------------------
+
+/**
+ * The root platform API object passed to {@link ExtensionActivate}.
+ *
+ * @group Lifecycle
+ */
+export interface PlatformApi {
+  /** Menu contribution APIs. */
+  readonly menus: MenusApi;
+
+  /** Native ChatGPT settings navigation, content, and controls. */
+  readonly settings: SettingsApi;
+
+  /** Current ChatGPT thread lifecycle. */
+  readonly threads: ThreadsApi;
+
+  /** The ChatGPT app's authentication lifecycle. */
+  readonly authentication: AuthenticationApi;
+
+  /** Native ChatGPT appearance customization. */
+  readonly appearance: AppearanceApi;
+}
+
+// ---------------------------------------------------------------------------
+// Threads
+// ---------------------------------------------------------------------------
+
+/**
+ * The persisted local or cloud thread currently displayed by ChatGPT.
+ *
+ * @group Threads
+ */
+export interface ThreadContext {
+  /** ChatGPT's stable identifier for the local or cloud thread. */
+  readonly threadId: string;
+
+  /** The thread title currently displayed by ChatGPT. */
+  readonly title: string;
+
+  /** The thread's working directory when ChatGPT supplies one. */
+  readonly workingDirectory?: string;
+}
+
+/**
+ * Listener for current-thread changes. `undefined` means no persisted thread
+ * is currently displayed.
+ *
+ * @group Threads
+ */
+export type CurrentThreadListener = (thread: ThreadContext | undefined) => void;
+
+/**
+ * Observes the persisted thread currently displayed by ChatGPT.
+ *
+ * Multi-consumer: listeners run in registration order with error isolation.
+ * Each subscription receives the current snapshot immediately, then every
+ * subsequent change. Disposing a subscription stops future delivery.
+ *
+ * @group Threads
+ */
+export interface ThreadsApi {
+  /** Contributions rendered at the leading edge of persisted thread rows. */
+  readonly list: ThreadListApi;
+
+  /** Return the current persisted thread, or `undefined` outside a thread. */
+  getCurrent(): ThreadContext | undefined;
+
+  /** Subscribe to the current snapshot and subsequent thread changes. */
+  subscribe(listener: CurrentThreadListener): Disposable;
+}
+
+/**
+ * Adds compact extension-owned views to the leading edge of persisted thread
+ * rows in ChatGPT's sidebar.
+ *
+ * ChatGPT retains ownership of the row, including selection, status, hover
+ * actions, keyboard behavior, and accessibility. The platform mounts every
+ * contributed view three CSS pixels before the native title without changing
+ * the title or action layout. The first registration is closest to the title;
+ * later registrations extend outward to the left. Providers are evaluated
+ * lazily and cached until their thread context changes or the registration is
+ * invalidated.
+ *
+ * @group Threads
+ */
+export interface ThreadListApi {
+  /**
+   * Register one optional leading item for each persisted thread row.
+   *
+   * `provider` runs synchronously with the row's current thread snapshot.
+   * Return `undefined` when the extension has nothing to show. A throwing
+   * provider is isolated and contributes no item for that evaluation.
+   *
+   * Multi-consumer: registrations are evaluated and rendered in extension
+   * load and registration order. Each registration owns only its item and
+   * cannot inspect or replace another extension's contribution.
+   *
+   * @example
+   * const registration = api.threads.list.registerItem((thread) => {
+   *   const color = colors.get(thread.threadId);
+   *   if (!color) return undefined;
+   *   return {
+   *     view: () => {
+   *       const bar = document.createElement("span");
+   *       bar.style.cssText = `display:block;width:3px;height:16px;border-radius:2px;background:${color}`;
+   *       bar.setAttribute("aria-hidden", "true");
+   *       return bar;
+   *     },
+   *   };
+   * });
+   * registration.invalidate(threadId);
+   */
+  registerItem(provider: ThreadListItemProvider): ThreadListItemRegistration;
+}
+
+/**
+ * Produces an extension's leading item for one persisted thread.
+ *
+ * @group Threads
+ */
+export type ThreadListItemProvider = (
+  thread: ThreadContext,
+) => ThreadListItem | undefined;
+
+/**
+ * One extension-owned view mounted at ChatGPT's native thread-row leading
+ * edge. The factory must return a fresh, non-interactive HTML element for each
+ * mount because the same thread can be rendered in more than one list.
+ *
+ * @group Threads
+ */
+export interface ThreadListItem {
+  readonly view: () => HTMLElement;
+}
+
+/**
+ * Controls one thread-list item provider.
+ *
+ * @group Threads
+ */
+export interface ThreadListItemRegistration extends Disposable {
+  /**
+   * Clear the provider's cached result and update the affected native rows.
+   * Pass a thread id to update one row; omit it to update every observed row.
+   * Calling this after disposal has no effect.
+   */
+  invalidate(threadId?: string): void;
+}
+
+// ---------------------------------------------------------------------------
+// Appearance
+// ---------------------------------------------------------------------------
+
+/**
+ * CSS custom properties recognized by the ChatGPT header binding.
+ *
+ * @group Appearance
+ */
+export type HeaderCssProperty =
+  "--header-background-color" | "--header-foreground-color";
+
+/**
+ * Light and dark values for one native header CSS custom property.
+ *
+ * Both values must be valid CSS colors. ChatGPTX selects the value matching
+ * ChatGPT's effective appearance and updates it when that appearance changes.
+ *
+ * @group Appearance
+ */
+export interface HeaderThemeColor {
+  readonly light: string;
+  readonly dark: string;
+}
+
+/**
+ * A partial set of native header CSS custom-property theme values.
+ *
+ * An omitted property leaves that property to earlier registrations or
+ * ChatGPT's native appearance. An empty set preserves the complete native
+ * appearance and can later be replaced through the registration's `update`.
+ *
+ * @group Appearance
+ */
+export type HeaderCssProperties = Readonly<
+  Partial<Record<HeaderCssProperty, HeaderThemeColor>>
+>;
+
+/**
+ * The effective registered header colors for ChatGPT's current appearance.
+ *
+ * @group Appearance
+ */
+export type ResolvedHeaderCssProperties = Readonly<
+  Partial<Record<HeaderCssProperty, string>>
+>;
+
+/**
+ * A live header appearance contribution.
+ *
+ * `update` replaces this registration's complete property set without
+ * changing its precedence. `dispose` removes it and is idempotent.
+ *
+ * @group Appearance
+ */
+export interface HeaderCssPropertiesRegistration extends Disposable {
+  /** Replace this registration's properties and update the native headers immediately. */
+  update(properties: HeaderCssProperties): void;
+}
+
+/**
+ * APIs for native ChatGPT appearance customization.
+ *
+ * @group Appearance
+ */
+export interface AppearanceApi {
+  /** The thread header and side-panel tab header. */
+  readonly header: HeaderAppearanceApi;
+
+  /**
+   * Return ChatGPT's currently effective light or dark appearance.
+   *
+   * This reflects the resolved app appearance, including a system-following
+   * preference. It is a read-only snapshot and has no cross-extension
+   * ordering or conflict semantics.
+   *
+   * @example
+   * const scheme = api.appearance.getColorScheme();
+   *
+   * @group Appearance
+   */
+  getColorScheme(): AppearanceColorScheme;
+
+  /**
+   * Open ChatGPT's native color picker.
+   *
+   * Calls are serialized in invocation order across all extensions so only
+   * one picker is visible at a time. The picker appears directly below the
+   * app header near the invoking pointer. `onChange` receives every valid
+   * color produced while the user drags the picker; callback failures are
+   * isolated. Clicking outside or pressing Enter confirms the current color.
+   * Escape or disposal resolves the result to `undefined`.
+   *
+   * @example
+   * const picker = api.appearance.openColorPicker({
+   *   initialColor: "#3A83F7",
+   *   title: "Custom color",
+   *   onChange: (color) => preview(color),
+   * });
+   * const color = await picker.result;
+   *
+   * @group Appearance
+   */
+  openColorPicker(options: ColorPickerOptions): ColorPickerSession;
+}
+
+/**
+ * ChatGPT's resolved appearance mode.
+ *
+ * @group Appearance
+ */
+export type AppearanceColorScheme = "light" | "dark";
+
+/**
+ * Options for one native ChatGPT color-picker session.
+ *
+ * @group Appearance
+ */
+export interface ColorPickerOptions {
+  /** Initial opaque sRGB color in six-digit hexadecimal form. */
+  readonly initialColor: `#${string}`;
+
+  /** Accessible label for the native picker. */
+  readonly title: string;
+
+  /** Called synchronously for each valid color selected during interaction. */
+  readonly onChange: (color: `#${string}`) => void;
+}
+
+/**
+ * One queued or visible native color-picker interaction.
+ *
+ * `dispose()` cancels the session and is idempotent. Queued sessions can be
+ * disposed before becoming visible. The result promise settles exactly once.
+ *
+ * @group Appearance
+ */
+export interface ColorPickerSession extends Disposable {
+  /** Confirmed color, or `undefined` after dismissal or disposal. */
+  readonly result: Promise<`#${string}` | undefined>;
+}
+
+/**
+ * Controls the thread header and side-panel tab header through stable CSS
+ * custom properties while preserving ChatGPT's native controls and layout.
+ *
+ * Both headers react immediately whenever an effective property changes.
+ * Background styling keeps the thread header, side-panel tabs, and header
+ * controls in their native stacking order. Foreground styling applies to the
+ * native title, tab labels, and header buttons; content-panel controls below
+ * the tab header are unaffected.
+ *
+ * Multi-consumer: registrations compose in registration order. For each
+ * property, the last active registration that supplies it wins. Updating a
+ * registration keeps its original precedence; disposing it reveals the next
+ * applicable value or ChatGPT's native appearance.
+ *
+ * @group Appearance
+ */
+export interface HeaderAppearanceApi {
+  /**
+   * Register an updateable header appearance contribution.
+   *
+   * @param properties light and dark CSS color values keyed by the stable
+   * custom properties `--header-background-color` and
+   * `--header-foreground-color`; pass an empty object to preserve ChatGPT's
+   * native appearance until a later `update`
+   * @returns a live registration that can be updated or disposed
+   *
+   * @example
+   * const header = api.appearance.header.registerProperties({
+   *   "--header-background-color": {
+   *     light: "#dcfce7",
+   *     dark: "#064e3b",
+   *   },
+   *   "--header-foreground-color": {
+   *     light: "#052e16",
+   *     dark: "white",
+   *   },
+   * });
+   * header.update({}); // Restore ChatGPT's native appearance.
+   */
+  registerProperties(
+    properties: HeaderCssProperties,
+  ): HeaderCssPropertiesRegistration;
+
+  /**
+   * Return the current effective registered properties.
+   *
+   * The returned snapshot excludes ChatGPT's native fallback colors and is
+   * empty when no registration contributes either property.
+   */
+  getProperties(): ResolvedHeaderCssProperties;
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/**
+ * APIs for extending ChatGPT's native Settings window.
+ *
+ * The model has four levels: categories such as Personal, panes such as
+ * Appearance, groups inside a pane, and item rows inside a group. The
+ * binding renders each level with ChatGPT's own settings components. Native
+ * Settings search indexes the effective category, pane, group, and item text
+ * and opens the owning pane for the best matching result.
+ *
+ * Ownership isolation applies to each collection passed to a transformer.
+ * Removing a ChatGPT-owned ancestor removes its complete subtree.
+ *
+ * @group Settings
+ */
+export interface SettingsApi {
+  /** Factories for controls rendered by ChatGPT's native settings rows. */
+  readonly ui: SettingsUiApi;
+
+  /**
+   * Transform the complete settings navigation tree.
+   *
+   * `transform` receives the currently visible categories and panes whenever
+   * ChatGPT renders its settings navigation. Return the final tree to keep,
+   * remove, reorder, modify, or add categories and panes. The built-in
+   * category ids are `"personal"`, `"integrations"`, `"coding"`, and
+   * `"archived"`. Built-in pane ids use the `"codex.settings."` namespace.
+   *
+   * A new category or pane id must use `"<extension-id>.<name>"`. The
+   * platform drops and logs foreign or duplicate ids. A throwing transformer
+   * is skipped and logged. Transformers run in extension load and
+   * registration order, and each receives the previous transformer's output.
+   * The platform privately records which extension first contributed each
+   * category and pane. A later extension can pass or reorder that descriptor,
+   * but cannot modify or remove it. It also cannot move a foreign-owned pane
+   * to a different category. A copied override resolves to the original
+   * descriptor, and an omission restores it at its previous position. The
+   * public `origin` value cannot transfer ownership. All extensions can still
+   * modify or remove ChatGPT-owned categories and panes.
+   *
+   * For a category or pane that the transformer can change, an omitted
+   * property inherits its current value. An own mutable optional property
+   * whose value is `undefined` removes that property. The platform always
+   * ignores a returned `origin` value. A changed built-in category label
+   * renders as the returned public string. An unchanged label retains
+   * ChatGPT's native localized React content.
+   *
+   * Disposing or invalidating the returned registration updates an open
+   * Settings window.
+   *
+   * @example
+   * const navigation = api.settings.transformCategories((categories) =>
+   *   categories.map((category) =>
+   *     category.id === "personal"
+   *       ? {
+   *           ...category,
+   *           panes: [
+   *             ...category.panes,
+   *             {
+   *               id: "my-extension.preferences",
+   *               label: "My Extension",
+   *               title: "My Extension",
+   *               description: "Configure My Extension.",
+   *             },
+   *           ],
+   *         }
+   *       : category,
+   *   ),
+   * );
+   */
+  transformCategories(
+    transform: SettingsCategoryTransform,
+  ): SettingsTransformRegistration;
+
+  /**
+   * Transform the groups in each settings pane.
+   *
+   * The callback runs when a pane's content is rendered. It receives the
+   * groups produced by ChatGPT and earlier transformers, plus the effective
+   * pane descriptor. A new pane starts with an empty group list. Return the
+   * final groups. Extension-created group and inline item ids must be
+   * namespaced. Duplicate group ids and foreign ids are dropped and logged.
+   * After all group and item transforms, an identified item id is unique
+   * across the effective pane. The first row in final group and item order
+   * keeps the id. A later extension row with the same id is dropped. A later
+   * ChatGPT row remains visible without the ambiguous id. The same item id can
+   * be used in a different pane.
+   *
+   * Group transformers run in extension load and registration order. A
+   * throwing transformer is skipped and logged. Item transformers run after
+   * all group transformers have produced the final group list. Changed
+   * built-in titles, descriptions, and footers render as the returned public
+   * strings. Unchanged built-in metadata retains ChatGPT's native localized
+   * React content.
+   *
+   * The platform privately owns each contributed group for its first
+   * contributor. Other extensions can pass or reorder the group, but cannot
+   * modify or remove it. A copied override resolves to the original group,
+   * and an omission restores it at its previous position. The public `origin`
+   * value cannot transfer ownership. All extensions can still modify or
+   * remove ChatGPT-owned groups.
+   *
+   * For a group that the transformer can change, an omitted property inherits
+   * its current value. An own mutable optional property whose value is
+   * `undefined` removes that property. The platform always ignores a returned
+   * `origin` value.
+   *
+   * @example
+   * const groups = api.settings.transformGroups((current, pane) =>
+   *   pane.id === "my-extension.preferences"
+   *     ? [
+   *         ...current,
+   *         {
+   *           id: "my-extension.general",
+   *           title: "General",
+   *           items: [],
+   *         },
+   *       ]
+   *     : current,
+   * );
+   */
+  transformGroups(
+    transform: SettingsGroupTransform,
+  ): SettingsTransformRegistration;
+
+  /**
+   * Transform every native settings row list.
+   *
+   * `transform` receives the complete current item list for one effective
+   * group and its pane and group context. `context.group.items` is the same
+   * frozen list as the first argument. The platform rebuilds the frozen
+   * context for each transformer, so both values include every earlier item
+   * transformer's accepted output. Return the final list to keep, remove,
+   * reorder, modify, or add rows. Built-in rows have stable semantic ids when
+   * ChatGPT supplies a semantic identity; otherwise their `id` is undefined
+   * and the same object must be returned to preserve them. Every new item
+   * requires an extension-namespaced id. An identified item id must be unique
+   * across all final groups in its effective pane. The first row in final
+   * group and item order wins; the same id can be used in another pane.
+   *
+   * Transformers run in extension load and registration order for each
+   * group. A throwing transformer is skipped and logged. Control callbacks
+   * are also isolated and logged.
+   *
+   * The platform privately owns each contributed item for its first
+   * contributor. Other extensions can pass or reorder the item, but cannot
+   * modify or remove it. A copied override resolves to the original item, and
+   * an omission restores it at its previous position. The public `origin`
+   * value cannot transfer ownership. All extensions can still modify or
+   * remove ChatGPT-owned items.
+   *
+   * For an item that the transformer can change, an omitted property inherits
+   * its current value. An own mutable optional property whose value is
+   * `undefined` removes that property. The platform always ignores a returned
+   * `origin` value. An extension can assign one of its own controls to any
+   * item that it can change, including a ChatGPT-owned item. Passing or
+   * copying that effective item does not transfer its private callback
+   * authority. A control created by another extension cannot be assigned to a
+   * different item.
+   *
+   * @example
+   * let enabled = true;
+   * let items: SettingsTransformRegistration;
+   * items = api.settings.transformItems((current, context) =>
+   *   context.group.id === "my-extension.general"
+   *     ? [
+   *         ...current,
+   *         {
+   *           id: "my-extension.enabled",
+   *           label: "Enabled",
+   *           description: "Enable My Extension.",
+   *           control: api.settings.ui.toggle({
+   *             checked: enabled,
+   *             onChange(value) {
+   *               enabled = value;
+   *               items.invalidate();
+   *             },
+   *           }),
+   *         },
+   *       ]
+   *     : current,
+   * );
+   */
+  transformItems(
+    transform: SettingsItemTransform,
+  ): SettingsTransformRegistration;
+
+  /**
+   * Return the latest effective settings navigation tree.
+   *
+   * The result includes all active category transformers and reflects the
+   * latest navigation rendered by ChatGPT. It is empty until Settings has
+   * rendered in this app window.
+   */
+  getCategories(): readonly SettingsCategory[];
+
+  /**
+   * Return the latest effective groups for a pane.
+   *
+   * The groups include all active group and item transforms. The result is
+   * empty until that pane has rendered in this app window.
+   *
+   * @param paneId stable built-in id or extension-namespaced pane id
+   */
+  getGroups(paneId: string): readonly SettingsGroup[];
+
+  /**
+   * Open a settings pane through ChatGPT's native settings route.
+   *
+   * When `itemId` is present, the native page scrolls the matching row into
+   * view after it renders. Calls from all extensions run in invocation order.
+   * The promise resolves to `false` when the pane is unknown or disabled, or
+   * when a requested item does not exist. An unknown item does not close the
+   * pane that was opened.
+   *
+   * @example
+   * await api.settings.open("my-extension.preferences", {
+   *   itemId: "my-extension.enabled",
+   * });
+   */
+  open(paneId: string, options?: SettingsOpenOptions): Promise<boolean>;
+}
+
+/**
+ * Controls one settings transformer.
+ *
+ * `invalidate()` recomputes the affected settings state without changing
+ * transformer precedence. `dispose()` removes the transformer and is safe to
+ * call more than once.
+ *
+ * @group Settings
+ */
+export interface SettingsTransformRegistration extends Disposable {
+  /** Recompute the transformed settings state and update native settings UI. */
+  invalidate(): void;
+}
+
+/**
+ * Maps the complete settings category and pane navigation tree.
+ * See {@link SettingsApi.transformCategories}.
+ *
+ * @group Settings
+ */
+export type SettingsCategoryTransform = (
+  categories: readonly SettingsCategory[],
+) => readonly SettingsCategory[];
+
+/**
+ * One native Settings navigation category and its ordered panes.
+ *
+ * @group Settings
+ */
+export interface SettingsCategory {
+  /** Stable built-in id or extension-namespaced id. */
+  readonly id: string;
+
+  /** Visible category heading. */
+  readonly label: string;
+
+  /** Extra native settings-search terms shared by panes in this category. */
+  readonly keywords?: readonly string[];
+
+  /** Ordered navigation panes in this category. */
+  readonly panes: readonly SettingsPane[];
+
+  /**
+   * Contributor label assigned by the platform. ChatGPT uses `"app"`; do not
+   * use this value as ownership authority.
+   */
+  readonly origin?: "app" | string;
+}
+
+/**
+ * One Settings sidebar entry and its native routed page.
+ *
+ * Extension-created panes are internal settings routes. The binding creates
+ * the page from ChatGPT's native page component and obtains its groups from
+ * {@link SettingsApi.transformGroups}.
+ *
+ * @group Settings
+ */
+export interface SettingsPane {
+  /** Stable built-in id or extension-namespaced id. */
+  readonly id: string;
+
+  /** Visible sidebar label. */
+  readonly label: string;
+
+  /** Native page title; defaults to {@link label}. */
+  readonly title?: string;
+
+  /** Descriptive pane text included in native settings search. */
+  readonly description?: string;
+
+  /** Extra native settings-search terms for this pane. */
+  readonly keywords?: readonly string[];
+
+  /** Whether the native sidebar entry is disabled. */
+  readonly disabled?: boolean;
+
+  /** Whether a built-in pane opens an external destination. */
+  readonly external?: boolean;
+
+  /**
+   * Contributor label assigned by the platform. ChatGPT uses `"app"`; do not
+   * use this value as ownership authority.
+   */
+  readonly origin?: "app" | string;
+}
+
+/**
+ * Maps the groups rendered in one effective settings pane.
+ * See {@link SettingsApi.transformGroups}.
+ *
+ * @group Settings
+ */
+export type SettingsGroupTransform = (
+  groups: readonly SettingsGroup[],
+  pane: SettingsPane,
+) => readonly SettingsGroup[];
+
+/**
+ * One native titled content group inside a settings pane.
+ *
+ * The binding renders the group, header, content, footer, bordered row list,
+ * and row separators with ChatGPT's own settings components. Some built-in
+ * groups have no semantic identity and therefore have no `id`. New groups
+ * always require an extension-namespaced id.
+ *
+ * @group Settings
+ */
+export interface SettingsGroup {
+  /** Stable semantic id, when available. */
+  readonly id?: string;
+
+  /** Native group heading. Omit it for a group without a heading. */
+  readonly title?: string;
+
+  /** Secondary text shown in the native group header. */
+  readonly description?: string;
+
+  /** Text shown in the native group footer. */
+  readonly footer?: string;
+
+  /** Extra native settings-search terms for rows in this group. */
+  readonly keywords?: readonly string[];
+
+  /** Ordered rows; identified row ids are unique across the effective pane. */
+  readonly items: readonly SettingsItem[];
+
+  /**
+   * Contributor label assigned by the platform. ChatGPT uses `"app"`; do not
+   * use this value as ownership authority.
+   */
+  readonly origin?: "app" | string;
+}
+
+/**
+ * Context supplied while one settings item list is transformed.
+ *
+ * @group Settings
+ */
+export interface SettingsItemContext {
+  /** Effective pane that owns the group. */
+  readonly pane: SettingsPane;
+
+  /**
+   * Effective group that owns the item list. Its `items` property is the same
+   * frozen current list supplied as the transformer's first argument.
+   */
+  readonly group: SettingsGroup;
+}
+
+/**
+ * Maps the native settings rows in one group.
+ * See {@link SettingsApi.transformItems}.
+ *
+ * @group Settings
+ */
+export type SettingsItemTransform = (
+  items: readonly SettingsItem[],
+  context: SettingsItemContext,
+) => readonly SettingsItem[];
+
+/**
+ * One row rendered by ChatGPT's native settings-row component.
+ *
+ * A built-in row can omit `id` when ChatGPT gives it no semantic identity.
+ * New rows require an extension-namespaced id. The platform indexes an
+ * extension row for native settings search from its label, description, and
+ * keywords, together with its owning category, pane, and group text. Search
+ * opens the owning pane. Use {@link SettingsApi.open} with `itemId` when a
+ * caller must also scroll directly to one row.
+ *
+ * @group Settings
+ */
+export interface SettingsItem {
+  /** Stable semantic id, unique within its effective pane, when available. */
+  readonly id?: string;
+
+  /** Visible row label. */
+  readonly label: string;
+
+  /** Secondary text shown below or beside the label. */
+  readonly description?: string;
+
+  /** Native control rendered at the trailing edge of the row. */
+  readonly control?: SettingsControl;
+
+  /**
+   * Native disclosure navigation shown beside the trailing control.
+   *
+   * Activating the label, description, or disclosure opens the effective pane
+   * through ChatGPT's native Settings route and optionally scrolls to one row.
+   * The trailing control remains independent. When any row in a group has a
+   * destination, the binding reserves the same disclosure width for every
+   * sibling row so their trailing controls stay horizontally aligned. A
+   * destination that is not currently effective does nothing.
+   */
+  readonly destination?: SettingsItemDestination;
+
+  /** Extra native settings-search terms for this row. */
+  readonly keywords?: readonly string[];
+
+  /**
+   * Contributor label assigned by the platform. ChatGPT uses `"app"`; do not
+   * use this value as ownership authority.
+   */
+  readonly origin?: "app" | string;
+}
+
+/** Native Settings destination for one disclosure row. @group Settings */
+export interface SettingsItemDestination {
+  /** Effective pane to open. */
+  readonly paneId: string;
+
+  /** Optional pane-unique row to scroll into view. */
+  readonly itemId?: string;
+}
+
+/** Options for {@link SettingsApi.open}. @group Settings */
+export interface SettingsOpenOptions {
+  /** Optional pane-unique row id to scroll into view after rendering. */
+  readonly itemId?: string;
+}
+
+declare const settingsControlBrand: unique symbol;
+
+/**
+ * An opaque control created by {@link SettingsUiApi} or supplied by ChatGPT.
+ *
+ * Extensions cannot construct this value. The binding renders the matching
+ * native ChatGPT control and preserves its focus, keyboard, state, animation,
+ * and accessibility behavior.
+ *
+ * @group Settings
+ */
+export interface SettingsControl {
+  readonly [settingsControlBrand]: true;
+}
+
+/**
+ * Factories for standard native controls used in ChatGPT settings rows.
+ *
+ * The returned values are opaque. Use one as a {@link SettingsItem.control}
+ * or combine controls from the same extension with {@link inline}. Factories
+ * do not create DOM or expose React. Callback failures are isolated and
+ * logged.
+ *
+ * @group Settings
+ */
+export interface SettingsUiApi {
+  /** Create ChatGPT's native controlled toggle. */
+  toggle(options: SettingsToggleOptions): SettingsControl;
+
+  /** Create ChatGPT's native single-value dropdown. */
+  select(options: SettingsSelectOptions): SettingsControl;
+
+  /** Create ChatGPT's native settings button. */
+  button(options: SettingsButtonOptions): SettingsControl;
+
+  /** Create ChatGPT's native controlled single-line text field. */
+  textField(options: SettingsTextFieldOptions): SettingsControl;
+
+  /**
+   * Render one or more controls in order at the trailing edge of one row.
+   *
+   * Every child must be a non-composite control created by this extension.
+   * Empty and nested groups are invalid. ChatGPT's native controls keep their
+   * normal focus, keyboard, state, animation, and accessibility behavior.
+   */
+  inline(controls: readonly SettingsControl[]): SettingsControl;
+}
+
+/**
+ * Options for a native settings toggle.
+ *
+ * The native control changes immediately. The extension owns the durable
+ * value and calls its settings registration's `invalidate()` when external
+ * state changes.
+ *
+ * @group Settings
+ */
+export interface SettingsToggleOptions {
+  /** Current controlled value. */
+  readonly checked: boolean;
+
+  /** Disable native pointer and keyboard interaction. */
+  readonly disabled?: boolean;
+
+  /** Called with the next value after native activation. */
+  readonly onChange: (checked: boolean) => void | Promise<void>;
+}
+
+/**
+ * Options for a native single-value settings dropdown.
+ *
+ * @group Settings
+ */
+export interface SettingsSelectOptions {
+  /**
+   * Value of the selected option. It must match one declared option value.
+   * An empty string is valid when an option has that value.
+   */
+  readonly value?: string;
+
+  /** Placeholder shown when no option is selected. */
+  readonly placeholder?: string;
+
+  /** Ordered native dropdown options. */
+  readonly options: readonly SettingsSelectOption[];
+
+  /** Disable native pointer and keyboard interaction. */
+  readonly disabled?: boolean;
+
+  /** Called with the newly selected value. */
+  readonly onChange: (value: string) => void | Promise<void>;
+}
+
+/**
+ * One option in a native settings dropdown.
+ *
+ * @group Settings
+ */
+export interface SettingsSelectOption {
+  /**
+   * Stable option value supplied to the change callback. Empty strings are
+   * valid.
+   */
+  readonly value: string;
+
+  /** Visible option label. */
+  readonly label: string;
+
+  /** Disable selection while keeping the option visible. */
+  readonly disabled?: boolean;
+}
+
+/**
+ * Options for a native settings button.
+ *
+ * @group Settings
+ */
+export interface SettingsButtonOptions {
+  /** Visible button label. */
+  readonly label: string;
+
+  /** Stable semantic appearance mapped to ChatGPT's native button variants. */
+  readonly appearance?: "primary" | "secondary" | "danger";
+
+  /** Disable native pointer and keyboard interaction. */
+  readonly disabled?: boolean;
+
+  /** Called after native activation. */
+  readonly onClick: () => void | Promise<void>;
+}
+
+/**
+ * Options for a native controlled single-line settings text field.
+ *
+ * The extension owns validation and durable storage. The native field calls
+ * `onChange` after each user edit. Update the controlled value and invalidate
+ * the owning settings registration to render the new state. Callback failures
+ * are isolated and logged like other Settings controls.
+ *
+ * @group Settings
+ */
+export interface SettingsTextFieldOptions {
+  /** Current controlled text. */
+  readonly value: string;
+
+  /** Placeholder shown when the value is empty. */
+  readonly placeholder?: string;
+
+  /** Disable native pointer and keyboard interaction. */
+  readonly disabled?: boolean;
+
+  /** Called with the complete next text after a native input change. */
+  readonly onChange: (value: string) => void | Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Authentication
+// ---------------------------------------------------------------------------
+
+/**
+ * A stable account identity derived from ChatGPT authentication data.
+ *
+ * @group Authentication
+ */
+export interface AuthenticationIdentity {
+  /**
+   * Stable opaque identity for one ChatGPT account membership.
+   *
+   * Two accounts remain distinct even when they belong to the same ChatGPT user. The value stays stable across token refreshes and is suitable for a storage key. Do not parse it.
+   */
+  readonly userId: string;
+
+  /** User-facing account label, preferring email, then account name, then user id. */
+  readonly label: string;
+}
+
+/**
+ * The current account identity and its complete opaque `auth.json` contents.
+ *
+ * Extensions may persist `authJson` and later pass it unchanged to {@link AuthenticationApi.replaceCurrent}. They must not inspect or modify its private schema; use {@link AuthenticationApi.inspect} for identity metadata.
+ *
+ * @group Authentication
+ */
+export interface CurrentAuthentication extends AuthenticationIdentity {
+  /** Exact serialized JSON credentials currently stored by ChatGPT. */
+  readonly authJson: string;
+}
+
+/**
+ * APIs for using ChatGPT's native authentication lifecycle.
+ *
+ * Authentication changes are process-global. Calls from concurrent extensions are serialized in invocation order. A sign-in request made while the native sign-in flow is already active focuses that flow. Credential replacement validates and writes the new credentials atomically. When the serialized credentials change, ChatGPT relaunches with the same launch configuration so all account-scoped state loads from the replacement credentials.
+ *
+ * @group Authentication
+ */
+export interface AuthenticationApi {
+  /**
+   * Read the current account and the exact credentials stored in `auth.json` under the resolved Codex home.
+   *
+   * Returns `undefined` when no valid current authentication exists. The returned object is a snapshot; changing it has no effect.
+   *
+   * @example
+   * const current = await api.authentication.getCurrent();
+   * if (current) await accountStorage.write(current.userId, current.authJson);
+   */
+  getCurrent(): Promise<CurrentAuthentication | undefined>;
+
+  /**
+   * Derive stable identity metadata from serialized ChatGPT credentials without activating them.
+   *
+   * Rejects malformed or unsupported credentials. This is the supported way to label stored accounts; extensions must treat the underlying JSON schema as opaque.
+   *
+   * @param authJson exact serialized contents previously returned by {@link getCurrent}
+   */
+  inspect(authJson: string): Promise<AuthenticationIdentity>;
+
+  /**
+   * Start the app's existing sign-in flow for adding another account.
+   *
+   * Resolves once the native flow has started. Successful authentication continues through the app's existing post-sign-in lifecycle. Concurrent callers share the active native flow.
+   */
+  startSignIn(): Promise<void>;
+
+  /**
+   * Replace `auth.json` under the resolved Codex home with previously captured credentials and make the app adopt them.
+   *
+   * The JSON is validated before the current file is changed, and the replacement is atomic. If the serialized credentials differ from the current file, the current ChatGPT process relaunches after this promise resolves. The new process keeps ChatGPTX injection, launch arguments, Electron data, and Codex home, and loads the selected account from a clean application state.
+   *
+   * @param authJson exact serialized contents previously returned by {@link getCurrent}
+   */
+  replaceCurrent(authJson: string): Promise<void>;
+
+  /**
+   * Observe successful native sign-in and credential replacement.
+   *
+   * Listeners run in registration order after the replacement is stored. For changed credentials, listeners run immediately before the scheduled application relaunch. A throwing listener is isolated. Dispose the returned handle to stop observing changes.
+   *
+   * @param listener callback invoked after the active authentication changes
+   * @example
+   * const registration = api.authentication.onDidChange(() => refreshAccounts());
+   */
+  onDidChange(listener: () => void): Disposable;
+}
+
+/**
+ * APIs for contributing to the app's menus.
+ *
+ * @group Menus
+ */
+export interface MenusApi {
+  /** The action toolbar shown for selected assistant-response text. */
+  readonly assistantSelection: AssistantSelectionMenuApi;
+
+  /** The profile menu (the dropdown opened from the avatar/profile button). */
+  readonly profile: ProfileMenuApi;
+
+  /** The overflow menu opened from a persisted thread's header. */
+  readonly thread: ThreadMenuApi;
+}
+
+/**
+ * APIs for the native action toolbars that ChatGPTX shows when the user
+ * selects text in an assistant response. ChatGPT owns the selection lifecycle,
+ * the native toolbar and action components, focus behavior, and the toolbar
+ * above the selection. ChatGPTX can place a second native toolbar below the
+ * same selection.
+ *
+ * @group Menus
+ */
+export interface AssistantSelectionMenuApi {
+  /**
+   * Transform the action list for selected assistant-response text.
+   *
+   * `transform` runs synchronously whenever ChatGPT renders the toolbar. It
+   * receives the complete current action list and the selected-text snapshot.
+   * Return the final list to keep, remove, reorder, replace, or add actions.
+   * The transformer must be cheap and side-effect-free.
+   *
+   * Built-in actions use ChatGPT's stable semantic message ids, including
+   * `"selectedTextOverlay.addToCodex"`,
+   * `"selectedTextOverlay.moreDetails"`, and
+   * `"selectedTextOverlay.askInSideChat"`. Returning a descriptor with a
+   * built-in id replaces that action and inherits omitted fields, including
+   * its native `onClick` and placement. Extension-created ids must use
+   * `"<extension-id>.<name>"`; foreign and duplicate ids are dropped and
+   * logged.
+   *
+   * Multi-consumer: transformers chain in extension load and registration
+   * order. Each transformer receives the previous transformer's output for
+   * the same selection. A throwing transformer is skipped and logged without
+   * affecting ChatGPT or other extensions.
+   *
+   * Disposing the returned registration updates an open toolbar immediately.
+   *
+   * @param transform mapper from the current actions to the final actions
+   * @returns an idempotent handle that unregisters the transformer
+   *
+   * @example
+   * api.menus.assistantSelection.transformItems((items, selection) => [
+   *   ...items,
+   *   {
+   *     kind: "action",
+   *     id: "my-extension.quote",
+   *     label: "Save quote",
+   *     onClick: () => saveQuote(selection.selectedText),
+   *   },
+   * ]);
+   */
+  transformItems(transform: AssistantSelectionMenuTransform): Disposable;
+
+  /**
+   * Return the effective actions on all visible toolbar pages. Actions in the
+   * toolbar above the selection come first, followed by actions in the toolbar
+   * below it. Within each toolbar, actions remain in transformer order.
+   * Expanding a parent replaces only that parent's toolbar page and leaves the
+   * other placement visible. Returns an empty list when no assistant-text
+   * selection toolbar is mounted.
+   *
+   * The snapshot updates when the selected text, native actions, or active
+   * transformers change. It includes all extensions' contributions.
+   */
+  getItems(): readonly AssistantSelectionMenuItem[];
+
+  /**
+   * Programmatically activate an effective toolbar action.
+   *
+   * A parent action replaces its placement's toolbar page with its children without
+   * dismissing the browser selection or invoking `onClick`. A leaf action
+   * invokes its isolated `onClick` and dismisses the browser selection like a
+   * click on ChatGPT's native buttons. Unknown, disabled, non-activatable, or
+   * inactive-toolbar actions return `false`.
+   *
+   * @param id stable built-in id or extension-namespaced action id
+   * @returns whether the active action was accepted
+   */
+  activateItem(id: string): boolean;
+}
+
+/**
+ * Mapper from the active assistant-selection actions to their final list.
+ *
+ * @group Menus
+ */
+export type AssistantSelectionMenuTransform = (
+  items: readonly AssistantSelectionMenuItem[],
+  context: AssistantSelectionContext,
+) => readonly AssistantSelectionMenuItem[];
+
+/**
+ * The immutable assistant-text selection associated with one toolbar render.
+ *
+ * @group Menus
+ */
+export interface AssistantSelectionContext {
+  /** Exact plain text selected by the user. */
+  readonly selectedText: string;
+
+  /**
+   * Create a native response annotation for the selected assistant text.
+   *
+   * The selected text and its exact response anchor are implicit in this
+   * context. ChatGPT creates the same response-annotation attachment as its
+   * built-in **Add to chat** action and stores `annotation` as the
+   * attachment's user comment. By default, the attachment remains in the
+   * composer for the user to review and submit. Set `options.submit` to
+   * `true` to use ChatGPT's native direct-submit path; this also submits all
+   * existing composer text and attachments.
+   *
+   * Call this method synchronously from an action handler created by the same
+   * transformer invocation. The returned promise resolves after ChatGPT
+   * accepts the native annotation update or direct-submit request. It does not
+   * wait for an assistant response. It rejects when the annotation is empty,
+   * the selection is stale, ChatGPT cannot create the annotation, or another
+   * annotation request for the same selection is already pending.
+   *
+   * Multi-consumer: all transformers receive the same immutable method for a
+   * selection. The first accepted request owns that selection; concurrent
+   * requests reject without affecting the accepted request.
+   *
+   * @param annotation non-empty user annotation stored with the selected text
+   * @param options optional direct-submit behavior; omitted means create only
+   * @example
+   * void selection.createResponseAnnotation("User reacted with 👍");
+   * void selection.createResponseAnnotation("User reacted with 👍", {
+   *   submit: true,
+   * });
+   */
+  createResponseAnnotation(
+    annotation: string,
+    options?: AssistantResponseAnnotationOptions,
+  ): Promise<void>;
+}
+
+/**
+ * Controls whether a response annotation stays in the composer or uses
+ * ChatGPT's native direct-submit action.
+ *
+ * @group Menus
+ */
+export interface AssistantResponseAnnotationOptions {
+  /** Submit the whole composer after creating the annotation. Default: false. */
+  readonly submit?: boolean;
+}
+
+/**
+ * An action in ChatGPT's assistant-text selection toolbar.
+ *
+ * @group Menus
+ */
+export type AssistantSelectionMenuItem = AssistantSelectionMenuActionItem;
+
+/**
+ * A compact action rendered through ChatGPT's own selected-text button
+ * component, with its native layout, hover state, focus behavior, and
+ * accessibility.
+ *
+ * @group Menus
+ */
+export interface AssistantSelectionMenuActionItem {
+  readonly kind: "action";
+
+  /**
+   * Unique stable identifier. New actions must use
+   * `"<extension-id>.<name>"`; built-ins use ChatGPT's semantic message ids.
+   */
+  readonly id: string;
+
+  /** Visible action label. */
+  readonly label: string;
+
+  /**
+   * Place this root action in the native toolbar above or below the selected
+   * text. ChatGPT's built-in actions use `"above"`. An extension action also
+   * defaults to `"above"` when this field is omitted.
+   *
+   * A parent action and all its children use one placement. A child inherits
+   * its parent's placement; a placement supplied on a child is ignored.
+   * Actions from all extensions that select the same placement share one
+   * native toolbar in transformer order.
+   */
+  readonly placement?: "above" | "below";
+
+  /**
+   * Scale the visible label relative to ChatGPT's native action-text size.
+   *
+   * The action keeps ChatGPT's native button, focus behavior, hit target, and
+   * accessibility. Only the label size changes. Use `1` for the native size
+   * and `2` for twice that size. Omitted values inherit during action
+   * replacement and otherwise use the native size. The doubled size is
+   * suitable for compact glyph labels such as an emoji; long text can exceed
+   * the compact toolbar.
+   */
+  readonly labelScale?: 1 | 2;
+
+  /**
+   * Vertical padding in device-independent pixels.
+   *
+   * Use `0` for ChatGPT's native compact padding or `4` for 4 px above and
+   * below the label. Nonzero padding releases the native fixed compact height
+   * so the native button grows to fit its label. Omitted values inherit during
+   * action replacement and otherwise use the native padding.
+   */
+  readonly verticalPadding?: 0 | 4;
+
+  /** Disable activation while retaining ChatGPT's native disabled state. */
+  readonly disabled?: boolean;
+
+  /**
+   * Handler invoked after user or programmatic leaf activation dismisses the
+   * text selection. Built-ins expose their native handler for wrapping.
+   * Throwing handlers are isolated and logged. Ignored when {@link items} is
+   * set. Programmatic activation reports `metaKey: false`.
+   */
+  readonly onClick?: (activation: AssistantSelectionActionActivation) => void;
+
+  /**
+   * Child actions shown as a replacement page in this action's toolbar when
+   * activated. ChatGPTX keeps the assistant-text selection active and renders
+   * every child through ChatGPT's native selected-text action component.
+   *
+   * One level of nesting is supported. Child actions cannot contain further
+   * children. Child ids follow the same ownership and uniqueness rules as
+   * root actions.
+   */
+  readonly items?: readonly AssistantSelectionMenuActionItem[];
+
+  /** Contributor id, assigned by the platform; `"app"` denotes ChatGPT. */
+  readonly origin?: "app" | string;
+}
+
+/**
+ * Stable modifier state for one assistant-selection action activation.
+ *
+ * The platform copies this state from ChatGPT's native click event. It does
+ * not expose the app's React or DOM event to extensions.
+ *
+ * @group Menus
+ */
+export interface AssistantSelectionActionActivation {
+  /** Whether the macOS Command key was down for the activation. */
+  readonly metaKey: boolean;
+}
+
+/**
+ * APIs for the profile menu — the dropdown opened from the avatar/profile
+ * button, which today contains the user's account items (Profile, Usage,
+ * Settings, Keyboard shortcuts, Log out, …).
+ *
+ * @group Menus
+ */
+export interface ProfileMenuApi {
+  /**
+   * Transform the profile menu's item list.
+   *
+   * `transform` is called synchronously every time the profile menu is
+   * rendered, with the menu's current complete item list (the app's built-in
+   * items first, in their current order). Return the final list to display:
+   * keep, drop, reorder, replace, or add items freely. It must be cheap and
+   * side-effect-free.
+   *
+   * Built-in (app) items carry a **stable id** derived from the app's own
+   * identifiers (e.g. `"codex.profileDropdown.profile"`), which the binding
+   * guarantees across app versions. To keep an app item as-is, return the
+   * same object. To modify one, return a descriptor with the same `id` —
+   * it replaces the original in place, inheriting any fields you leave
+   * undefined (spread the original to modify it); the original `onClick`
+   * stays available on the input descriptor for wrapping. Nesting an app
+   * item inside another item's `items` moves it there.
+   *
+   * New items must be one of the item kinds the profile menu supports
+   * ({@link ProfileMenuActionItem}, {@link ProfileMenuSeparatorItem}) and
+   * their `id` must be namespaced `"<extension-id>.<name>"` — items with
+   * foreign or duplicate ids are dropped and logged.
+   *
+   * Multi-consumer: transformers chain in extension load order — each
+   * transformer receives the previous transformer's output, so precedence is
+   * deterministic (later extensions see and may rearrange earlier ones'
+   * items). A transformer that throws is skipped (the previous output is
+   * used) and the error is logged; other extensions are unaffected.
+   *
+   * @param transform mapper from the current item list to the final list
+   * @returns a {@link Disposable} that unregisters this transformer; the
+   *   extension's items disappear on the next menu render
+   *
+   * @example
+   * api.menus.profile.transformItems((items) => [
+   *   ...items,
+   *   { kind: "separator", id: "my-ext.sep" },
+   *   {
+   *     kind: "action",
+   *     id: "my-ext.status",
+   *     label: "My status",
+   *     icon: "person",
+   *     subText: "Online",
+   *     onClick: () => openMyStatus(),
+   *   },
+   * ]);
+   *
+   * @example
+   * // Turn the built-in Profile item into an in-place expanding submenu
+   * api.menus.profile.transformItems((items) =>
+   *   items.map((item) =>
+   *     item.id === "codex.profileDropdown.profile" && item.kind === "action"
+   *       ? { ...item, items: [myAccountItem] }
+   *       : item,
+   *   ),
+   * );
+   */
+  transformItems(transform: ProfileMenuTransform): Disposable;
+
+  /**
+   * The profile menu's current effective item list **as displayed in the
+   * app** — built-in items first, with all registered transforms applied,
+   * every built-in resolved to a descriptor with its stable id.
+   *
+   * This is the read side of the menu contract: it reflects what the menu
+   * currently shows, immediately after transforms are registered or
+   * disposed. Extensions use it to inspect the menu; the binding implements
+   * it by observing the app's actual menu state, so it stays truthful even
+   * when the app changes its own items (sign-in state, plan, feature
+   * flags).
+   *
+   * Multi-consumer: returns the global effective list — every extension's
+   * contributions included, in final display order.
+   */
+  getItems(): readonly ProfileMenuItem[];
+
+  /**
+   * Programmatically activate a menu item by id, as if the user had
+   * activated its row.
+   *
+   * For an action item, invokes its `onClick` (isolated, like a real
+   * activation). For a submenu parent, expands its children in place and
+   * does not fire `onClick`. Unknown or disabled ids are not activated.
+   *
+   * @param id stable id of a built-in item, or an extension-namespaced id
+   * @returns true when the item existed and was activated/expanded
+   */
+  activateItem(id: string): boolean;
+}
+
+/**
+ * Mapper from the profile menu's current item list to the final list.
+ * See {@link ProfileMenuApi.transformItems}.
+ *
+ * @group Menus
+ */
+export type ProfileMenuTransform = (
+  items: readonly ProfileMenuItem[],
+) => readonly ProfileMenuItem[];
+
+/**
+ * An item in the profile menu — either an action row or a separator.
+ * These are exactly the item kinds the profile menu supports today.
+ *
+ * @group Menus
+ */
+export type ProfileMenuItem = ProfileMenuActionItem | ProfileMenuSeparatorItem;
+
+/**
+ * A clickable profile-menu row, rendered by the app's own menu-item
+ * component: icon on the left, label, and any of the optional affordances
+ * the app's items have (subtext, keyboard shortcut, right icon, disabled
+ * state).
+ *
+ * @group Menus
+ */
+export interface ProfileMenuActionItem {
+  readonly kind: "action";
+
+  /**
+   * Unique identifier.
+   *
+   * Extension-created items: must be namespaced `"<extension-id>.<name>"` —
+   * items with foreign or duplicate ids are dropped and logged.
+   *
+   * Built-in items: a stable identifier derived from the app's own
+   * identifiers (e.g. `"codex.profileDropdown.profile"`), guaranteed across
+   * app versions by the binding. Use it to locate specific built-in items.
+   */
+  readonly id: string;
+
+  /** The item's visible label. */
+  readonly label: string;
+
+  /**
+   * Name of an app icon to render on the left, resolved by the binding to
+   * the app's own icon component. `"person"` reuses ChatGPT's Settings →
+   * Profile icon. `"plus"` renders ChatGPT's 16-point Lucide Plus icon.
+   * Unknown names render the item without an icon and log a warning.
+   */
+  readonly icon?: string;
+
+  /**
+   * Name of an app icon to render on the right edge of the row, resolved
+   * like {@link icon}.
+   */
+  readonly rightIcon?: string;
+
+  /** Secondary text rendered alongside the label, like the app's items. */
+  readonly subText?: string;
+
+  /**
+   * Keyboard-shortcut hint rendered on the right, display-only (e.g. `"⌘K"`;
+   * binding the actual key is not part of this API).
+   */
+  readonly keyboardShortcut?: string;
+
+  /**
+   * When true, the row renders disabled (greyed out, not clickable), like
+   * the app's informational items.
+   */
+  readonly disabled?: boolean;
+
+  /**
+   * Invoked when the user activates the row. Runs isolated: a throwing
+   * handler is logged and does not affect the app or other extensions.
+   *
+   * On built-in items this is the app's original handler — read it to wrap
+   * or delegate to the original behavior when replacing an item.
+   * Ignored when {@link items} is set (the row expands instead of firing).
+   */
+  readonly onClick?: () => void;
+
+  /**
+   * Child items. When set, the row renders as an in-place expanding submenu
+   * parent (chevron on the right) using the app's own submenu component —
+   * hover/selection expands the children in place.
+   *
+   * One level of nesting is supported. Children may be new items or built-in
+   * items moved here from elsewhere in the list.
+   */
+  readonly items?: readonly ProfileMenuItem[];
+
+  /**
+   * Who contributed the item: `"app"` for built-in items, otherwise the
+   * contributing extension's id. Set by the platform — extensions must leave
+   * it undefined when creating items.
+   */
+  readonly origin?: "app" | string;
+}
+
+/**
+ * A visual separator between profile-menu items, rendered by the app's own
+ * separator component.
+ *
+ * @group Menus
+ */
+export interface ProfileMenuSeparatorItem {
+  readonly kind: "separator";
+
+  /** Unique, extension-namespaced identifier (see {@link ProfileMenuActionItem.id}). */
+  readonly id: string;
+
+  /** Set by the platform — see {@link ProfileMenuActionItem.origin}. */
+  readonly origin?: "app" | string;
+}
+
+/**
+ * APIs for the overflow menu opened from the ellipsis button in a persisted
+ * local or cloud thread's header. Pending threads without a ChatGPT thread id
+ * are outside this surface.
+ *
+ * @group Menus
+ */
+export interface ThreadMenuApi {
+  /**
+   * Transform every persisted local or cloud thread overflow menu.
+   *
+   * `transform` runs synchronously whenever ChatGPT renders a thread menu.
+   * It receives that menu's complete current item list and a snapshot of the
+   * owning thread. Return the final list to keep, drop, reorder, replace, or
+   * add items. The transformer must be cheap and side-effect-free.
+   *
+   * Built-in items carry stable ids derived from ChatGPT's semantic
+   * identifiers. Returning a descriptor with a built-in id replaces that
+   * item and inherits omitted fields, including its native `onClick`.
+   * Extension-created ids must be namespaced `"<extension-id>.<name>"`;
+   * foreign and duplicate ids are dropped and logged.
+   *
+   * Multi-consumer: transformers chain in extension load order for each
+   * thread. Every transformer receives the previous transformer's output. A
+   * throwing transformer is skipped and logged without affecting ChatGPT or
+   * other extensions.
+   *
+   * @param transform mapper from one thread's current items to its final items
+   * @returns an idempotent handle that unregisters the transformer
+   *
+   * @example
+   * api.menus.thread.transformItems((items, thread) => {
+   *   const firstSeparator = items.findIndex(
+   *     (item) => item.kind === "separator",
+   *   );
+   *   const insertionIndex = firstSeparator < 0 ? items.length : firstSeparator;
+   *   const colorItem: ThreadMenuActionItem = {
+   *     kind: "action",
+   *     id: "thread-colors.color",
+   *     label: `Color for ${thread.title}`,
+   *     icon: { kind: "native", name: "palette" },
+   *     items: [
+   *       { kind: "action", id: "thread-colors.default", label: "Default" },
+   *       { kind: "action", id: "thread-colors.blue", label: "Blue" },
+   *     ],
+   *   };
+   *   return [
+   *     ...items.slice(0, insertionIndex),
+   *     colorItem,
+   *     ...items.slice(insertionIndex),
+   *   ];
+   * });
+   */
+  transformItems(transform: ThreadMenuTransform): Disposable;
+
+  /**
+   * Return the latest effective item list observed for `threadId`, including
+   * every registered transform in final display order. Returns an empty list
+   * until that thread's header has rendered in this app window.
+   *
+   * @param threadId ChatGPT's stable thread identifier
+   */
+  getItems(threadId: string): readonly ThreadMenuItem[];
+
+  /**
+   * Programmatically activate an effective item for a thread.
+   *
+   * Leaf actions invoke their isolated `onClick`. Submenu parents open their
+   * native flyout when the thread header is mounted. Unknown, disabled, and
+   * non-activatable items return `false`.
+   *
+   * @param threadId ChatGPT's stable thread identifier
+   * @param id stable built-in id or extension-namespaced item id
+   * @returns whether the item was activated or its flyout was requested
+   */
+  activateItem(threadId: string, id: string): boolean;
+}
+
+/**
+ * Mapper from a thread's current overflow-menu items to its final items.
+ *
+ * @group Menus
+ */
+export type ThreadMenuTransform = (
+  items: readonly ThreadMenuItem[],
+  context: ThreadContext,
+) => readonly ThreadMenuItem[];
+
+/**
+ * An action row or separator in a thread overflow menu.
+ *
+ * @group Menus
+ */
+export type ThreadMenuItem = ThreadMenuActionItem | ThreadMenuSeparatorItem;
+
+/**
+ * A native ChatGPT thread-menu action row.
+ *
+ * Leaf rows use ChatGPT's own menu Item component. Rows with `items` use its
+ * flyout-submenu component and retain native focus, keyboard navigation,
+ * accessibility, hover state, animation, and portal behavior.
+ *
+ * @group Menus
+ */
+export interface ThreadMenuActionItem {
+  readonly kind: "action";
+
+  /**
+   * Unique stable identifier. New items must use
+   * `"<extension-id>.<name>"`; built-ins use binding-stable semantic ids.
+   */
+  readonly id: string;
+
+  /** Visible row label. */
+  readonly label: string;
+
+  /** Leading native app icon or theme-aware circular color icon. */
+  readonly icon?: ThreadMenuIcon;
+
+  /** Native app icon rendered on the right side of a leaf row. */
+  readonly rightIcon?: string;
+
+  /** Secondary text rendered by ChatGPT on a leaf row. */
+  readonly subText?: string;
+
+  /** Display-only keyboard shortcut hint on a leaf row. */
+  readonly keyboardShortcut?: string;
+
+  /** Disable activation while retaining ChatGPT's native disabled state. */
+  readonly disabled?: boolean;
+
+  /**
+   * Handler invoked for leaf activation. Built-ins expose their native
+   * handler for wrapping. Throwing handlers are isolated and logged. Ignored
+   * when `items` contains submenu children.
+   */
+  readonly onClick?: () => void;
+
+  /**
+   * Native flyout children. One nesting level is supported; children may be
+   * extension items or built-ins moved from the root list.
+   */
+  readonly items?: readonly ThreadMenuItem[];
+
+  /** Contributor id, assigned by the platform; `"app"` denotes ChatGPT. */
+  readonly origin?: "app" | string;
+}
+
+/** Leading visual rendered through ChatGPT's native menu icon slot. */
+export type ThreadMenuIcon =
+  ThreadMenuNativeIcon | ThreadMenuColorIcon | ThreadMenuSvgIcon;
+
+/** A named icon component supplied by ChatGPT. */
+export interface ThreadMenuNativeIcon {
+  readonly kind: "native";
+
+  /** `"palette"` uses ChatGPT's Lucide Palette icon. */
+  readonly name: string;
+}
+
+/** A circular color icon that follows ChatGPT's active appearance. */
+export interface ThreadMenuColorIcon {
+  readonly kind: "color";
+
+  /** CSS color used with ChatGPT's light appearance. */
+  readonly light: string;
+
+  /** CSS color used with ChatGPT's dark appearance. */
+  readonly dark: string;
+}
+
+/** An extension-owned SVG rendered through ChatGPT's native icon slot. */
+export interface ThreadMenuSvgIcon {
+  readonly kind: "svg";
+
+  /**
+   * One complete namespaced `<svg xmlns="http://www.w3.org/2000/svg">`
+   * element. It inherits the native menu foreground through `currentColor`;
+   * sizing and other SVG presentation remain owned by the supplied markup.
+   */
+  readonly source: string;
+}
+
+/**
+ * A native visual separator in a thread overflow menu.
+ *
+ * @group Menus
+ */
+export interface ThreadMenuSeparatorItem {
+  readonly kind: "separator";
+
+  /** Unique stable or extension-namespaced identifier. */
+  readonly id: string;
+
+  /** Contributor id, assigned by the platform; `"app"` denotes ChatGPT. */
+  readonly origin?: "app" | string;
+}

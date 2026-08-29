@@ -268,9 +268,9 @@ feature bundles.
 Component changes take effect on the next ChatGPT launch. If ChatGPT is
 running, the launcher offers a restart.
 
-## Local development and API tests
+## Local extension development and API tests
 
-The launcher accepts repeatable development overrides:
+The launcher accepts repeatable, launch-scoped development overrides:
 
 ```text
 --extension <absolute-package-directory-or-main.js>
@@ -279,7 +279,44 @@ The launcher accepts repeatable development overrides:
 A local extension must be compatible with the selected ChatGPTX API. It
 overrides an installed extension with the same ID for that launch only.
 An explicit local `extensions` override keeps manager permission and activates
-before all other extensions.
+before all other extensions in normal mode. Normal mode can stop and relaunch
+the running ChatGPT app. Do not use it from an agent that runs inside ChatGPT.
+
+The launcher bundles the `build-chatgptx-extensions` Codex skill. The
+Extension Development control creates this one symbolic link:
+
+```text
+~/.codex/skills/build-chatgptx-extensions
+  -> <ChatGPTX.app>/Contents/Resources/Skills/build-chatgptx-extensions
+```
+
+The control honors `CODEX_HOME`. It does not replace the `skills` directory or
+overwrite an existing item. The skill resolves the exact active API from the
+component lock, scaffolds and packages an external CommonJS project, and
+supplies the supported extension-storage utility.
+
+Extension test mode requires at least one explicit local extension and an
+isolated profile:
+
+```text
+ChatGPTX --test-extension \
+  --extension <absolute-local-extension-package> \
+  --user-data-dir=<absolute-temporary-profile>
+```
+
+This mode does not stop the primary ChatGPT process. It loads the required
+Extensions manager and the explicit local extensions only. It rejects the
+reserved `extensions` and `api-test-suite` IDs. Use the bundled skill's test
+script because it also creates a temporary Codex home, copies only
+the exact active component set and `auth.json`, reuses the primary Computer Use
+service, verifies source injection and synchronous activation against a
+temporary package copy, and provides an explicit stop command that removes the
+complete session. Extension test mode uses the copied component lock and does
+not run the updater. It does not expose the signed-in profile through a
+remote-debugging port. A successful activation does not prove that the
+requested behavior works; verify that behavior in the isolated app. Test only
+code that you created or fully reviewed because extensions can use the signed-in
+authentication API.
 
 API test mode requires an explicit suite and an isolated profile:
 

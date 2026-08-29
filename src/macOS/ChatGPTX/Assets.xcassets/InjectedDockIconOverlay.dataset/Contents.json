@@ -1,0 +1,12 @@
+{
+  "data" : [
+    {
+      "filename" : "InjectedDockIconOverlay.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

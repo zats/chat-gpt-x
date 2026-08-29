@@ -53,6 +53,12 @@ jobs:
           bash -n scripts/validate-rebind-changes.sh
           bash -n src/extensions/build.sh
           bash -n src/macOS/scripts/build.sh
+          for script in src/macOS/ChatGPTX/Resources/Skills/build-chatgptx-extensions/scripts/*.sh; do
+            bash -n "$script"
+          done
+          for script in src/macOS/ChatGPTX/Resources/Skills/build-chatgptx-extensions/scripts/*.js; do
+            node --check "$script"
+          done
           bash -n scripts/import-release-keychain.sh
           bash -n scripts/release-launcher.sh
           bash -n .agents/skills/manage-platform-api/scripts/extract-app.sh
@@ -82,6 +88,7 @@ jobs:
           bash -n scripts/refresh-update-index-hashes.sh
           bash scripts/publish-update-index.test.sh
           node --test scripts/build-component-releases.test.mjs
+          node --test scripts/bundled-extension-skill.test.mjs
           node --test scripts/cdp-client.test.mjs
           node --test scripts/component-releases.test.mjs
           node --test scripts/filter-unpublished-component-releases.test.mjs

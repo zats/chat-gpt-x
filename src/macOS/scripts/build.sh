@@ -79,20 +79,49 @@ BUILD_ARGUMENTS=(
   CONFIGURATION_BUILD_DIR="$BUILD_OUTPUT_DIR" \
   "${XCODEBUILD_SIGNING_ARGUMENTS[@]}"
 )
+if [[ -z "${CHATGPTX_CODESIGN_IDENTITY:-}" ]]; then
+  BUILD_ARGUMENTS+=(ENABLE_HARDENED_RUNTIME=NO)
+fi
 if ((${#XCODEBUILD_VERSION_ARGUMENTS[@]} > 0)); then
   BUILD_ARGUMENTS+=("${XCODEBUILD_VERSION_ARGUMENTS[@]}")
 fi
 BUILD_ARGUMENTS+=(build)
 xcodebuild "${BUILD_ARGUMENTS[@]}"
 
-BUNDLED_ICON_OVERLAY="$BUILT_APP_PATH/Contents/Resources/InjectedDockIconOverlay.png"
-SOURCE_ICON_OVERLAY="$MACOS_DIR/ChatGPTX/Resources/InjectedDockIconOverlay.png"
-[[ -f "$BUNDLED_ICON_OVERLAY" ]] || {
-  echo "build did not bundle $BUNDLED_ICON_OVERLAY" >&2
+BUNDLED_ASSET_CATALOG="$BUILT_APP_PATH/Contents/Resources/Assets.car"
+LOOSE_ICON_OVERLAY="$BUILT_APP_PATH/Contents/Resources/InjectedDockIconOverlay.png"
+[[ -f "$BUNDLED_ASSET_CATALOG" ]] || {
+  echo "build did not compile $BUNDLED_ASSET_CATALOG" >&2
   exit 1
 }
-cmp -s "$SOURCE_ICON_OVERLAY" "$BUNDLED_ICON_OVERLAY" || {
-  echo "bundled Dock icon overlay does not match its source asset" >&2
+if ! xcrun assetutil --info "$BUNDLED_ASSET_CATALOG" \
+  | /usr/bin/grep -F '"Name" : "InjectedDockIconOverlay"' >/dev/null; then
+  echo "compiled asset catalog does not contain InjectedDockIconOverlay" >&2
+  exit 1
+fi
+[[ ! -e "$LOOSE_ICON_OVERLAY" ]] || {
+  echo "build contains obsolete loose Dock icon overlay" >&2
+  exit 1
+}
+
+SOURCE_SKILLS="$MACOS_DIR/ChatGPTX/Resources/Skills"
+BUNDLED_SKILLS="$BUILT_APP_PATH/Contents/Resources/Skills"
+SOURCE_PLATFORM_API="$REPO_ROOT/src/platform/types.d.ts"
+BUNDLED_SKILL_PLATFORM_API="$BUNDLED_SKILLS/build-chatgptx-extensions/references/platform-api.d.ts"
+[[ -f "$BUNDLED_SKILLS/build-chatgptx-extensions/SKILL.md" ]] || {
+  echo "build did not bundle the ChatGPTX extension skill" >&2
+  exit 1
+}
+[[ -x "$BUNDLED_SKILLS/build-chatgptx-extensions/scripts/test-extension.sh" ]] || {
+  echo "bundled ChatGPTX extension test script is not executable" >&2
+  exit 1
+}
+cmp -s "$SOURCE_PLATFORM_API" "$BUNDLED_SKILL_PLATFORM_API" || {
+  echo "bundled ChatGPTX extension API snapshot is out of date" >&2
+  exit 1
+}
+/usr/bin/diff -qr "$SOURCE_SKILLS" "$BUNDLED_SKILLS" >/dev/null || {
+  echo "bundled ChatGPTX skills do not match their source" >&2
   exit 1
 }
 
